@@ -202,7 +202,7 @@ test("an uncaught error produces one payload within the caps, matching the valid
 // produce byte-identical beacons deduped as one. A per-beacon `id` in
 // every `bc()` payload (`monitor.ts`'s `reporterSource`) pins that two
 // beacons sent in the same fixed millisecond get different ids.
-test("F32: two beacons sent within the same millisecond get different ids", () => {
+test("two beacons sent within the same millisecond get different ids", () => {
   // The default `Math_` stub returns a fixed value on every call (needed so
   // the vitals sampling tests can pin `Math.random()`), which would make
   // every `id` in this test identical too — real randomness is what the
@@ -244,7 +244,7 @@ test("message and stack are truncated well under the field caps before sending",
   assert.ok(isValidLitePayload(payload), "a maxed-out error must still fit the 2 KB payload cap");
 });
 
-test("D-I4 (fix round): a huge (1 MB) error message is trimmed in well under 50ms, not quadratic time", () => {
+test("a huge (1 MB) error message is trimmed in well under 50ms, not quadratic time", () => {
   // Before the fix, `bt(s,n)` re-encoded the WHOLE string on every
   // `slice(0,-1)` iteration — quadratic in string length. Measured against
   // the exact pre-fix function: 10k chars ~100ms, 50k chars ~2.4s, ~40s
@@ -265,7 +265,7 @@ test("D-I4 (fix round): a huge (1 MB) error message is trimmed in well under 50m
   assert.ok(isValidLitePayload(payload));
 });
 
-test("I2 (fix round): a non-ASCII error message/stack is byte-trimmed, never silently dropped for being over budget", () => {
+test("a non-ASCII error message/stack is byte-trimmed, never silently dropped for being over budget", () => {
   // Before the fix, `tc()` truncated by `.length` (UTF-16 code units): a
   // message of mostly multi-byte characters truncated to `LITE_CLIENT_
   // MESSAGE_MAX` *characters* could still serialize to well over 2 KB of
@@ -292,7 +292,7 @@ test("I2 (fix round): a non-ASCII error message/stack is byte-trimmed, never sil
   assert.doesNotThrow(() => JSON.parse(JSON.stringify(payload)));
 });
 
-test("I2 (fix round): worst-case JSON-escaping content (all quotes and backslashes) still fits the 2 KB cap or is dropped, never sent oversize", () => {
+test("worst-case JSON-escaping content (all quotes and backslashes) still fits the 2 KB cap or is dropped, never sent oversize", () => {
   // JSON.stringify expands every `"`/`\` to two output characters — the one
   // inflation a per-field *byte* budget on the raw string does not see. This
   // is the adversarial case `bc()`'s own final serialized-length check exists
@@ -634,7 +634,7 @@ test("POST /telemetry/lite: an accepted web_vital beacon writes a web_vital AE p
 // `record`. This pins that explicitly for the Observability-self
 // dashboard: a first-time, AE-only web-vital beacon must still count as
 // "accepted", not just its own web_vital point.
-test("POST /telemetry/lite: a first-time web_vital beacon (AE-only, F18) still writes an o11y.ingest accepted point (F28)", async () => {
+test("POST /telemetry/lite: a first-time web_vital beacon (AE-only) still writes an o11y.ingest accepted point", async () => {
   const { env, ae } = freshEnv();
   const res = await worker.fetch(liteRequest(liteVitalPayload()), env, ctx);
   await ctx.drain();
@@ -671,7 +671,7 @@ function liteVitalPayload(overrides = {}) {
   };
 }
 
-test("POST /telemetry/lite: an accepted web_vital beacon never reaches storage (F18-style AE-only) — zero pending rows, zero R2 objects", async () => {
+test("POST /telemetry/lite: an accepted web_vital beacon never reaches storage (AE-only) — zero pending rows, zero R2 objects", async () => {
   const { env, doStorage, r2 } = freshEnv();
   const res = await worker.fetch(liteRequest(liteVitalPayload()), env, ctx);
   await ctx.drain();
@@ -721,7 +721,7 @@ test("POST /telemetry/lite: a duplicated web_vital beacon (identical payload, re
 // messages that differ only in digits share one fingerprint but must never
 // share a dedupe hash, even with the same `ts`. The fingerprint normalises
 // digits away; the hash must not.
-test("POST /telemetry/lite: 15 beacons whose messages differ only in digits are 15 accepted records with one fingerprint (F32)", async () => {
+test("POST /telemetry/lite: 15 beacons whose messages differ only in digits are 15 accepted records with one fingerprint", async () => {
   const { env, ae } = freshEnv();
   const ts = Date.now();
   for (let i = 0; i < 15; i++) {
@@ -749,7 +749,7 @@ test("POST /telemetry/lite: 15 beacons whose messages differ only in digits are 
 // throwing in the same millisecond, or several throws in one synchronous
 // pass) must not collapse to one record. `id` is the only field that
 // differs between them.
-test("POST /telemetry/lite: two beacons identical except id are both accepted (F32)", async () => {
+test("POST /telemetry/lite: two beacons identical except id are both accepted", async () => {
   const { env, ae } = freshEnv();
   const ts = Date.now();
   const base = litePayload({ s: "embed", n: "Error", m: "R9 embed alert", ts });
@@ -771,7 +771,7 @@ test("POST /telemetry/lite: two beacons identical except id are both accepted (F
   assert.equal(errors.length, 2, "each accepted beacon must write its own error.uncaught point");
 });
 
-test("POST /telemetry/lite: the same beacon (same id) posted twice is 1 accepted + 1 duplicate (F32)", async () => {
+test("POST /telemetry/lite: the same beacon (same id) posted twice is 1 accepted + 1 duplicate", async () => {
   const { env, ae } = freshEnv();
   const payload = litePayload({ s: "embed", n: "Error", m: "R9 embed alert", id: "cccccccc" });
 
@@ -806,7 +806,7 @@ test("POST /telemetry/lite: the same beacon (same id) posted twice is 1 accepted
 // To regenerate the pinned literal: run this exact request (fixed payload,
 // fixed `ts`, no `id`) through `workers/o11y/src/lite.ts` and capture the
 // hash it produces.
-test("F32: the dedupe hash of an id-less beacon matches its pre-F32 literal value exactly (guards the conditional spread)", async () => {
+test("the dedupe hash of an id-less beacon matches its prior literal value exactly (guards the conditional spread)", async () => {
   const { env, doStorage } = freshEnv();
   const payload = litePayload({ ts: 1700000000000 }); // litePayload()'s own defaults carry no `id` field at all
   assert.equal("id" in payload, false, "precondition: the request carries no id field");
@@ -830,7 +830,7 @@ test("F32: the dedupe hash of an id-less beacon matches its pre-F32 literal valu
 // directly: a record carrying the `extra.beacon_id` key `lite.ts` adds once
 // `body.id !== undefined` must hash to something ELSE than the same record
 // without it — otherwise the whole feature would be a no-op.
-test("F32: hashRecord: adding a beacon id to `extra` changes the hash", async () => {
+test("hashRecord: adding a beacon id to `extra` changes the hash", async () => {
   const record = {
     body: "TypeError: grid.render is not a function",
     resourceAttributes: { "hot.surface": "d", "hot.demo_id": "abc12345" },
@@ -842,7 +842,7 @@ test("F32: hashRecord: adding a beacon id to `extra` changes the hash", async ()
   assert.notEqual(withId, withoutId, "adding a beacon id must change the hash");
 });
 
-test("POST /telemetry/lite: a duplicated beacon (identical payload, redelivered) does not double-count its error.uncaught point (finding A-I4)", async () => {
+test("POST /telemetry/lite: a duplicated beacon (identical payload, redelivered) does not double-count its error.uncaught point", async () => {
   const { env, ae } = freshEnv();
   const payload = litePayload();
   const first = await worker.fetch(liteRequest(payload), env, ctx);

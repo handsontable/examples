@@ -145,7 +145,7 @@ test("wake(): idempotent while already running/healthy — no second recordWake,
 // `recordWake` and no second `start()`. Deliberately uses the stub's own
 // default `stop()` hook (only wrapped for a call count, never replaced),
 // so this test is sensitive to both halves together.
-test("wake(): idempotent while a stop() SIGTERM is in flight — never mints a second wakeId over a draining one (C1)", async () => {
+test("wake(): idempotent while a stop() SIGTERM is in flight — never mints a second wakeId over a draining one", async () => {
   const { box, inboxWriterCalls } = makeBox();
   let startCalls = 0;
   let stopCalls = 0;
@@ -273,7 +273,7 @@ test("wake(): production ClickHouse envVars use the single Authorization: Bearer
   );
 });
 
-test("wake(): LOKI_S3_BUCKET env override reaches the container (I4 — a throwaway probe must be able to target its own bucket)", async () => {
+test("wake(): LOKI_S3_BUCKET env override reaches the container (a throwaway probe must be able to target its own bucket)", async () => {
   const { box } = makeBox({ env: { LOKI_S3_BUCKET: "o11y-probe-t03-loki" } });
   let envVars;
   hooks.start = async (self, startOptions) => {
@@ -315,7 +315,7 @@ test("containerFetch(): bare /api/live/ and a percent-encoded variant are also r
   }
 });
 
-test("containerFetch(): a malformed percent-escape in the path is refused (fail closed), not silently let through (I3)", async () => {
+test("containerFetch(): a malformed percent-escape in the path is refused (fail closed), not silently let through", async () => {
   const { box } = makeBox();
   let containerFetchCalls = 0;
   hooks.containerFetch = async () => {
@@ -333,7 +333,7 @@ test("containerFetch(): a malformed percent-escape in the path is refused (fail 
   assert.equal(containerFetchCalls, 0, "an unparseable path must never reach the container");
 });
 
-test("containerFetch(): the live path is blocked case-insensitively (I3)", async () => {
+test("containerFetch(): the live path is blocked case-insensitively", async () => {
   const { box } = makeBox();
   hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
 
@@ -353,7 +353,7 @@ test("containerFetch(): any websocket Upgrade request is refused regardless of p
   assert.equal(res.status, 404);
 });
 
-test("containerFetch(): a requestOrUrl argument that cannot even be constructed into a Request is refused, not silently let through (I3)", async () => {
+test("containerFetch(): a requestOrUrl argument that cannot even be constructed into a Request is refused, not silently let through", async () => {
   const { box } = makeBox();
   let containerFetchCalls = 0;
   hooks.containerFetch = async () => {
@@ -640,7 +640,7 @@ test("containerFetch(): refuses with 503 and never auto-starts when the box is s
   assert.equal(containerFetchCalls, 0);
 });
 
-test("F2 fix (B-I4): a STALE persisted status (healthy) with the REAL container not running is refused, never falls through to the base class's own auto-start", async () => {
+test("a STALE persisted status (healthy) with the REAL container not running is refused, never falls through to the base class's own auto-start", async () => {
   const { box } = makeBox();
   await box.wake("visit");
   hooks.start = async (self) => {
@@ -682,7 +682,7 @@ test("F2 fix (B-I4): a STALE persisted status (healthy) with the REAL container 
 // prematurely"). These prove this entry point keeps every gate the RPC
 // path had, and cannot be steered to Loki's port.
 
-test("Z1 fetch(): proxies to Grafana's port 3000 through the gated override once running, body intact", async () => {
+test("fetch(): proxies to Grafana's port 3000 through the gated override once running, body intact", async () => {
   const { box } = makeBox();
   hooks.start = async (self) => {
     self._state = { status: "running", lastChange: Date.now() };
@@ -702,7 +702,7 @@ test("Z1 fetch(): proxies to Grafana's port 3000 through the gated override once
   assert.deepEqual(seen, [{ port: 3000, body: '{"queries":[]}' }]);
 });
 
-test("Z1 fetch(): a cf-container-target-port header cannot steer it to Loki's 3100", async () => {
+test("fetch(): a cf-container-target-port header cannot steer it to Loki's 3100", async () => {
   const { box } = makeBox();
   hooks.start = async (self) => {
     self._state = { status: "running", lastChange: Date.now() };
@@ -725,7 +725,7 @@ test("Z1 fetch(): a cf-container-target-port header cannot steer it to Loki's 31
   assert.deepEqual(ports, [3000], "the port is pinned to Grafana, never taken from the request");
 });
 
-test("Z1 fetch(): the live-path block, the Loki datasource allowlists and the not-running 503 all still apply", async () => {
+test("fetch(): the live-path block, the Loki datasource allowlists and the not-running 503 all still apply", async () => {
   const { box } = makeBox();
   let reached = 0;
   hooks.containerFetch = async () => {

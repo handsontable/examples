@@ -69,7 +69,7 @@ test("Faro exception with a code frame: scrubbed, fingerprinted, hot.kind=except
 // lives in `apps/authoring`, outside this Worker/package).
 const IP_CANARY_MESSAGE = "HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123";
 
-test("Faro log: the exact R3 F17c canary message — IP, email and token all redacted, over the full ingest pipeline", async () => {
+test("Faro log: the exact canary message — IP, email and token all redacted, over the full ingest pipeline", async () => {
   const body = faroFixture("log.json");
   body.logs[0].message = IP_CANARY_MESSAGE;
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
@@ -135,7 +135,7 @@ test("Faro log: an IPv6 address in the message is redacted over the full ingest 
   assert.match(text, /<ip>/, "the IPv6 address must be replaced with the <ip> token");
 });
 
-test("Faro: T06's diagnostic tags (handled, sentry_event_id, ...) survive scrub+hoist into the stored record (merge fix, T02+T06)", async () => {
+test("Faro: the authoring app's diagnostic tags (handled, sentry_event_id, ...) survive scrub+hoist into the stored record", async () => {
   const body = faroFixture("log.json");
   body.logs[0].context = {
     ...body.logs[0].context,
@@ -164,7 +164,7 @@ test("Faro: T06's diagnostic tags (handled, sentry_event_id, ...) survive scrub+
 // through the same hash-only `ingestItem` path `example.*` events use, so
 // dedupe on a redelivered batch still works — see the dedicated dedupe
 // test below.
-test("Faro measurement: one Analytics Engine point, no STORED record (F18: AE-only)", async () => {
+test("Faro measurement: one Analytics Engine point, no STORED record (AE-only)", async () => {
   const body = faroFixture("measurement.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
   assert.ok(item.ingestItem, "a measurement must still get a hash to dedupe on");
@@ -178,7 +178,7 @@ test("Faro measurement: one Analytics Engine point, no STORED record (F18: AE-on
 // Same flip for web-vitals — Faro's own `type: "web-vitals"` is still a
 // `measurement` item at the wire level (`processMeasurement`'s other
 // branch, faro.ts), so it takes the same `storeRecord = false` path.
-test("Faro web-vitals: LCP/INP/CLS become points, FCP is not a contract reason, no stored record (F18: AE-only)", async () => {
+test("Faro web-vitals: LCP/INP/CLS become points, FCP is not a contract reason, no stored record (AE-only)", async () => {
   const body = faroFixture("web-vitals.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
   assert.ok(item.ingestItem, "a web-vitals measurement must still get a hash to dedupe on");
@@ -209,7 +209,7 @@ test("Faro measurement: a redelivered identical batch hashes identically (dedupe
 // identically and lose one to dedupe. Measurements are AE-only (above),
 // but are still hashed for dedupe.
 
-test('QA follow-up (Faro dedupe hash inputs): two DIFFERENT measurement types with identical values hash differently (faroBody()\'s measurement case stringifies only `values`, never `type`)', async () => {
+test('Faro dedupe hash inputs: two DIFFERENT measurement types with identical values hash differently (faroBody()\'s measurement case stringifies only `values`, never `type`)', async () => {
   const bodyA = faroFixture("measurement.json");
   const bodyB = faroFixture("measurement.json");
   bodyB.measurements[0].type = "compiler.build_ms"; // same values/context/timestamp as bodyA, a different metric name
@@ -223,7 +223,7 @@ test('QA follow-up (Faro dedupe hash inputs): two DIFFERENT measurement types wi
   );
 });
 
-test("QA follow-up (Faro dedupe hash inputs): two measurements differing only in an AE-only attribute (hot.bucket) hash differently", async () => {
+test("Faro dedupe hash inputs: two measurements differing only in an AE-only attribute (hot.bucket) hash differently", async () => {
   const bodyA = faroFixture("measurement.json");
   const bodyB = faroFixture("measurement.json");
   assert.equal(bodyB.measurements[0].context["hot.bucket"], "18.1", "fixture sanity: hot.bucket is set");
@@ -238,7 +238,7 @@ test("QA follow-up (Faro dedupe hash inputs): two measurements differing only in
   );
 });
 
-test("QA follow-up (Faro dedupe hash inputs): two logs differing only in Faro's own session id (meta.session.id) hash differently", async () => {
+test("Faro dedupe hash inputs: two logs differing only in Faro's own session id (meta.session.id) hash differently", async () => {
   const bodyA = faroFixture("log.json");
   const bodyB = faroFixture("log.json");
   bodyA.meta.session = { id: "session-aaaa" };
@@ -253,7 +253,7 @@ test("QA follow-up (Faro dedupe hash inputs): two logs differing only in Faro's 
   );
 });
 
-test("QA follow-up (Faro dedupe hash inputs): a redelivery with the session id set still hashes identically at a different arrival time (dedupe stays intact)", async () => {
+test("Faro dedupe hash inputs: a redelivery with the session id set still hashes identically at a different arrival time (dedupe stays intact)", async () => {
   const body = faroFixture("measurement.json");
   body.meta.session = { id: "session-stable" };
   const receivedAtMs = Date.now();
@@ -320,7 +320,7 @@ test("Faro mixed batch (measurement + log + exception): only the log and excepti
   assert.equal(exceptionItem.aePoints.length, 1);
 });
 
-test("Faro example.open: one Analytics Engine point, no STORED record — but a hash-only ingestItem (A-I4 remainder, closed second wave)", async () => {
+test("Faro example.open: one Analytics Engine point, no STORED record — but a hash-only ingestItem", async () => {
   const body = faroFixture("example-open.json");
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
   // The fix bypassed dedupe entirely for example.* events (no
@@ -382,13 +382,13 @@ test("countFaroItems sums every kind, including traces (always-invalid) — the 
   assert.equal(countFaroItems("not an object"), 0);
 });
 
-test("MAX_FARO_ITEMS_PER_BODY is a real, generous-but-finite bound (finding A-I4: ~16.7k items measured from one 1 MB body)", () => {
+test("MAX_FARO_ITEMS_PER_BODY is a real, generous-but-finite bound (~16.7k items measured from one 1 MB body)", () => {
   assert.ok(MAX_FARO_ITEMS_PER_BODY > 0 && MAX_FARO_ITEMS_PER_BODY < 1000, "must be a real bound, not effectively unbounded");
 });
 
 // ---- a malformed item must never crash the batch --------------------------
 
-test("processFaroBody: a null entry inside logs never throws (the exact 500 probe from finding A-M1) and still processes the real item next to it", async () => {
+test("processFaroBody: a null entry inside logs never throws (the exact 500 probe) and still processes the real item next to it", async () => {
   const body = faroFixture("log.json");
   body.logs = [null, ...body.logs];
   const items = await Promise.resolve(processFaroBody(body, ENV, SERVICE, Date.now()));
@@ -399,7 +399,7 @@ test("processFaroBody: a null entry inside logs never throws (the exact 500 prob
 
 // ---- server-side noise gates (defence in depth) ----------------------------
 
-test("Faro exception: an unhandled ResizeObserver-loop message is dropped entirely (never stored, no point, no fingerprint) — the server-side D-I2 backstop", async () => {
+test("Faro exception: an unhandled ResizeObserver-loop message is dropped entirely (never stored, no point, no fingerprint) — the server-side backstop", async () => {
   const body = faroFixture("exception-code-frame.json");
   body.exceptions[0].value = "ResizeObserver loop completed with undelivered notifications.";
   body.exceptions[0].type = "Error";
@@ -438,7 +438,7 @@ test("Faro exception: an unrelated unhandled error is NOT dropped", async () => 
 
 // ---- the client's own fingerprint ------------------------------------------
 
-test("Faro exception: a well-formed payload.fingerprint (Faro's own wire field, D-I3) is used verbatim, not recomputed from the stack", async () => {
+test("Faro exception: a well-formed payload.fingerprint (Faro's own wire field) is used verbatim, not recomputed from the stack", async () => {
   const body = faroFixture("exception-code-frame.json");
   body.exceptions[0].fingerprint = "versions-fetch:0123456789abcdef";
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
@@ -446,7 +446,7 @@ test("Faro exception: a well-formed payload.fingerprint (Faro's own wire field, 
   assert.equal(item.ingestItem.fingerprint, "versions-fetch:0123456789abcdef");
 });
 
-test("Faro exception: an invalid payload.fingerprint (fix round A-C2 probe — Slack mrkdwn injection shape) is discarded, never trusted verbatim", async () => {
+test("Faro exception: an invalid payload.fingerprint (Slack mrkdwn injection shape) is discarded, never trusted verbatim", async () => {
   const body = faroFixture("exception-code-frame.json");
   body.exceptions[0].fingerprint = "<!channel> N <https://evil.example|open Grafana>";
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
@@ -879,7 +879,7 @@ function apiErrorLineOtlpBody(overrides = {}) {
   });
 }
 
-test("C-I2 read half: all four conditions met — the API's own hot.fingerprint feeds the exact first-seen registry", async () => {
+test("read half: all four conditions met — the API's own hot.fingerprint feeds the exact first-seen registry", async () => {
   const result = await processOtlpBody(
     new TextEncoder().encode(apiErrorLineOtlpBody()),
     "application/json",
@@ -890,7 +890,7 @@ test("C-I2 read half: all four conditions met — the API's own hot.fingerprint 
   assert.equal(result.items[0].fingerprint, "chat-answer:0123456789abcdef");
 });
 
-test("C-I2 condition 1: a body-JSON service.name claiming demos-api does NOT feed the registry — only the REAL resource attribute counts", async () => {
+test("condition 1: a body-JSON service.name claiming demos-api does NOT feed the registry — only the REAL resource attribute counts", async () => {
   const result = await processOtlpBody(
     new TextEncoder().encode(apiErrorLineOtlpBody({ serviceName: "some-other-service", bodyExtra: { "service.name": "demos-api" } })),
     "application/json",
@@ -900,7 +900,7 @@ test("C-I2 condition 1: a body-JSON service.name claiming demos-api does NOT fee
   assert.equal(result.items[0].fingerprint, undefined, "a body-claimed service.name must never satisfy this gate");
 });
 
-test("C-I2 condition 2: log.kind other than 'error' (e.g. api.request) does not feed the registry", async () => {
+test("condition 2: log.kind other than 'error' (e.g. api.request) does not feed the registry", async () => {
   const result = await processOtlpBody(
     new TextEncoder().encode(apiErrorLineOtlpBody({ bodyExtra: { "log.kind": "api.request" } })),
     "application/json",
@@ -910,7 +910,7 @@ test("C-I2 condition 2: log.kind other than 'error' (e.g. api.request) does not 
   assert.equal(result.items[0].fingerprint, undefined);
 });
 
-test("C-I2 condition 3: a hot.fingerprint value outside the contract's <context>:<16 hex> shape does not feed the registry", async () => {
+test("condition 3: a hot.fingerprint value outside the contract's <context>:<16 hex> shape does not feed the registry", async () => {
   const result = await processOtlpBody(
     new TextEncoder().encode(apiErrorLineOtlpBody({ bodyExtra: { "hot.fingerprint": "<!channel> pwned" } })),
     "application/json",
@@ -929,7 +929,7 @@ test("C-I2 condition 3: a hot.fingerprint value outside the contract's <context>
 // already uses elsewhere). This test proves the wiring fires against what
 // production actually sends: the real script name, and a real
 // multi-segment `reportDiagnostic` context (`npm-registry:*`).
-test("A-M2 + N1 together: a REAL production export (service.name=handsontable-demos-api) with a real reportDiagnostic context feeds the exact first-seen registry", async () => {
+test("a REAL production export (service.name=handsontable-demos-api) with a real reportDiagnostic context feeds the exact first-seen registry", async () => {
   const fp = fingerprint("npm-registry:version-exists", "upstream npm registry request failed");
   const result = await processOtlpBody(
     new TextEncoder().encode(
@@ -947,7 +947,7 @@ test("A-M2 + N1 together: a REAL production export (service.name=handsontable-de
   assert.equal(result.items[0].record.resourceAttributes["service.name"], "demos-api", "the stored record's own label must also be the normalised contract name");
 });
 
-test("C-I2 condition 4: authored/Tier-2-shaped JSON (no trusted log.kind at all) never even surfaces a hot.fingerprint to check — the B cross-note gate already empties bodyJsonAttrs", async () => {
+test("condition 4: authored/Tier-2-shaped JSON (no trusted log.kind at all) never even surfaces a hot.fingerprint to check — the B cross-note gate already empties bodyJsonAttrs", async () => {
   const body = JSON.stringify({
     resourceLogs: [
       {
@@ -976,7 +976,7 @@ test("C-I2 condition 4: authored/Tier-2-shaped JSON (no trusted log.kind at all)
   assert.equal(result.items[0].fingerprint, undefined);
 });
 
-test("fix round I2: a body-JSON key cannot spoof a real resource attribute (service.name, environment, hot.outcome) — the real resource value always wins", async () => {
+test("a body-JSON key cannot spoof a real resource attribute (service.name, environment, hot.outcome) — the real resource value always wins", async () => {
   // The fixture's body JSON tries to spoof service.name, environment and
   // hot.outcome; none must survive — `tryParseJsonBodyAttrs` strips every
   // RESOURCE_ATTRS key from its own output, and the merge gives body-JSON
@@ -1039,7 +1039,7 @@ test("records over 256 KB are dropped, not stored", async () => {
   assert.equal(result.droppedOversize, 1);
 });
 
-test("Faro: a record over 256 KB is dropped, not stored (I2 — the Faro path lacked this check)", async () => {
+test("Faro: a record over 256 KB is dropped, not stored (the Faro path lacked this check)", async () => {
   const body = faroFixture("log.json");
   body.logs[0].message = "x".repeat(300_000);
   const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
@@ -1058,7 +1058,7 @@ test("Faro: a record over 256 KB is dropped, not stored (I2 — the Faro path la
 // identically and dedupe inside the 24h dedupe window even though they are
 // real, distinct events.
 
-test("A-M7: two deploy events with identical service/sha/cf_version_id at receive times in different minute buckets hash differently", async () => {
+test("two deploy events with identical service/sha/cf_version_id at receive times in different minute buckets hash differently", async () => {
   const payload = { service: "demos-authoring", sha: "abc123", cf_version_id: "v1" };
   const first = await processDeployPayload(payload, ENV, 0);
   const second = await processDeployPayload(payload, ENV, 5 * 60_000);
@@ -1077,7 +1077,7 @@ test("A-M7: a redelivered deploy event within the same minute still hashes ident
 // this ingest path — the deploy already shipped — but must be visibly
 // marked, both for a Workers-Logs/Loki search and for a queryable Grafana
 // attribute.
-test("B-I1: an empty cf_version_id is accepted (never dropped) and marked in the body for a Loki/Grafana query", async () => {
+test("an empty cf_version_id is accepted (never dropped) and marked in the body for a Loki/Grafana query", async () => {
   const payload = { service: "demos-authoring", sha: "abc123", cf_version_id: "" };
   const item = await processDeployPayload(payload, ENV, 0);
   const body = JSON.parse(item.record.body);
@@ -1085,14 +1085,14 @@ test("B-I1: an empty cf_version_id is accepted (never dropped) and marked in the
   assert.equal(body.cf_version_id_missing, true, "must mark the record so it is findable without grepping for an empty string");
 });
 
-test("B-I1: a normal, non-empty cf_version_id is NOT marked", async () => {
+test("a normal, non-empty cf_version_id is NOT marked", async () => {
   const payload = { service: "demos-authoring", sha: "abc123", cf_version_id: "01998a3e-1234-abcd" };
   const item = await processDeployPayload(payload, ENV, 0);
   const body = JSON.parse(item.record.body);
   assert.equal(body.cf_version_id_missing, undefined);
 });
 
-test("A-M7: a Sentry issue regressing twice in one day (identical action/title/release) hashes differently per Sentry-Hook-Timestamp", async () => {
+test("a Sentry issue regressing twice in one day (identical action/title/release) hashes differently per Sentry-Hook-Timestamp", async () => {
   const payload = {
     action: "regression",
     data: { issue: { id: "1", title: "TypeError: boom", lastRelease: { version: "rel-1" } } },
@@ -1106,7 +1106,7 @@ test("A-M7: a Sentry issue regressing twice in one day (identical action/title/r
   );
 });
 
-test("A-M7: a redelivered Sentry hook with the same Sentry-Hook-Timestamp still hashes identically", async () => {
+test("a redelivered Sentry hook with the same Sentry-Hook-Timestamp still hashes identically", async () => {
   const payload = {
     action: "regression",
     data: { issue: { id: "1", title: "TypeError: boom", lastRelease: { version: "rel-1" } } },

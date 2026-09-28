@@ -102,7 +102,7 @@ test("POST /telemetry/collect: a wrong Origin is refused with the host gate", as
   assert.equal(res.status, 403);
 });
 
-test("POST /telemetry/collect: a batch over MAX_FARO_ITEMS_PER_BODY is refused outright, never partially processed (finding A-I4)", async () => {
+test("POST /telemetry/collect: a batch over MAX_FARO_ITEMS_PER_BODY is refused outright, never partially processed", async () => {
   const { env, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("log.json"));
   // Inflate one legitimate log item into 300 — well over the 200 cap —
@@ -135,7 +135,7 @@ test("POST /telemetry/collect: a batch over MAX_FARO_ITEMS_PER_BODY is refused o
 // answering a misleading 204 with nothing stored) or silently passes
 // locally while throwing in production. Assert the records actually
 // landed in storage, not just the response status code.
-test("POST /telemetry/collect: a batch of 65 unique log records (over the DO storage 128-key limit once bucketed) is fully accepted and stored (finding N2)", async () => {
+test("POST /telemetry/collect: a batch of 65 unique log records (over the DO storage 128-key limit once bucketed) is fully accepted and stored", async () => {
   const { env, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("log.json"));
   const template = body.logs[0];
@@ -179,7 +179,7 @@ test("POST /telemetry/collect: a batch of 65 unique log records (over the DO sto
   assert.equal(totalAfterReplay, UNIQUE_COUNT, "a redelivery of all 65 must be fully deduped, not stored a second time");
 });
 
-test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count the browser metric point — only the dedupe-accepted copy writes error.uncaught (finding A-I4)", async () => {
+test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count the browser metric point — only the dedupe-accepted copy writes error.uncaught", async () => {
   const { env, ae } = freshEnv();
   const body = withFreshTimestamp(faroFixture("exception-code-frame.json"));
   const req = () =>
@@ -205,7 +205,7 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
 // both copies (filtering by hash) while index.ts's `outcomeByHash` Map
 // lets the later "duplicate" overwrite the first copy's "accepted" — that
 // would leave no record, no error.uncaught point, with the hash marked seen.
-test("POST /telemetry/collect: an in-batch repeat stores one copy and writes its points once (F5-batch)", async () => {
+test("POST /telemetry/collect: an in-batch repeat stores one copy and writes its points once", async () => {
   const { env, ae, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("exception-code-frame.json"));
   body.exceptions = [body.exceptions[0], structuredClone(body.exceptions[0])];
@@ -242,7 +242,7 @@ test("POST /telemetry/collect: an in-batch repeat stores one copy and writes its
 // hash-only ingestItem (no `record`, so it is still never stored, §6)
 // purely so it flows through the same dedupe-gated point-write logic
 // `index.ts#handleCollect` already has for everything else.
-test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count an example.* analytics point (A-I4 remainder)", async () => {
+test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count an example.* analytics point", async () => {
   const { env, ae, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("example-open.json"));
   const req = () =>
@@ -273,7 +273,7 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
 // pipeline accepted, so it counts toward the route's own `o11y.ingest
 // accepted` self-metric the same as a stored record (see the comment at
 // the call site, index.ts).
-test("POST /telemetry/collect: an example.* event counts toward the o11y.ingest 'accepted' self-metric, same as a stored record (F28)", async () => {
+test("POST /telemetry/collect: an example.* event counts toward the o11y.ingest 'accepted' self-metric, same as a stored record", async () => {
   const { env, ae } = freshEnv();
   const exampleBody = withFreshTimestamp(faroFixture("example-open.json"));
   const logBody = withFreshTimestamp(faroFixture("log.json"));
@@ -305,7 +305,7 @@ test("POST /telemetry/collect: an example.* event counts toward the o11y.ingest 
 // The same double-counting protection example.* events get (above) must
 // also hold for a Faro measurement, which carries the identical hash-only
 // ingestItem shape (`storeRecord = false`, faro.ts).
-test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count a measurement's analytics point (F18)", async () => {
+test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count a measurement's analytics point", async () => {
   const { env, ae, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("measurement.json"));
   const req = () =>
@@ -337,7 +337,7 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
 // the first-delivery `accepted` case above. An AE-only duplicate is
 // distinct from a stored duplicate (the exception in the mixed-outcome
 // test below).
-test("POST /telemetry/collect: a redelivered measurement-only batch writes an o11y.ingest duplicate point (F28)", async () => {
+test("POST /telemetry/collect: a redelivered measurement-only batch writes an o11y.ingest duplicate point", async () => {
   const { env, ae } = freshEnv();
   const body = withFreshTimestamp(faroFixture("measurement.json"));
   const req = () =>
@@ -371,7 +371,7 @@ test("POST /telemetry/collect: a redelivered measurement-only batch writes an o1
 // inbox, and all AE points are written") and the `o11y.ingest` self-metric
 // actually live at. The self-metric counts the AE-only measurement too,
 // alongside the two stored records.
-test("POST /telemetry/collect: a mixed batch (measurement + log + exception) stores exactly 2 records, writes all AE points, and counts all 3 toward o11y.ingest accepted (F18, F28)", async () => {
+test("POST /telemetry/collect: a mixed batch (measurement + log + exception) stores exactly 2 records, writes all AE points, and counts all 3 toward o11y.ingest accepted", async () => {
   const { env, ae, doStorage } = freshEnv();
   const measurementBody = withFreshTimestamp(faroFixture("measurement.json"));
   const logBody = withFreshTimestamp(faroFixture("log.json"));
@@ -426,7 +426,7 @@ test("POST /telemetry/collect: a mixed batch (measurement + log + exception) sto
 // still produce an `o11y.ingest accepted` point — a collect request
 // "carrying only measurements" is the shape real traffic hits almost every
 // time (1,946 collect 204s, only 6 accepted points).
-test("POST /telemetry/collect: a measurement-only Faro batch produces the correct o11y.ingest accepted count (F28)", async () => {
+test("POST /telemetry/collect: a measurement-only Faro batch produces the correct o11y.ingest accepted count", async () => {
   const { env, ae, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("measurement.json"));
 
@@ -462,7 +462,7 @@ test("POST /telemetry/collect: a measurement-only Faro batch produces the correc
 // redelivered exception (duplicate — accepted on a prior request), and an
 // oversize log (dropped, reason=size, never reaches `withItem`/the
 // accepted-duplicate counters at all).
-test("POST /telemetry/collect: a batch mixing an AE-only accept, a stored accept, a duplicate, and an oversize record counts each outcome correctly (F28)", async () => {
+test("POST /telemetry/collect: a batch mixing an AE-only accept, a stored accept, a duplicate, and an oversize record counts each outcome correctly", async () => {
   const { env, ae, doStorage } = freshEnv();
 
   // Seed the exception as already-accepted so this batch's copy is a
@@ -541,7 +541,7 @@ test("POST /telemetry/collect: a batch mixing an AE-only accept, a stored accept
 // tell the client it succeeded (ADR §B.2: 2xx only after commit), and
 // Faro's own client only retries a non-2xx, so a 2xx here also means the
 // batch is gone for good, not just mis-reported.
-test("POST /telemetry/collect: answers 5xx (not 2xx) when InboxWriter.ingest throws, and commits nothing (N3)", async () => {
+test("POST /telemetry/collect: answers 5xx (not 2xx) when InboxWriter.ingest throws, and commits nothing", async () => {
   const { env, doStorage, inboxWriterInstance, ae } = freshEnv();
   const originalIngest = inboxWriterInstance.ingest.bind(inboxWriterInstance);
   inboxWriterInstance.ingest = async () => {
@@ -571,7 +571,7 @@ test("POST /telemetry/collect: answers 5xx (not 2xx) when InboxWriter.ingest thr
   }
 });
 
-test("POST /telemetry/collect: a batch that legitimately commits nothing (every record already a duplicate) still answers 2xx (contrast with N3)", async () => {
+test("POST /telemetry/collect: a batch that legitimately commits nothing (every record already a duplicate) still answers 2xx", async () => {
   const { env } = freshEnv();
   const body = withFreshTimestamp(faroFixture("log.json"));
   const req = () =>
@@ -637,7 +637,7 @@ test("POST /telemetry/v1/logs: protobuf content-type is decoded via the protobuf
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
 });
 
-test("POST /telemetry/v1/logs: an oversize record writes an o11y.ingest point with reason=size, not invalid_item (I3)", async () => {
+test("POST /telemetry/v1/logs: an oversize record writes an o11y.ingest point with reason=size, not invalid_item", async () => {
   const { env, ae } = freshEnv();
   const huge = "x".repeat(300_000);
   const body = JSON.stringify({
@@ -666,7 +666,7 @@ test("POST /telemetry/v1/logs: an oversize record writes an o11y.ingest point wi
   assert.ok(!reasons.includes("invalid_item"), "an oversize drop must not be recorded as invalid_item");
 });
 
-test("POST /telemetry/collect: an oversize Faro record writes an o11y.ingest point with reason=size (I2 + I3)", async () => {
+test("POST /telemetry/collect: an oversize Faro record writes an o11y.ingest point with reason=size", async () => {
   const { env, ae } = freshEnv();
   const body = withFreshTimestamp(faroFixture("log.json"));
   body.logs[0].message = "x".repeat(300_000);
@@ -739,7 +739,7 @@ test("POST /telemetry/deploy: GitHub OIDC absent, correct secret passes", async 
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
 });
 
-test("POST /telemetry/deploy: the stored record is self-identified (demos-o11y/o11y) with the deploy fields in the body (controller-pinned shape for T09)", async () => {
+test("POST /telemetry/deploy: the stored record is self-identified (demos-o11y/o11y) with the deploy fields in the body", async () => {
   const { env, r2 } = freshEnv();
   const payload = JSON.parse(jsonFixture("deploy-event.json"));
   await worker.fetch(
@@ -822,7 +822,7 @@ test("POST /telemetry/hooks/sentry: a correct HMAC signature passes, a wrong one
 // silently drops the 4th argument. Two identically signed, byte-identical
 // bodies with different `sentry-hook-timestamp` header values must both
 // land as distinct stored records, not dedupe into one.
-test("POST /telemetry/hooks/sentry: two identical-body hooks with different Sentry-Hook-Timestamp headers both land as distinct stored records (A-M7, route-level)", async () => {
+test("POST /telemetry/hooks/sentry: two identical-body hooks with different Sentry-Hook-Timestamp headers both land as distinct stored records (route-level)", async () => {
   const { env, r2 } = freshEnv();
   const payload = {
     action: "regression",
@@ -870,7 +870,7 @@ test("POST /telemetry/hooks/sentry: two identical-body hooks with different Sent
   );
 });
 
-test("POST /telemetry/hooks/sentry: fix round A-I3 — a title embedding a preview host, a query string, an email and a user-agent is scrubbed before storage, not stored verbatim", async () => {
+test("POST /telemetry/hooks/sentry: a title embedding a preview host, a query string, an email and a user-agent is scrubbed before storage, not stored verbatim", async () => {
   const { env, r2 } = freshEnv();
   // The exact probe from the finding: a correctly-signed hook whose title
   // carries a preview host (a session credential), a query string, an

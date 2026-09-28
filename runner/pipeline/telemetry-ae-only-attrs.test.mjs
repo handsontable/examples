@@ -28,7 +28,7 @@ function faroMeasurement(context) {
   };
 }
 
-test("scrubTelemetry keeps hot.bucket/hot.reason/hot.fingerprint (the browser/re-run scrub allowlist) — T07 fix round", () => {
+test("scrubTelemetry keeps hot.bucket/hot.reason/hot.fingerprint (the browser/re-run scrub allowlist)", () => {
   const item = faroMeasurement({
     "hot.surface": "authoring",
     "hot.bucket": "18.1",
@@ -49,7 +49,7 @@ test("scrubTelemetry keeps hot.bucket/hot.reason/hot.fingerprint (the browser/re
   );
 });
 
-test("bucket/reason/fingerprint reach their §4 AE slots (blob16/blob9/blob11) through the real ingest conversion — T07 fix round", () => {
+test("bucket/reason/fingerprint reach their §4 AE slots (blob16/blob9/blob11) through the real ingest conversion", () => {
   // Each built from the SAME scrubbed context a real Faro request would now
   // carry — `scrubTelemetry` runs first, exactly as `processOneItem`'s
   // T00-D6 order does server-side (and as Faro's `beforeSend` does in the

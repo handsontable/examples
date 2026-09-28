@@ -60,7 +60,7 @@ test("GET /api/demos/:id?view=share (the actual share-page load) emits exactly o
   assert.equal(sb[0].doubles[COUNT_SLOT], 1);
 });
 
-test("GET /api/demos/<missing-id> WITHOUT ?view=share (an ad hoc existence-check probe, the F20 finding's own repro) answers 404 and emits NO serve.share point", async () => {
+test("GET /api/demos/<missing-id> WITHOUT ?view=share (an ad hoc existence-check probe) answers 404 and emits NO serve.share point", async () => {
   const { env, points } = countingEnv([]);
   const res = await worker.fetch(metaRequest("does-not-exist"), env, ctx);
   assert.equal(res.status, 404);

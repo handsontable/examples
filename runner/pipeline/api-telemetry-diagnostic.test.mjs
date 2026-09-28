@@ -142,7 +142,7 @@ test("reportDiagnostic: the structured error line carries hot.fingerprint = fing
 // `reportDiagnostic` fingerprint-passthrough test elsewhere proves the
 // function honours `sentryFingerprint` when given one; this proves each
 // call site actually passes one.
-test("the chat-gateway and theme-gateway reportDiagnostic calls set a status-grouped sentryFingerprint (C-M13)", () => {
+test("the chat-gateway and theme-gateway reportDiagnostic calls set a status-grouped sentryFingerprint", () => {
   const root = join(import.meta.dirname, "..");
   const source = readFileSync(join(root, "workers/api/src/index.ts"), "utf8");
 

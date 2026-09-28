@@ -122,7 +122,7 @@ test("Grafana visit wake: unaffected by drainsPaused (still wakes the box)", asy
 // `drainsPaused` before this tick's spend-cap result sets it. This drives
 // the real `scheduled()` with the spend coming from the API binding (the
 // value the admin override feeds), not a hand-set flag.
-test("F37: the tick whose spend-cap fires wakes nothing for the backlog; the tick after the cap resolves unpauses and wakes", async () => {
+test("the tick whose spend-cap fires wakes nothing for the backlog; the tick after the cap resolves unpauses and wakes", async () => {
   let spend = { spendUsd: 0.32, capUsd: 0.1 }; // the Round 10 override
   const { env, doStorage } = makeEnv(InboxWriter, {
     env: {

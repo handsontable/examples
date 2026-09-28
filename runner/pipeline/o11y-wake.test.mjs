@@ -356,7 +356,7 @@ async function makeInboxObjectGz() {
 // value) when the batch it just pushed replayed reopened keys — instead of
 // silently reporting the wake's own `backlog`/`visit` reason, which loses
 // the fact entirely.
-test("B-M5: o11y.drain reports reason: \"reopen\" when the batch replays a reopened key, even on a backlog wake", async () => {
+test("o11y.drain reports reason: \"reopen\" when the batch replays a reopened key, even on a backlog wake", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
   const r2Objects = new Map([[key, await makeInboxObjectGz()]]);
   const { box, inboxWriterStub, ae } = makeBox({
@@ -379,7 +379,7 @@ test("B-M5: o11y.drain reports reason: \"reopen\" when the batch replays a reope
   assert.equal(reasonOf(drainPoint), "reopen", "a batch replaying reopened keys must report reason: reopen, not the wake's own backlog/visit reason");
 });
 
-test("B-M5 (revert check / positive control): o11y.drain still reports the wake's own reason when nothing was reopened", async () => {
+test("revert check / positive control: o11y.drain still reports the wake's own reason when nothing was reopened", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
   const r2Objects = new Map([[key, await makeInboxObjectGz()]]);
   const { box, ae } = makeBox({ inboxWriter: { writtenKeys: [key], reopenedFlag: false }, r2Objects });
@@ -398,7 +398,7 @@ test("B-M5 (revert check / positive control): o11y.drain still reports the wake'
 // "reopen" on the `outcome: "error"` point — the same path as the drain
 // error path `drainStep`'s outer catch takes, not the wake's own
 // backlog/visit reason.
-test('QA follow-up (reopen reason on the drain error path): a batch that replays a reopened key and then throws still reports reason: "reopen" on the o11y.drain error point', async () => {
+test('reopen reason on the drain error path: a batch that replays a reopened key and then throws still reports reason: "reopen" on the o11y.drain error point', async () => {
   const key = "inbox/worker/2026-01-01/00/000000000010.ndjson.gz";
   const r2Objects = new Map([[key, await makeInboxObjectGz()]]);
   const { box, inboxWriterStub, ae } = makeBox({
@@ -474,7 +474,7 @@ test("drainStep commits a zero-bytes-pushed key directly, never marking it provi
 // the drain for the rest of this wake: nothing would reschedule it, nothing
 // would be recorded, and the box would sit there idle-timer-bound having
 // quietly given up mid-drain.
-test("drainStep records an o11y.drain error point and still runs the post-drain stop decision when a step throws (B-M2)", async () => {
+test("drainStep records an o11y.drain error point and still runs the post-drain stop decision when a step throws", async () => {
   const inboxWriterStub = makeInboxWriterStub({ writtenKeys: ["inbox/worker/2026-01-01/00/000000000004.ndjson.gz"] });
   inboxWriterStub.nextWrittenKeys = async () => {
     throw new Error("simulated InboxWriter RPC failure");
@@ -546,7 +546,7 @@ test("an idle drain (no recent /grafana/* activity) stops right after finishing"
   assert.ok(stopped, "an idle backlog drain must call stop() right after finishing");
 });
 
-test("fix round I1: a fresh backlog wake with no visitors self-stops, even right after a PREVIOUS wake had a recent visitor", async () => {
+test("a fresh backlog wake with no visitors self-stops, even right after a PREVIOUS wake had a recent visitor", async () => {
   // Two consecutive wakes: wake 1 has a real visitor (noteVisitorActivity),
   // then fully stops; wake 2 is a fresh backlog-only wake with NO visitor
   // activity of its own. `LAST_GRAFANA_STORAGE_KEY` is not scoped by
@@ -613,7 +613,7 @@ test("drainStep pushes nothing while drainsPaused: a visit wake keeps serving (n
   }
 });
 
-test("drainStep drains normally once drainsPaused is cleared (F37)", async () => {
+test("drainStep drains normally once drainsPaused is cleared", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000008.ndjson.gz";
   const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key], drainsPaused: false } });
   await box.wake("backlog");
@@ -642,7 +642,7 @@ test("a drain wake with an active Grafana user does not call stop()", async () =
 // only ever saw the waking page (the box was still booting). Driven
 // through the real `handleGrafana` handler, not `box.noteVisitorActivity()`
 // called directly, so the proxy-level ordering is actually exercised.
-test("F2: a waking-page request (box not yet ready) still counts as visitor activity, so an empty-backlog visit wake stays up past the first drain-finish", async () => {
+test("a waking-page request (box not yet ready) still counts as visitor activity, so an empty-backlog visit wake stays up past the first drain-finish", async () => {
   const { box, env, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [] }, env: { O11Y_ENV: "local", DEV_ADMIN: "dev@handsontable.com" } });
   // `getGrafanaBoxStub`/`inboxWriterStub` (box.ts) both resolve their
   // Durable Object namespace WITHOUT `.jurisdiction()` under O11Y_ENV=local
@@ -702,7 +702,7 @@ function installRealisticProbeBodies({ lokiStatus = 200, lokiBody = "ready\n", g
   };
 }
 
-test("F6: isReady() releases both probe bodies, so the in-flight count returns to 0 and the idle stop can fire", async () => {
+test("isReady() releases both probe bodies, so the in-flight count returns to 0 and the idle stop can fire", async () => {
   const { box } = makeBox();
   await box.wake("visit");
   installRealisticProbeBodies();
@@ -716,7 +716,7 @@ test("F6: isReady() releases both probe bodies, so the in-flight count returns t
   assert.equal(box.isActivityExpired(), true, "with nothing in flight the sleepAfter idle stop must be due");
 });
 
-test("F6: a not-ready probe's body is released too (Loki answers 503 with a body while it boots)", async () => {
+test("a not-ready probe's body is released too (Loki answers 503 with a body while it boots)", async () => {
   const { box } = makeBox();
   await box.wake("visit");
   installRealisticProbeBodies({ lokiStatus: 503, lokiBody: "Ingester not ready: waiting for 15s after being ready\n" });
@@ -726,7 +726,7 @@ test("F6: a not-ready probe's body is released too (Loki answers 503 with a body
   assert.equal(box.inflightRequests, 0);
 });
 
-test("F6: when one probe throws, the other probe's body is still released", async () => {
+test("when one probe throws, the other probe's body is still released", async () => {
   const { box } = makeBox();
   await box.wake("visit");
   installRealisticProbeBodies({ grafana: "throw" });
@@ -736,7 +736,7 @@ test("F6: when one probe throws, the other probe's body is still released", asyn
   assert.equal(box.inflightRequests, 0, "the Loki probe's body must not leak because the Grafana probe threw");
 });
 
-test("F6: drainStep's Loki push releases a 2xx response body (not only a >=400 one)", async () => {
+test("drainStep's Loki push releases a 2xx response body (not only a >=400 one)", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000009.ndjson.gz";
   const record = {
     resource: { attributes: [] },
@@ -766,7 +766,7 @@ test("F6: drainStep's Loki push releases a 2xx response body (not only a >=400 o
 
 // ---- wake-to-ready time -----------------------------------------------------
 
-test("F8: the first successful isReady() of a wake reports wake-to-ready, once", async () => {
+test("the first successful isReady() of a wake reports wake-to-ready, once", async () => {
   const { box, inboxWriterStub } = makeBox();
   await box.wake("visit");
   const wake = await box.ctx.storage.get("wake");
@@ -787,7 +787,7 @@ test("F8: the first successful isReady() of a wake reports wake-to-ready, once",
   assert.ok(readyMs >= 42_000 && readyMs < 43_000, `expected ~42000 ms, got ${readyMs}`);
 });
 
-test("F8: a new wake reports its own wake-to-ready again", async () => {
+test("a new wake reports its own wake-to-ready again", async () => {
   const { box, inboxWriterStub } = makeBox();
   installRealisticProbeBodies();
   await box.wake("visit");
@@ -802,7 +802,7 @@ test("F8: a new wake reports its own wake-to-ready again", async () => {
   assert.equal(ids[1], (await box.ctx.storage.get("wake")).wakeId);
 });
 
-test("F8: a failing recordWakeReady never fails isReady(), and the next successful probe retries it", async () => {
+test("a failing recordWakeReady never fails isReady(), and the next successful probe retries it", async () => {
   let attempts = 0;
   const { box } = makeBox({
     inboxWriter: {
@@ -900,7 +900,7 @@ function installWedgedStart() {
   return () => calls;
 }
 
-test("F13: a start() that never settles no longer pins every later wake() caller", async () => {
+test("a start() that never settles no longer pins every later wake() caller", async () => {
   const startCalls = installWedgedStart();
   const { box, inboxWriterStub } = makeBox();
   let recordWakeCalls = 0;
@@ -923,7 +923,7 @@ test("F13: a start() that never settles no longer pins every later wake() caller
   assert.equal(recordWakeCalls, 1, "no second wakeId minted while the first start is still in flight");
 });
 
-test("F13: a wedged start() resets the DO instance (ctx.abort) and still leaves the wake its 4-hour cap", async () => {
+test("a wedged start() resets the DO instance (ctx.abort) and still leaves the wake its 4-hour cap", async () => {
   installWedgedStart();
   const { box, scheduled } = makeBox();
   box.startDeadlineMs = 50;
@@ -939,7 +939,7 @@ test("F13: a wedged start() resets the DO instance (ctx.abort) and still leaves 
   assert.equal(hardCap.payload.wakeId, wake.wakeId);
 });
 
-test("F13 (positive control): a start() that settles normally never resets the instance", async () => {
+test("positive control: a start() that settles normally never resets the instance", async () => {
   const { box } = makeBox();
   box.startDeadlineMs = 50;
   const aborts = [];
@@ -949,7 +949,7 @@ test("F13 (positive control): a start() that settles normally never resets the i
   assert.equal(aborts.length, 0);
 });
 
-test("F13: /grafana/* serves the waking page instead of hanging while the box's start is wedged", async () => {
+test("/grafana/* serves the waking page instead of hanging while the box's start is wedged", async () => {
   installWedgedStart();
   const { box, env, inboxWriterStub } = makeBox({ env: { O11Y_ENV: "local", DEV_ADMIN: "dev@handsontable.com" } });
   env.GRAFANA_BOX = { getByName: () => box };
@@ -969,7 +969,7 @@ test("F13: /grafana/* serves the waking page instead of hanging while the box's 
   assert.equal(await bg.text(), wakingPageHtml());
 });
 
-test("F13: isReady() answers false within its deadline when a probe never answers, and releases a late answer", async () => {
+test("isReady() answers false within its deadline when a probe never answers, and releases a late answer", async () => {
   const { box } = makeBox();
   await box.wake("visit");
   box.readyProbeTimeoutMs = 50;
@@ -1004,7 +1004,7 @@ test("F13: isReady() answers false within its deadline when a probe never answer
   assert.equal(box.inflightRequests, 0);
 });
 
-test("F13: drainStep finishes when Loki's push port never answers, instead of freezing the alarm loop", async () => {
+test("drainStep finishes when Loki's push port never answers, instead of freezing the alarm loop", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000013.ndjson.gz";
   const record = {
     resource: { attributes: [] },
@@ -1041,7 +1041,7 @@ function installSilentProbes() {
   hooks.containerFetch = () => new Promise(() => {});
 }
 
-test("F13: probes that time out for startDeadlineMs reset the instance once (the reload path)", async () => {
+test("probes that time out for startDeadlineMs reset the instance once (the reload path)", async () => {
   const { box } = makeBox();
   await box.wake("visit");
   box.readyProbeTimeoutMs = 10;
@@ -1064,7 +1064,7 @@ test("F13: probes that time out for startDeadlineMs reset the instance once (the
   assert.equal(aborts.length, 1, "the clock restarts after a reset instead of aborting on every probe");
 });
 
-test("F13 (positive control): a probe that answers in between restarts the stuck clock", async () => {
+test("positive control: a probe that answers in between restarts the stuck clock", async () => {
   const { box } = makeBox();
   await box.wake("visit");
   box.readyProbeTimeoutMs = 10;

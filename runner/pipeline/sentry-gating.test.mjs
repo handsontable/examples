@@ -287,7 +287,7 @@ test("withoutMessageEchoFrames: no message or no frames -> frames returned uncha
   assert.equal(withoutMessageEchoFrames("boom", undefined), undefined);
 });
 
-test("R3 F17a end to end: the pii finding's message no longer makes isForeignUnhandled drop the event", () => {
+test("end to end: the pii finding's message no longer makes isForeignUnhandled drop the event", () => {
   const message =
     "HAIKU1 pii jane.doe@example.com 192.0.2.55 https://x.test/p?token=SECRET123";
   const rawFrames = [
@@ -311,7 +311,7 @@ test("R3 F17a end to end: the pii finding's message no longer makes isForeignUnh
   assert.equal(isForeignUnhandled(event, "http://localhost:5173"), false);
 });
 
-test("R3 F17a: a genuinely foreign third-party script error is still dropped", () => {
+test("a genuinely foreign third-party script error is still dropped", () => {
   const event = {
     exception: {
       values: [

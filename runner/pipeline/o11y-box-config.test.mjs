@@ -269,7 +269,7 @@ test("grafana.ini: auth.proxy is the ONLY trusted identity — basic auth and th
   );
 });
 
-test("grafana.ini: viewers_can_edit is on (Explore for Viewers), but provisioning still refuses a save (P1-logs)", () => {
+test("grafana.ini: viewers_can_edit is on (Explore for Viewers), but provisioning still refuses a save", () => {
   const ini = parseIni(readText("grafana/grafana.ini"));
   // Grafana gates Explore on viewers_can_edit, not on role — a signed-in
   // Viewer with this off cannot open Explore at all. Flipping it on is safe
@@ -296,7 +296,7 @@ test("grafana.ini: viewers_can_edit is on (Explore for Viewers), but provisionin
 // --- Grafana provisioning: containers/o11y/grafana/provisioning/datasources
 // -------------------------------------------------------------------------
 
-test("datasources.yaml: fixed uids and tenant headers are pinned (T09 depends on the uids)", () => {
+test("datasources.yaml: fixed uids and tenant headers are pinned", () => {
   const raw = readText("grafana/provisioning/datasources/datasources.yaml");
 
   // Grafana's sqlite state is disposable — a fresh DB on every wake — so a
@@ -496,7 +496,7 @@ test("stop-roundtrip.mjs, dev.mjs and the e2e-o11y-local workflow never use quay
 // import from it). Without these two subtrees in the pull_request path
 // filter, a regression there is only caught by the nightly run or a manual
 // dispatch, not by the PR that introduces it.
-test("e2e-o11y-local.yml: the PR path filter also covers workers/api/** and packages/** (B-I3)", () => {
+test("e2e-o11y-local.yml: the PR path filter also covers workers/api/** and packages/**", () => {
   const workflowPath = join(RUNNER_ROOT, "..", ".github", "workflows", "e2e-o11y-local.yml");
   const code = readFileSync(workflowPath, "utf8");
   const pathsStart = code.indexOf("pull_request:");
@@ -538,7 +538,7 @@ test("Dockerfile: loads the same config files this test pins (source-grep pin)",
 
 // --- grafana.ini: anonymous auth must stay disabled -----------------------
 
-test("grafana.ini: [auth.anonymous] enabled = false (T01 M3 — no pinning test previously existed for this value)", () => {
+test("grafana.ini: [auth.anonymous] enabled = false", () => {
   // Fix round (minor triage item 6): the VALUE was already correct — this
   // test only closes the gap that nothing pinned it, so a future edit that
   // flips it (or drops the stanza) fails a test instead of silently
@@ -646,7 +646,7 @@ test("wrangler.jsonc: CLOUDFLARE_ACCOUNT_ID is present and matches the top-level
 // every printed piece through `scrubSecrets` (`./redact.mjs`, unit-tested
 // separately below), and the `mc admin ...` call site must pass its
 // per-run password into `redact`.
-test("A-I1: stop-roundtrip.mjs's sh() scrubs every printed failure line via ./redact.mjs, and setupRestrictedMinioUser passes its password to redact", () => {
+test("stop-roundtrip.mjs's sh() scrubs every printed failure line via ./redact.mjs, and setupRestrictedMinioUser passes its password to redact", () => {
   const code = readFileSync(join(O11Y_DIR, "local", "stop-roundtrip.mjs"), "utf8");
 
   assert.match(code, /import\s*\{\s*scrubSecrets\s*\}\s*from\s*"\.\/redact\.mjs"/, "must import scrubSecrets from ./redact.mjs");
@@ -679,7 +679,7 @@ test("A-I1: stop-roundtrip.mjs's sh() scrubs every printed failure line via ./re
 // in correctly. redact.mjs's `if (secret)` guard must stay: an
 // unconditional split/join would corrupt the text for an empty/undefined
 // secret (see the last test below).
-test("A-I1: scrubSecrets replaces every occurrence of every given secret, and is a no-op for values that don't appear", () => {
+test("scrubSecrets replaces every occurrence of every given secret, and is a no-op for values that don't appear", () => {
   const text = "mc alias set c1 http://localhost:9000 \"minioadmin\" \"minioadmin\"\nerror: minioadmin rejected";
   const out = scrubSecrets(text, ["minioadmin"]);
   assert.doesNotMatch(out, /minioadmin/, "every occurrence of the secret must be gone");
@@ -687,7 +687,7 @@ test("A-I1: scrubSecrets replaces every occurrence of every given secret, and is
   assert.equal((out.match(/<redacted>/g) ?? []).length, 3, "must replace ALL three occurrences, not just the first");
 });
 
-test("A-I1: scrubSecrets redacts multiple distinct secrets in the same pass (root creds AND a restricted user's password)", () => {
+test("scrubSecrets redacts multiple distinct secrets in the same pass (root creds AND a restricted user's password)", () => {
   const text = 'mc alias set c1 http://localhost:9000 "minioadmin" "minioadmin" && mc admin user add c1 restricted-abc "restricted-pw-abc"';
   const out = scrubSecrets(text, ["minioadmin", "restricted-pw-abc"]);
   assert.doesNotMatch(out, /minioadmin/);
@@ -695,7 +695,7 @@ test("A-I1: scrubSecrets redacts multiple distinct secrets in the same pass (roo
   assert.match(out, /restricted-abc/, "the username (not a secret here) must survive untouched");
 });
 
-test("A-I1: scrubSecrets leaves text alone when a secret is empty/undefined (never corrupts the message)", () => {
+test("scrubSecrets leaves text alone when a secret is empty/undefined (never corrupts the message)", () => {
   const text = "command failed: docker compose exec minio /bin/sh -c 'mc admin policy create ...'";
   assert.equal(scrubSecrets(text, ["", undefined, null]), text);
 });
@@ -708,7 +708,7 @@ test("A-I1: scrubSecrets leaves text alone when a secret is empty/undefined (nev
 // "o11y-stop-roundtrip") must collide with neither, or a developer running
 // their persistent stack under one of those names loses its data the next
 // time they run this script with no override.
-test("A-M1: stop-roundtrip.mjs's default COMPOSE_PROJECT_NAME never collides with the dev-stack default or the compose.yml-documented manual convention", () => {
+test("stop-roundtrip.mjs's default COMPOSE_PROJECT_NAME never collides with the dev-stack default or the compose.yml-documented manual convention", () => {
   const code = readFileSync(join(O11Y_DIR, "local", "stop-roundtrip.mjs"), "utf8");
 
   const defaultMatch = code.match(/const REQUESTED_PROJECT = process\.env\.COMPOSE_PROJECT_NAME \|\| "([^"]+)"/);
@@ -729,7 +729,7 @@ test("A-M1: stop-roundtrip.mjs's default COMPOSE_PROJECT_NAME never collides wit
 // docker call). The dev-stack default is this worktree's own derived
 // `defaultComposeProjectName()`, so the env var this test sets must be that
 // value for the guard to have anything to refuse.
-test("A-M1: stop-roundtrip.mjs refuses to run when COMPOSE_PROJECT_NAME is explicitly set to dev.mjs's own dev-stack default", () => {
+test("stop-roundtrip.mjs refuses to run when COMPOSE_PROJECT_NAME is explicitly set to dev.mjs's own dev-stack default", () => {
   const script = join(O11Y_DIR, "local", "stop-roundtrip.mjs");
   const devStackDefault = defaultComposeProjectName();
   const result = spawnSync(process.execPath, [script], {

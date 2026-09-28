@@ -182,7 +182,7 @@ test("symbolicateResourceLogs is deterministic: two independent calls over the s
 // existed (or any other path that reaches `resolveBody` with this exact
 // text) must still be handled safely — that is what this module's own
 // guard is for, independent of the ingest-side fix.
-test("Z-B-C1: symbolicateResourceLogs leaves a lineno: 0 frame's body byte-for-byte unchanged, and does not throw, even when a valid map exists", async () => {
+test("symbolicateResourceLogs leaves a lineno: 0 frame's body byte-for-byte unchanged, and does not throw, even when a valid map exists", async () => {
   const poisonedLine = "    at f (https://demos.handsontable.com/assets/index-abc123.js:0:5)";
   const record = exceptionRecord(["TypeError: boom", poisonedLine]);
   const maps = new Map([["sourcemaps/deadbeef1234/assets/index-abc123.js.map", buildTestMap()]]);
@@ -193,7 +193,7 @@ test("Z-B-C1: symbolicateResourceLogs leaves a lineno: 0 frame's body byte-for-b
   assert.equal(body, record.scopeLogs[0].logRecords[0].body.stringValue, "a lineno: 0 frame must be left byte-for-byte unresolved, never throw");
 });
 
-test("Z-B-C1: a lineno: 0 frame is left alone even alongside a genuinely resolvable frame in the same body", async () => {
+test("a lineno: 0 frame is left alone even alongside a genuinely resolvable frame in the same body", async () => {
   const poisonedLine = "    at f (https://demos.handsontable.com/assets/index-abc123.js:0:5)";
   const resolvableLine = formatStackFrame({
     filename: "https://demos.handsontable.com/assets/index-abc123.js",

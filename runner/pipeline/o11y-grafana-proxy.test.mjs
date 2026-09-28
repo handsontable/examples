@@ -200,7 +200,7 @@ test("/grafana/* strips the session cookie from the request forwarded to Grafana
   assert.equal(upstream.headers.get("cookie"), null, "o11y_session must never reach the container Grafana runs in");
 });
 
-test("I2 (live, through the proxy route): a tossed/junk duplicate cookie ahead of the real one does not lock the visitor out", async () => {
+test("live, through the proxy route: a tossed/junk duplicate cookie ahead of the real one does not lock the visitor out", async () => {
   const box = makeBoxStub({ ready: true });
   const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
   const token = (await sessionCookieHeader(env)).split("=").slice(1).join("=");
@@ -212,7 +212,7 @@ test("I2 (live, through the proxy route): a tossed/junk duplicate cookie ahead o
   assert.equal(await res.text(), "grafana-body");
 });
 
-test("M7: an unauthenticated HEAD or OPTIONS request never touches the box either", async () => {
+test("an unauthenticated HEAD or OPTIONS request never touches the box either", async () => {
   for (const method of ["HEAD", "OPTIONS"]) {
     const box = makeBoxStub();
     const { env } = makeEnv({ o11yEnv: "production", boxStub: box });
@@ -246,7 +246,7 @@ test("/grafana/* preserves the original Host and path (never rewrites to a synth
 // no such stream (0 errors). workerd's RPC transport cannot run under
 // `node --test`, so these pin the call shape that avoids it.
 
-test("Z1: a panel-query POST reaches the box through the DO's fetch() with its body intact, never the containerFetch RPC method", async () => {
+test("a panel-query POST reaches the box through the DO's fetch() with its body intact, never the containerFetch RPC method", async () => {
   const box = makeBoxStub({ ready: true });
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
   const body = JSON.stringify({ queries: [{ refId: "A", expr: '{service_name="api"}' }] });
@@ -273,7 +273,7 @@ test("Z1: a panel-query POST reaches the box through the DO's fetch() with its b
 // of 30 refused 20 KB POSTs printed "Uncaught TypeError: Can't read from
 // request stream after response has been sent", and some came back 500
 // instead of 404. With the body buffered first: 0 of 30, all 404.
-test("Z1: the incoming body is read to the end BEFORE the box is called, so a box that answers without reading it leaves nothing pumping", async () => {
+test("the incoming body is read to the end BEFORE the box is called, so a box that answers without reading it leaves nothing pumping", async () => {
   let sourceDrained = false;
   const chunks = ['{"streams":[', '{"stream":{"a":"b"},"values":[["1","x"]]}', "]}"];
   const source = new ReadableStream({
@@ -312,7 +312,7 @@ test("Z1: the incoming body is read to the end BEFORE the box is called, so a bo
   );
 });
 
-test("Z1: a client that drops mid-upload gets a 400 from the Worker, and the box is never called", async () => {
+test("a client that drops mid-upload gets a 400 from the Worker, and the box is never called", async () => {
   const box = makeBoxStub({ ready: true });
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
   const source = new ReadableStream({
@@ -455,7 +455,7 @@ test("item 1: a small, LYING Content-Length does not let an oversize streamed bo
   assert.equal(box.calls.fetch.length, 0, "an oversized body must never reach the box, even behind a lying small Content-Length");
 });
 
-test("Z1: a client-supplied cf-container-target-port (the base Container.fetch()'s port selector) is stripped before reaching the box", async () => {
+test("a client-supplied cf-container-target-port (the base Container.fetch()'s port selector) is stripped before reaching the box", async () => {
   const box = makeBoxStub({ ready: true });
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
   const req = new Request("https://demos.handsontable.com/grafana/api/health", {
@@ -468,7 +468,7 @@ test("Z1: a client-supplied cf-container-target-port (the base Container.fetch()
   assert.equal(box.calls.fetch[0].headers.get("cf-container-target-port"), null);
 });
 
-test("Z1 (structural): nothing in workers/o11y/src outside box.ts calls containerFetch — only the DO may, on itself", async () => {
+test("structural: nothing in workers/o11y/src outside box.ts calls containerFetch — only the DO may, on itself", async () => {
   const { readdirSync, readFileSync } = await import("node:fs");
   const { join, relative } = await import("node:path");
   const root = new URL("../workers/o11y/src/", import.meta.url).pathname;
@@ -505,7 +505,7 @@ test("/grafana/* serves the waking page instead of erroring when wake() refuses 
 
 // ---- only a top-level navigation may start a stopped box -------------------
 
-test("B-I3: a background request (sec-fetch-dest: empty) never wakes a stopped box — serves the waking page without calling wake()", async () => {
+test("a background request (sec-fetch-dest: empty) never wakes a stopped box — serves the waking page without calling wake()", async () => {
   const box = makeBoxStub({ isAwake: false });
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
   const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
@@ -519,7 +519,7 @@ test("B-I3: a background request (sec-fetch-dest: empty) never wakes a stopped b
   assert.deepEqual(box.calls.wake, [], "a background XHR must never mint a fresh wake on a stopped box");
 });
 
-test("B-I3: a top-level navigation (sec-fetch-dest: document) still wakes a stopped box", async () => {
+test("a top-level navigation (sec-fetch-dest: document) still wakes a stopped box", async () => {
   const box = makeBoxStub({ isAwake: false, ready: true });
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
   const req = new Request("https://demos.handsontable.com/grafana/d/abc", {
@@ -533,7 +533,7 @@ test("B-I3: a top-level navigation (sec-fetch-dest: document) still wakes a stop
   assert.deepEqual(box.calls.wake, ["visit"]);
 });
 
-test("B-I3: a request with no Fetch Metadata headers at all (old browser, CLI, most tests) still wakes — fails open on absence, not on presence", async () => {
+test("a request with no Fetch Metadata headers at all (old browser, CLI, most tests) still wakes — fails open on absence, not on presence", async () => {
   const box = makeBoxStub({ isAwake: false, ready: true });
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
   const req = new Request("https://demos.handsontable.com/grafana/d/abc");
@@ -544,7 +544,7 @@ test("B-I3: a request with no Fetch Metadata headers at all (old browser, CLI, m
   assert.deepEqual(box.calls.wake, ["visit"]);
 });
 
-test("B-I3: a background request while the box IS already awake still renews activity normally (only STARTING is gated)", async () => {
+test("a background request while the box IS already awake still renews activity normally (only STARTING is gated)", async () => {
   const box = makeBoxStub({ isAwake: true, ready: true });
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", boxStub: box });
   const req = new Request("https://demos.handsontable.com/grafana/api/ds/query", {
@@ -626,7 +626,7 @@ test("POST /grafana/_o11y/reopen rejects a malformed body with 400, never reachi
 
 // ---- CSRF hardening and the retention-window cap ---------------------------
 
-test("B-M9: a non-application/json content-type is refused with 415, never reaching the ledger (CSRF: a cross-site 'simple' request cannot set this header)", async () => {
+test("a non-application/json content-type is refused with 415, never reaching the ledger (CSRF: a cross-site 'simple' request cannot set this header)", async () => {
   let called = false;
   const inboxWriterStub = { async reopenWindow() { called = true; return { reopened: 0 }; } };
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
@@ -642,7 +642,7 @@ test("B-M9: a non-application/json content-type is refused with 415, never reach
   assert.equal(called, false);
 });
 
-test("B-M9: application/json with parameters (charset) is still accepted", async () => {
+test("application/json with parameters (charset) is still accepted", async () => {
   const inboxWriterStub = { async reopenWindow() { return { reopened: 0 }; } };
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/reopen", {
@@ -655,7 +655,7 @@ test("B-M9: application/json with parameters (charset) is still accepted", async
   assert.equal(res.status, 200);
 });
 
-test("B-M9: a window wider than the 7-day retention is refused with 400, never reaching the ledger", async () => {
+test("a window wider than the 7-day retention is refused with 400, never reaching the ledger", async () => {
   let called = false;
   const inboxWriterStub = { async reopenWindow() { called = true; return { reopened: 0 }; } };
   const { env } = makeEnv({ devAdmin: "dev@handsontable.com", inboxWriterStub });

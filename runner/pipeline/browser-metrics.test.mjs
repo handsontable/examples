@@ -171,7 +171,7 @@ test("preview.ready_ms: a version with no ref attached reads ht_major as none", 
 
 // ---- htMajorOf --------------------------------------------------------------------
 
-test("htMajorOf reads a release version's major, a next prerelease as next, and a pkg.pr.new ref as next (T07-D1)", () => {
+test("htMajorOf reads a release version's major, a next prerelease as next, and a pkg.pr.new ref as next", () => {
   assert.equal(htMajorOf("18.1.0"), "18");
   assert.equal(htMajorOf("19.0.0-next.1"), "next");
   assert.equal(htMajorOf("0.0.0-next-abc123-20260101"), "next");
@@ -313,7 +313,7 @@ function fakeContainerRuntime() {
 
 const CONTAINER_CTX = { framework: "next", versionRef: "18.2.0" };
 
-test("session.start_ms: reports elapsed/outcome, and never sets reason (T07-D2 — no cold/warm signal exists)", () => {
+test("session.start_ms: reports elapsed/outcome, and never sets reason (no cold/warm signal exists)", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeContainerRuntime();
   wireRuntimeMetrics(runtime, CONTAINER_CTX, telemetry);

@@ -64,7 +64,7 @@ test("hoistAttributes splits a merged bag into resource attrs vs structured meta
   assert.deepEqual(attributes, { "hot.demo_id": "r-react-18-0-0", "session.id": "plid-1" });
 });
 
-test("hoistAttributes also keeps T06's diagnostic tag keys as structured metadata (merge fix, T02+T06)", () => {
+test("hoistAttributes also keeps the authoring app's diagnostic tag keys as structured metadata", () => {
   // `scrub.ts#allowlistAttributes` (via `attrs.ts#ALLOWED_ATTRIBUTE_KEYS`) has
   // allowed `handled`/`context`/`sentry_event_id`/the `versions-fetch` tags
   // through, but `hoistAttributes` — the very next
@@ -104,7 +104,7 @@ test("sanitizeResourceAttributes drops an over-length/bad-charset open-set value
   assert.deepEqual(out, {});
 });
 
-test("isValidOpenAttrValue accepts real framework/outcome shapes, rejects the forged ones from the A-C1 probe", () => {
+test("isValidOpenAttrValue accepts real framework/outcome shapes, rejects the forged ones from the probe", () => {
   assert.equal(isValidOpenAttrValue("react"), true);
   assert.equal(isValidOpenAttrValue("react-18"), true);
   assert.equal(isValidOpenAttrValue("none"), true);
@@ -112,7 +112,7 @@ test("isValidOpenAttrValue accepts real framework/outcome shapes, rejects the fo
   assert.equal(isValidOpenAttrValue(""), false);
 });
 
-test("faroItemToRecord: the route's service identity always wins over a client-hoisted service.*/environment — spoof probe from finding A-C1", () => {
+test("faroItemToRecord: the route's service identity always wins over a client-hoisted service.*/environment", () => {
   // The exact probe from the finding: a single item whose own `context`
   // tries to override `service.name` and `deployment.environment.name`.
   const spoofed = faroLogItem({
@@ -139,7 +139,7 @@ test("faroItemToRecord: the route's service identity always wins over a client-h
   assert.equal(record.resourceAttributes["hot.surface"], "o11y");
 });
 
-test("beaconToRecord: an over-length hot.framework (fw) is dropped, not stored verbatim — same A-C1 probe, lite path", () => {
+test("beaconToRecord: an over-length hot.framework (fw) is dropped, not stored verbatim — lite path", () => {
   const record = beaconToRecord(
     {
       v: 1,

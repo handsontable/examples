@@ -241,7 +241,7 @@ jobs:
         run: |
           VITE_TELEMETRY_LOCAL=1 pnpm --filter @handsontable/demo-authoring build
           status=0
-          pnpm e2e e2e/telemetry-faro.spec.ts -g "R9C" --workers=1 --reporter=list,json || status=$?
+          pnpm e2e e2e/telemetry-faro.spec.ts -g "typed key by key reaches /telemetry/collect" --workers=1 --reporter=list,json || status=$?
           pnpm --filter @handsontable/demo-authoring build
           [ "$status" -eq 0 ] || exit $status
           node scripts/ci/assert-e2e-ran.mjs telemetry-compile-error-report.json

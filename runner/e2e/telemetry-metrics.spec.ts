@@ -91,7 +91,7 @@ async function insertAtTop(page: Page, text: string) {
   })()`);
 }
 
-test.describe("Browser metrics catalogue, live (T07)", () => {
+test.describe("Browser metrics catalogue, live", () => {
   test.skip(
     process.env.E2E_LIVE !== "1" || process.env.E2E_TELEMETRY !== "1",
     "set E2E_LIVE=1 and E2E_TELEMETRY=1, and build with VITE_TELEMETRY_LOCAL=1 first",

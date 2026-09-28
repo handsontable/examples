@@ -116,7 +116,7 @@ async function pointsFor(metric: string, sinceMs: number): Promise<Record<string
   );
 }
 
-test.describe("o11y local end-to-end (T11)", () => {
+test.describe("o11y local end-to-end", () => {
   test.skip(process.env.E2E_O11Y_LOCAL !== "1", "set E2E_O11Y_LOCAL=1 — needs Docker + two wrangler dev processes, see the file header");
   // One shared authoring+API pair for the whole file, the same reasoning
   // telemetry-metrics.spec.ts gives (a second Playwright worker would race

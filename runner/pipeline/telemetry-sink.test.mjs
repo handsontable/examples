@@ -25,7 +25,7 @@ test("clickhouseTimestamp is a raw epoch-millisecond integer, not a formatted st
   assert.equal(typeof clickhouseTimestamp(date), "number");
 });
 
-test("clickhouseSink POSTs one JSONEachRow line with T01's exact column names", async () => {
+test("clickhouseSink POSTs one JSONEachRow line with the runner_events table's exact column names", async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });

@@ -166,7 +166,7 @@ test("inbox-state: newFingerprintsAfterKey truncates at the scan bound and repor
   assert.equal(result.entries.at(-1).firstSeenMs, 1000 + 1999);
 });
 
-test("inbox-state: newFingerprintsAfterKey (NB1 probe, keyset resume) advances past 2,100 entries sharing ONE first-seen ms, across two calls chained by key", async () => {
+test("inbox-state: newFingerprintsAfterKey (keyset resume) advances past 2,100 entries sharing ONE first-seen ms, across two calls chained by key", async () => {
   // Every entry here shares one ms, and there are more of them than
   // NEW_FINGERPRINT_SCAN_LIMIT (2000). A keyset cursor must still be able
   // to move past this ms; a later, real fingerprint at a later ms must
@@ -310,7 +310,7 @@ test("backlogAgeRule: fires only past the 2h threshold", async () => {
   assert.equal(over.firing, true);
 });
 
-test("rejectedKeyRule: fires on a RECENT rejection, resolves once none are recent (B-C1/A-I1 remainder)", async () => {
+test("rejectedKeyRule: fires on a RECENT rejection, resolves once none are recent", async () => {
   const writerNone = { rejectedKeyCount: async () => 0, recentRejectionCount: async () => 0 };
   assert.equal((await rejectedKeyRule(writerNone)).firing, false);
 
@@ -379,7 +379,7 @@ test("newFingerprintRule: fires when a new fingerprint appears since the cursor,
   assert.equal(second.firing, false);
 });
 
-test("newFingerprintRule: never advances the cursor past an entry inside the grace window, so a late-committed fingerprint is still read on the next tick, and the in-window one is announced only once (F35)", async () => {
+test("newFingerprintRule: never advances the cursor past an entry inside the grace window, so a late-committed fingerprint is still read on the next tick, and the in-window one is announced only once", async () => {
   // The race the grace lag exists for: fp-late (firstSeen inside the last
   // CURSOR_GRACE_MS of tick N) is read and announced on tick N. fp-slow was
   // stamped BEFORE fp-late but its InboxWriter write committed only after
@@ -475,7 +475,7 @@ test("newFingerprintRule: a truncated newFingerprintsAfterKey read advances the 
   assert.equal(cursor, entries.at(-1).key, "the cursor must stop exactly at the last entry this call actually read");
 });
 
-test("newFingerprintRule (real InboxWriter + registry, NB1 probe): the keyset cursor progresses across ticks even when 2,100 fingerprints share ONE first-seen ms, and never stalls", async () => {
+test("newFingerprintRule (real InboxWriter + registry): the keyset cursor progresses across ticks even when 2,100 fingerprints share ONE first-seen ms, and never stalls", async () => {
   // Drives the real InboxWriter DO (not a stub), through the real
   // `writer.ingest` path, so it also exercises the real
   // `newFingerprintsAfterKey` RPC wiring: 2,100 fingerprints share one
@@ -542,7 +542,7 @@ test("notifyFingerprintEvent posts unconditionally and never writes alert:<rule>
   assert.match(posted[1], /fp-b/);
 });
 
-test("notifyFingerprintEvent (N7 rate cap): posts normally up to the per-window cap, then exactly ONE summary line with a count, then resumes normally in the next window", async () => {
+test("notifyFingerprintEvent (rate cap): posts normally up to the per-window cap, then exactly ONE summary line with a count, then resumes normally in the next window", async () => {
   // Nothing caps how many times this notify-only path could post — a
   // flood of forged-but-shape-valid fingerprints could post a Slack line
   // every cron tick forever, spamming the channel and masking a genuine
@@ -596,12 +596,12 @@ test("notifyFingerprintEvent (N7 rate cap): posts normally up to the per-window 
   assert.match(posted.at(-1), /fp-next-window/);
 });
 
-test("escapeSlackMrkdwn escapes &, < and > in Slack's own order (fix round A-C2)", () => {
+test("escapeSlackMrkdwn escapes &, < and > in Slack's own order", () => {
   assert.equal(escapeSlackMrkdwn("<!channel> A & B <https://evil.example|link>"), "&lt;!channel&gt; A &amp; B &lt;https://evil.example|link&gt;");
   assert.equal(escapeSlackMrkdwn("plain text"), "plain text");
 });
 
-test("evaluateAndNotify escapes an untrusted rule detail before posting to Slack (fix round A-C2)", async () => {
+test("evaluateAndNotify escapes an untrusted rule detail before posting to Slack", async () => {
   const posted = [];
   const postSlack = async (text) => posted.push(text);
   const inboxWriter = {
@@ -1248,7 +1248,7 @@ test("runAlerts: new-fingerprint self-resolves via its own cursor — one Slack 
 // stays put and the next tick reads the fingerprint again. This replays
 // that timeline through the real runAlerts and InboxWriter, with Date.now
 // pinned per tick because runAlerts reads it internally.
-test("runAlerts: a fingerprint announced on a tick where o11y-spend-cap throws is not announced again on the next tick (F35)", async () => {
+test("runAlerts: a fingerprint announced on a tick where o11y-spend-cap throws is not announced again on the next tick", async () => {
   let spendThrows = true;
   const { env } = makeEnv(InboxWriter, {
     env: {

@@ -242,7 +242,7 @@ test("deploy gate: a token for the wrong repository is a hard 401, never the sec
   assert.equal(result.reason, "oidc");
 });
 
-test("deploy gate: a token for the right repository but wrong workflow is a hard 401, never the secret fallback (I1)", async (t) => {
+test("deploy gate: a token for the right repository but wrong workflow is a hard 401, never the secret fallback", async (t) => {
   const { token, jwks } = await signGithubToken({ workflow_ref: "handsontable/examples/.github/workflows/some-other.yml@refs/heads/master" });
   const realFetch = globalThis.fetch;
   t.after(() => {

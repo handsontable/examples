@@ -133,7 +133,7 @@ function callReportDemoEvent(page: Page, message: string): Promise<void> {
   }, message);
 }
 
-test.describe("Faro in the authoring app (T06)", () => {
+test.describe("Faro in the authoring app", () => {
   test.skip(
     process.env.E2E_TELEMETRY !== "1",
     "set E2E_TELEMETRY=1 and build with VITE_TELEMETRY_LOCAL=1 first",
@@ -194,7 +194,7 @@ test.describe("Faro in the authoring app (T06)", () => {
   // benign ResizeObserver-loop warning (or any of the other
   // `isUnhandledNoise`/`isForeignUnhandled` shapes) reaches Loki and mints
   // a fresh §F.3 `fp:` first-seen entry, paging on noise Sentry filters.
-  test("D-I2: an unhandled ResizeObserver-loop warning does NOT reach Faro (shared noise gate)", async ({ page }) => {
+  test("an unhandled ResizeObserver-loop warning does NOT reach Faro (shared noise gate)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -221,7 +221,7 @@ test.describe("Faro in the authoring app (T06)", () => {
     assert(!noiseHit, "a ResizeObserver-loop warning must never reach Faro/telemetry/collect");
   });
 
-  test("D-I2: the Outlook/Office safelink scanner's injected rejection does NOT reach Faro (shared noise gate)", async ({ page }) => {
+  test("the Outlook/Office safelink scanner's injected rejection does NOT reach Faro (shared noise gate)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -259,7 +259,7 @@ test.describe("Faro in the authoring app (T06)", () => {
   // guarantee as `__t06ReportDemoEvent`) calls the real facade methods
   // directly so this proves the facade's own behaviour without driving the
   // real save/download UI.
-  test("Z-D-H1: two identical example.saved events both reach Faro (facade skipDedupe)", async ({ page }) => {
+  test("two identical example.saved events both reach Faro (facade skipDedupe)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -282,7 +282,7 @@ test.describe("Faro in the authoring app (T06)", () => {
     await expect.poll(matching).toHaveLength(2);
   });
 
-  test("Z-D-H1: two identical bucket.resolve_ms measurements both reach Faro (facade skipDedupe)", async ({ page }) => {
+  test("two identical bucket.resolve_ms measurements both reach Faro (facade skipDedupe)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -335,7 +335,7 @@ test.describe("Faro in the authoring app (T06)", () => {
   // reads as "foreign" and drops the whole event. This only proves the
   // event is kept; it deliberately does not assert anything about the
   // IP/email text surviving or being redacted (a separate concern).
-  test("R3 F17a: an uncaught error whose message quotes a foreign URL is kept, not dropped as foreign", async ({ page }) => {
+  test("an uncaught error whose message quotes a foreign URL is kept, not dropped as foreign", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -498,7 +498,7 @@ test.describe("Faro in the authoring app (T06)", () => {
   // today's behaviour. The mirror describe block below rebuilds with
   // VITE_SENTRY_SCOPE=uncaught and proves the opposite for the latter two.
 
-  test("I3: an uncaught error reaches Sentry (transport spy)", async ({ page }) => {
+  test("an uncaught error reaches Sentry (transport spy)", async ({ page }) => {
     await stubShell(page);
     await page.goto("/");
     await page.evaluate(() => {
@@ -512,7 +512,7 @@ test.describe("Faro in the authoring app (T06)", () => {
     assert(hit, "no Sentry event matched the uncaught probe message");
   });
 
-  test("I3: reportError reaches Sentry under full scope", async ({ page }) => {
+  test("reportError reaches Sentry under full scope", async ({ page }) => {
     await page.route("**/api/versions", (route) => route.fulfill({ status: 500, body: "boom" }));
     await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
     await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
@@ -524,7 +524,7 @@ test.describe("Faro in the authoring app (T06)", () => {
     assert(hit, "no Sentry event tagged context=versions-fetch — reportError did not reach Sentry under full scope");
   });
 
-  test("I3: a demo-runtime event reaches Sentry under full scope, re-homed to the demo-runtime environment", async ({ page }) => {
+  test("a demo-runtime event reaches Sentry under full scope, re-homed to the demo-runtime environment", async ({ page }) => {
     await stubShell(page);
     await page.goto("/");
     await callReportDemoEvent(page, "T06 e2e I3 demo-runtime probe");
@@ -550,7 +550,7 @@ test.describe("Faro in the authoring app (T06)", () => {
   // `reportDemoEvent` (the real, guarded entry point `App.tsx`'s
   // `onPreviewMessage` uses) so this proves the fix without a real
   // (E2E_LIVE-gated) preview mount.
-  test("R3 F10: reportDemoEvent (guarded) reaches Faro under the local leg, and never Sentry", async ({ page }) => {
+  test("reportDemoEvent (guarded) reaches Faro under the local leg, and never Sentry", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -607,7 +607,7 @@ test.describe("Faro in the authoring app (T06)", () => {
   // half-typed prefix. Drives the same two entry points `App.tsx` uses — the
   // guarded `reportDemoEvent` and the edit signal `noteDemoEdit` — through
   // their local-only hooks, so no real (E2E_LIVE-gated) preview is needed.
-  test("F26: a keystroke ladder emits one preview.runtime_error + one Faro record; a first-load error counts at once; Sentry is not collapsed", async ({ page }) => {
+  test("a keystroke ladder emits one preview.runtime_error + one Faro record; a first-load error counts at once; Sentry is not collapsed", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -690,7 +690,7 @@ test.describe("Faro in the authoring app (T06)", () => {
   // `App.tsx` actually sends it: a real keystroke in the code editor must open
   // a burst, so an error relayed right after it is held back until the editor
   // goes quiet, instead of counting at once like a first-load error.
-  test("F26: a code-editor keystroke opens the edit burst (App.tsx wiring)", async ({ page }) => {
+  test("a code-editor keystroke opens the edit burst (App.tsx wiring)", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -730,7 +730,7 @@ test.describe("Faro in the authoring app (T06)", () => {
   // prefix rungs (`c`..`cons`) run and relay ReferenceErrors, which the
   // compile failure must keep out of `preview.runtime_error` (the
   // `replacesRun` rule).
-  test("R9C: a syntax error typed key by key reaches /telemetry/collect as one sandpack.compile_error, not a runtime error", async ({ page }) => {
+  test("a syntax error typed key by key reaches /telemetry/collect as one sandpack.compile_error, not a runtime error", async ({ page }) => {
     test.skip(process.env.E2E_LIVE !== "1", "set E2E_LIVE=1 (needs the hosted Sandpack bundler) to run the typed compile-error check");
     await stubShell(page);
     const captured = captureTelemetry(page);
@@ -786,7 +786,7 @@ test.describe("Faro in the authoring app (T06)", () => {
 // still reaches Sentry (ADR §E.1, regardless of scope), but reportError and
 // demo-runtime do not (ADR §E.3: moved diagnostic reports go to the facade
 // only once the scope is uncaught).
-test.describe("Sentry scope switch = uncaught (fix round I1/I3)", () => {
+test.describe("Sentry scope switch = uncaught", () => {
   test.skip(
     process.env.E2E_TELEMETRY !== "1",
     "set E2E_TELEMETRY=1 and build with VITE_TELEMETRY_LOCAL=1 first",
@@ -841,7 +841,7 @@ test.describe("Sentry scope switch = uncaught (fix round I1/I3)", () => {
     return bodies;
   }
 
-  test("I3: an uncaught error still reaches Sentry under uncaught scope (ADR §E.1)", async ({ page }) => {
+  test("an uncaught error still reaches Sentry under uncaught scope (ADR §E.1)", async ({ page }) => {
     await stubShell(page);
     await page.goto("/");
     await page.evaluate(() => {
@@ -855,7 +855,7 @@ test.describe("Sentry scope switch = uncaught (fix round I1/I3)", () => {
     assert(hit, "an uncaught error must reach Sentry under EVERY scope, including uncaught");
   });
 
-  test("I3: reportError does NOT reach Sentry under uncaught scope, but still reaches the facade", async ({ page }) => {
+  test("reportError does NOT reach Sentry under uncaught scope, but still reaches the facade", async ({ page }) => {
     await page.route("**/api/versions", (route) => route.fulfill({ status: 500, body: "boom" }));
     await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
     await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
@@ -875,7 +875,7 @@ test.describe("Sentry scope switch = uncaught (fix round I1/I3)", () => {
     assert(!sentryHit, "reportError must NOT reach Sentry under uncaught scope (ADR §E.3)");
   });
 
-  test("I3: a demo-runtime event does NOT reach Sentry under uncaught scope, but still reaches the facade", async ({ page }) => {
+  test("a demo-runtime event does NOT reach Sentry under uncaught scope, but still reaches the facade", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");

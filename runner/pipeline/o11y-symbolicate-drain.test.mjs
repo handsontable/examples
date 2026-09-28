@@ -148,7 +148,7 @@ function runChild(workdir) {
   });
 }
 
-test("F30: a real minified bundle's exception is symbolicated by the real drain under workerd's no-code-generation policy", async () => {
+test("a real minified bundle's exception is symbolicated by the real drain under workerd's no-code-generation policy", async () => {
   const dir = await buildBundle();
   try {
     const code = readFileSync(path.join(dir, "dist", "app.js"), "utf8");
@@ -247,7 +247,7 @@ async function collectSkips(records, getMap) {
 
 const ONE_MAPPING_MAP = JSON.stringify({ version: 3, sources: ["../../src/a.ts"], names: [], mappings: "AAAA" });
 
-test("F30 skip signal: an absent map is reported once per key, with the count of frames it left unresolved", async () => {
+test("skip signal: an absent map is reported once per key, with the count of frames it left unresolved", async () => {
   const records = [exceptionRecord([frame("index-a.js", 1, 1), frame("index-a.js", 1, 9)]), exceptionRecord([frame("index-a.js", 1, 3)])];
   const { out, calls } = await collectSkips(records, async () => null);
   assert.deepEqual(out, records, "reporting must never change the output");
@@ -256,7 +256,7 @@ test("F30 skip signal: an absent map is reported once per key, with the count of
   ]);
 });
 
-test("F30 skip signal: a map read that throws is `fetch_error`, not `no_map` (B-M6 transient vs absent)", async () => {
+test("skip signal: a map read that throws is `fetch_error`, not `no_map` (transient vs absent)", async () => {
   const { calls } = await collectSkips([exceptionRecord([frame("index-a.js")])], async () => {
     throw new Error("R2 get timed out");
   });
@@ -266,13 +266,13 @@ test("F30 skip signal: a map read that throws is `fetch_error`, not `no_map` (B-
   ]);
 });
 
-test("F30 skip signal: an unparseable map is `parse_error` with the parser's message", async () => {
+test("skip signal: an unparseable map is `parse_error` with the parser's message", async () => {
   const { calls } = await collectSkips([exceptionRecord([frame("index-a.js")])], async () => "<!doctype html>");
   assert.equal(calls[0].skips[0].reason, "parse_error");
   assert.match(calls[0].skips[0].detail, /^SyntaxError: /);
 });
 
-test("F30 skip signal: a lookup that throws inside the map library is `lookup_error` (the F30 failure shape)", async () => {
+test("skip signal: a lookup that throws inside the map library is `lookup_error` (the failure shape)", async () => {
   // A decoded-array `mappings` with a null segment: accepted by the
   // constructor, throws on the first lookup, like source-map-js's EvalError did.
   const poisoned = JSON.stringify({ version: 3, sources: ["../../src/a.ts"], names: [], mappings: [[null]] });
@@ -284,13 +284,13 @@ test("F30 skip signal: a lookup that throws inside the map library is `lookup_er
   assert.match(calls[0].skips[0].detail, /^TypeError: /);
 });
 
-test("F30 skip signal: a map that loads but maps none of the frames is `no_frames_matched`", async () => {
+test("skip signal: a map that loads but maps none of the frames is `no_frames_matched`", async () => {
   // The map's only mapping is line 1; the frame points at line 50.
   const { calls } = await collectSkips([exceptionRecord([frame("index-a.js", 50, 1)])], async () => ONE_MAPPING_MAP);
   assert.deepEqual(calls[0].skips, [{ key: "sourcemaps/cafe1234/assets/index-a.js.map", reason: "no_frames_matched", frames: 1 }]);
 });
 
-test("F30 skip signal: nothing is reported when every attempted frame resolved, and Babel/page frames are never attempted", async () => {
+test("skip signal: nothing is reported when every attempted frame resolved, and Babel/page frames are never attempted", async () => {
   const record = exceptionRecord([
     frame("index-a.js", 1, 1),
     frame("babel-abc123.js", 1, 1),
@@ -306,7 +306,7 @@ test("F30 skip signal: nothing is reported when every attempted frame resolved, 
   assert.deepEqual(calls, []);
 });
 
-test("F30 skip signal: bounded to MAX_SKIP_REPORTS keys per call, the rest counted", async () => {
+test("skip signal: bounded to MAX_SKIP_REPORTS keys per call, the rest counted", async () => {
   const lines = Array.from({ length: MAX_SKIP_REPORTS + 5 }, (_, i) => frame(`chunk-${i}.js`));
   const { calls } = await collectSkips([exceptionRecord(lines)], async () => null);
   assert.equal(calls.length, 1, "one report per call");
@@ -315,7 +315,7 @@ test("F30 skip signal: bounded to MAX_SKIP_REPORTS keys per call, the rest count
   assert.equal(new Set(calls[0].skips.map((s) => s.key)).size, MAX_SKIP_REPORTS, "at most one entry per key");
 });
 
-test("F30 skip signal: a reporter that throws does not cost the resolved output", async () => {
+test("skip signal: a reporter that throws does not cost the resolved output", async () => {
   const record = exceptionRecord([frame("index-a.js", 1, 1), frame("index-b.js", 1, 1)]);
   const out = await symbolicateResourceLogs([record], {
     getMap: async (key) => (key.endsWith("index-a.js.map") ? ONE_MAPPING_MAP : null),
@@ -326,7 +326,7 @@ test("F30 skip signal: a reporter that throws does not cost the resolved output"
   assert.match(out[0].scopeLogs[0].logRecords[0].body.stringValue, /\(src\/a\.ts:1:1\)/);
 });
 
-test("F30 skip signal: the default reporter writes one `o11y.symbolicate.skip` JSON line per key", async (t) => {
+test("skip signal: the default reporter writes one `o11y.symbolicate.skip` JSON line per key", async (t) => {
   const lines = [];
   t.mock.method(console, "warn", (line) => lines.push(line));
   await symbolicateResourceLogs([exceptionRecord([frame("index-a.js")])], { getMap: async () => null });
@@ -337,7 +337,7 @@ test("F30 skip signal: the default reporter writes one `o11y.symbolicate.skip` J
 
 // ---- source-path normalisation -----------------------------------------------
 
-test("F30 normaliseSourcePath: a CI build's map-relative sources read as src/… and packages/…", () => {
+test("normaliseSourcePath: a CI build's map-relative sources read as src/… and packages/…", () => {
   assert.equal(normaliseSourcePath("../../src/sentry.ts"), "src/sentry.ts");
   assert.equal(normaliseSourcePath("../../../../packages/runtime/dist/monitor.js"), "packages/runtime/dist/monitor.js");
   assert.equal(
@@ -347,7 +347,7 @@ test("F30 normaliseSourcePath: a CI build's map-relative sources read as src/…
   assert.equal(normaliseSourcePath("./src/App.tsx"), "src/App.tsx");
 });
 
-test("F30 normaliseSourcePath: a build outside the checkout never leaks the home directory", () => {
+test("normaliseSourcePath: a build outside the checkout never leaks the home directory", () => {
   assert.equal(
     normaliseSourcePath("../../../../../../../../Users/someone/Code/examples/runner/packages/runtime/dist/monitor.js"),
     "packages/runtime/dist/monitor.js",
@@ -364,7 +364,7 @@ test("F30 normaliseSourcePath: a build outside the checkout never leaks the home
   assert.equal(normaliseSourcePath("file:///home/runner/work/examples/examples/runner/packages/x.ts"), "packages/x.ts");
 });
 
-test("F30 normaliseSourcePath: URL sources and app directories named like a workspace root are left alone", () => {
+test("normaliseSourcePath: URL sources and app directories named like a workspace root are left alone", () => {
   assert.equal(normaliseSourcePath("https://cdn.jsdelivr.net/npm/handsontable/dist/x.js"), "https://cdn.jsdelivr.net/npm/handsontable/dist/x.js");
   assert.equal(normaliseSourcePath("../../src/packages/editor.ts"), "src/packages/editor.ts");
 });
