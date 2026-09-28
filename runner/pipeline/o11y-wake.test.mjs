@@ -468,6 +468,72 @@ test("drainStep commits a zero-bytes-pushed key directly, never marking it provi
   assert.equal(inboxWriterStub.calls.rejectKey.length, 0);
 });
 
+async function recentObject(bodyText) {
+  const record = {
+    resource: { attributes: [] },
+    scopeLogs: [{ logRecords: [{ timeUnixNano: String(BigInt(Date.now()) * 1_000_000n), body: { stringValue: bodyText } }] }],
+  };
+  const stream = new Blob([JSON.stringify(record) + "\n"]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/** An inbox bucket whose `get` throws for `failingKeys`, like an R2 read past
+ *  the invocation's subrequest limit. */
+function throwingInbox(r2Objects, failingKeys) {
+  return {
+    async get(key) {
+      if (failingKeys.includes(key)) throw new Error("Too many subrequests.");
+      const bytes = r2Objects.get(key);
+      return bytes ? { async arrayBuffer() { return bytes.buffer; } } : null;
+    },
+  };
+}
+
+test("drainStep: an inbox read that throws on key 2 of 3 leaves only that key written; keys 1 and 3 go provisional and the drain continues", async () => {
+  const keys = [0, 1, 2].map((i) => `inbox/worker/2026-01-01/00/00000000000${i}.ndjson.gz`);
+  const r2Objects = new Map([
+    [keys[0], await recentObject("first")],
+    [keys[2], await recentObject("third")],
+  ]);
+  const { box, inboxWriterStub, ae, scheduled } = makeBox({
+    inboxWriter: { writtenKeys: keys },
+    env: { O11Y_INBOX: throwingInbox(r2Objects, [keys[1]]) },
+  });
+  await box.wake("backlog");
+  installContainerFetchRouter({ otlp: () => new Response(null, { status: 204 }) });
+  scheduled.length = 0;
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.deepEqual(inboxWriterStub.calls.markKeysProvisional.map((c) => c.keys), [[keys[0], keys[2]]]);
+  assert.equal(inboxWriterStub.calls.rejectKey.length, 0, "an unreadable object is not a rejection");
+  assert.deepEqual(scheduled.map((s) => s.callback), ["drainStep"], "the drain goes on with the next step");
+  assert.equal(outcomeOf(ae.points.find((p) => p.indexes?.[0] === "o11y.drain")), "error");
+});
+
+test("drainStep: a batch in which every inbox read throws ends the drain instead of repeating itself every step", async () => {
+  const keys = [0, 1].map((i) => `inbox/worker/2026-01-01/00/00000000000${i}.ndjson.gz`);
+  const { box, scheduled } = makeBox({
+    inboxWriter: { writtenKeys: keys },
+    env: { O11Y_INBOX: throwingInbox(new Map(), keys) },
+  });
+  await box.wake("backlog");
+  installContainerFetchRouter();
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopped", lastChange: Date.now() };
+  };
+  scheduled.length = 0;
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 0);
+  assert.ok(stopped, "a quiet backlog wake stops once its drain has nothing it can make progress on");
+});
+
 // `drainStep` needs a try/finally around its body — a throw from
 // `InboxWriter.nextWrittenKeys` (or any other RPC, or `fetchObject`, or
 // symbolication) must not propagate out of `drainStep` and silently end

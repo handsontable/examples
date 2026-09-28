@@ -563,6 +563,12 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   still triggers an automatic replay instead of being silently unrecoverable except by
   manual reopen. Only a key with ZERO accepted chunks stays `rejected`. See
   `drain.ts#drainKey`'s own doc comment.
+- **Drain refusals.** A `429` whose body names Loki's stream limit (`Maximum active
+  stream limit exceeded`) is a permanent refusal of that chunk, exactly like a 400, and
+  is never retried: the box's single ingester starts empty every wake, so it recurs on
+  every wake. Any other `429`, and a `5xx`, stays transient and stops the batch. An
+  inbox read that throws leaves only that key `written`; the rest of the batch still
+  pushes and commits, and a batch in which every read threw ends the wake's drain.
 
 ## 9. Lite beacon payload
 

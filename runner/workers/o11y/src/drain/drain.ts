@@ -96,10 +96,13 @@ export interface DrainDeps {
 export interface KeyOutcome {
   key: string;
   tenant: Tenant;
-  outcome: "provisional" | "rejected" | "error";
+  /** `deferred`: the inbox object could not be read; the key stays
+   *  `written` for a later step and, unlike `error`, the batch continues. */
+  outcome: "provisional" | "rejected" | "error" | "deferred";
   /** Set on `rejected` (why), and also on `provisional` when one chunk
-   *  2xx'd but another 400'd — the caller should still surface this via
-   *  `recordPartialReject`. `undefined` on a fully clean `provisional`. */
+   *  2xx'd but another was permanently refused (400, stream limit) — the
+   *  caller should still surface this via `recordPartialReject`.
+   *  `undefined` on a fully clean `provisional`. */
   reason?: string;
   bytesPushed: number;
   /** Records dropped by {@link dropOldRecords} before this key's push.
@@ -110,10 +113,20 @@ export interface KeyOutcome {
 
 export interface DrainBatchResult {
   outcomes: KeyOutcome[];
-  /** `true` when a `429`/`5xx` exhausted its retries — the batch stops
+  /** `true` when a rate-limit `429`/`5xx` exhausted its retries — the batch stops
    *  immediately, leaving the rest `written` for a later wake rather than
    *  hammering a server that's currently failing every request. */
   stoppedEarly: boolean;
+}
+
+/** Loki's per-tenant active-stream limit (5000 by default): the box's single
+ *  ingester starts empty every wake, so a key over it 429s on every wake, and a
+ *  retry can answer 204 with the excess streams dropped. Never transient. */
+const STREAM_LIMIT_RE = /stream limit/i;
+
+/** A push Loki refuses for good: never retried, recorded as a rejected chunk. */
+function isPermanentRefusal(result: LokiPushResult): boolean {
+  return result.status === 400 || (result.status === 429 && STREAM_LIMIT_RE.test(result.message ?? ""));
 }
 
 const MAX_RETRIES = 3;
@@ -175,11 +188,11 @@ async function pushChunkWithRetry(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     result = await deps.pushToLoki(tenant, gz);
     if (result.status >= 200 && result.status < 300) return { result, bytesPushed: gz.byteLength };
-    if (result.status === 400) return { result, bytesPushed: 0 }; // never retried — a malformed/too-old push
+    if (isPermanentRefusal(result)) return { result, bytesPushed: 0 };
     const delay = RETRY_DELAYS_MS[attempt];
     if (attempt < MAX_RETRIES && delay !== undefined) await sleep(delay);
   }
-  return { result, bytesPushed: 0 }; // 429/5xx, retries exhausted
+  return { result, bytesPushed: 0 }; // rate-limit 429/5xx, retries exhausted
 }
 
 /** Drains one key: fetch, decode, symbolicate exceptions, dedupe against
@@ -193,7 +206,13 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
   if (!parsed) return { key, tenant: "worker", outcome: "rejected", reason: "unparseable_key", bytesPushed: 0, droppedOld: 0 };
   const { tenant } = parsed;
 
-  const raw = await deps.fetchObject(key);
+  let raw: Uint8Array | null;
+  try {
+    raw = await deps.fetchObject(key);
+  } catch (err) {
+    const reason = `fetch_error: ${err instanceof Error ? err.message : String(err)}`;
+    return { key, tenant, outcome: "deferred", reason, bytesPushed: 0, droppedOld: 0 };
+  }
   if (!raw) return { key, tenant, outcome: "rejected", reason: "object_missing", bytesPushed: 0, droppedOld: 0 };
 
   let records: OtlpResourceLogs[];
@@ -235,22 +254,22 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
     fresh.push(record);
   }
 
-  // A 400 permanently rejects that one chunk (never retried), but every
-  // chunk is still attempted — stopping at the first 400 would silently
-  // drop later chunks of a >1 MB object that would have pushed cleanly.
-  // A key with at least one 2xx chunk still ends `provisional`: its
-  // accepted content follows the normal durability path, and a replay
-  // deterministically re-derives the same classification (the bad chunk
-  // 400s again, harmless; good chunks are redundantly re-confirmed via
-  // Loki's own dedup). Only a key with ZERO accepted chunks ends
-  // `rejected`. `reason` carries the 400 detail for `recordPartialReject`.
+  // A 400 or a stream-limit 429 permanently rejects that one chunk (never
+  // retried), but every chunk is still attempted — stopping at the first
+  // refusal would silently drop later chunks of a >1 MB object that would
+  // have pushed cleanly. A key with at least one 2xx chunk still ends
+  // `provisional`: its accepted content follows the normal durability path,
+  // and a replay deterministically re-derives the same classification (the
+  // bad chunk is refused again, harmless; good chunks are redundantly
+  // re-confirmed via Loki's own dedup). Only a key with ZERO accepted chunks
+  // ends `rejected`. `reason` carries Loki's detail for `recordPartialReject`.
   let bytesPushed = 0;
   let rejectedReason: string | undefined;
   for (const chunk of chunkBySize(fresh)) {
     const { result, bytesPushed: chunkBytes } = await pushChunkWithRetry(tenant, chunk, deps);
     bytesPushed += chunkBytes;
-    if (result.status === 400) {
-      rejectedReason ??= result.message ?? "loki_400";
+    if (isPermanentRefusal(result)) {
+      rejectedReason ??= result.message ?? `loki_${result.status}`;
       continue; // keep pushing the REST of this key's chunks — don't lose them
     }
     if (result.status < 200 || result.status >= 300) {
@@ -275,7 +294,8 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
 
 /** Drains `keys` in order, stopping immediately on the first `error`
  *  outcome (leaves it and everything after it `written`, per
- *  {@link DrainBatchResult.stoppedEarly}'s own doc comment). */
+ *  {@link DrainBatchResult.stoppedEarly}'s own doc comment). A `deferred`
+ *  key does not stop the batch. */
 export async function drainBatch(keys: readonly string[], seenHashes: Set<string>, deps: DrainDeps): Promise<DrainBatchResult> {
   const outcomes: KeyOutcome[] = [];
   for (const key of keys) {

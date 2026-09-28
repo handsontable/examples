@@ -704,6 +704,11 @@ export class GrafanaBox extends Container<Env> {
     // be counted, never silent) — `value` is otherwise unused by
     // `o11y.drain`.
     const droppedOld = result.outcomes.reduce((sum, o) => sum + o.droppedOld, 0);
+    // Unreadable inbox objects stay `written`; the rest of the batch still commits.
+    const deferred = result.outcomes.filter((o) => o.outcome === "deferred");
+    for (const d of deferred) {
+      console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, key: d.key, message: d.reason }));
+    }
 
     if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
     if (zeroByteKeys.length > 0) await writer.commitKeys(zeroByteKeys);
@@ -714,7 +719,7 @@ export class GrafanaBox extends Container<Env> {
       this.env,
       this.ctx,
       "o11y.drain",
-      { count: result.outcomes.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed, value: droppedOld },
+      { count: result.outcomes.length - deferred.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed, value: droppedOld },
       {
         // Already a contract-allowed `reason` value
         // (`METRICS["o11y.drain"].values.reason`) — used instead of the
@@ -729,11 +734,18 @@ export class GrafanaBox extends Container<Env> {
         // for a drain that permanently lost real data.
         // `recordPartialReject` above already logs the loss; this outcome
         // must not hide it too.
-        outcome: result.stoppedEarly ? "error" : rejectedKeys.length > 0 || partiallyRejected.length > 0 ? "partial" : "ok",
+        outcome:
+          result.stoppedEarly || deferred.length > 0
+            ? "error"
+            : rejectedKeys.length > 0 || partiallyRejected.length > 0
+              ? "partial"
+              : "ok",
       },
     );
 
-    if (result.stoppedEarly) {
+    // A batch of only deferred keys would come back unchanged on every step,
+    // so it ends this wake's drain like a Loki outage does.
+    if (result.stoppedEarly || deferred.length === result.outcomes.length) {
       // Everything from here on stays `written` for the next wake to
       // retry (a possibly-recovered Loki by then) — but this wake itself
       // is done trying, so run the same post-drain stop decision.

@@ -518,3 +518,130 @@ test("drainBatch stops immediately on the first `error` outcome, leaving later k
   assert.equal(result.outcomes[1].outcome, "error");
   assert.equal(neverReachedFetched, false);
 });
+
+// ---- Loki's active-stream limit ---------------------------------------------
+
+// Loki 3.3.2's own wording for `max_global_streams_per_user` (default 5000).
+const STREAM_LIMIT_MESSAGE =
+  "Maximum active stream limit exceeded when trying to create stream {hot_outcome=\"o5001\"}, reduce the number of active streams (reduce labels or reduce label values), or contact your Loki administrator to see if the limit can be increased, user: 'browser'";
+
+async function pushedText(gz) {
+  const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Response(stream).text();
+}
+
+test("a stream-limit 429 rejects that key without a retry, and the batch goes on to commit the keys after it", async () => {
+  const overKey = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
+  const laterKey = "inbox/browser/2026-01-01/00/000000000001.ndjson.gz";
+  const workerKey = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+  const objects = {
+    [overKey]: await objectBytes([record("too-many-streams")]),
+    [laterKey]: await objectBytes([record("later")]),
+    [workerKey]: await objectBytes([record("worker-tenant")]),
+  };
+  const pushes = [];
+  const deps = {
+    fetchObject: async (k) => objects[k] ?? null,
+    pushToLoki: async (_tenant, gz) => {
+      const text = await pushedText(gz);
+      pushes.push(text);
+      return text.includes("too-many-streams") ? { status: 429, message: STREAM_LIMIT_MESSAGE } : { status: 204 };
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const result = await drainBatch([overKey, laterKey, workerKey], new Set(), deps);
+
+  assert.equal(result.stoppedEarly, false, "a stream-limit refusal must not stop the drain");
+  assert.deepEqual(
+    result.outcomes.map((o) => o.outcome),
+    ["rejected", "provisional", "provisional"],
+  );
+  assert.equal(result.outcomes[0].reason, STREAM_LIMIT_MESSAGE, "the rejection carries Loki's own message for the rejectedEvent");
+  assert.equal(pushes.filter((p) => p.includes("too-many-streams")).length, 1, "a stream-limit 429 is never retried");
+  assert.ok(pushes.some((p) => p.includes("later")) && pushes.some((p) => p.includes("worker-tenant")));
+});
+
+test("a stream-limit 429 on one chunk is a partial reject, never a clean provisional", async () => {
+  const key = "inbox/browser/2026-01-01/00/000000000000.ndjson.gz";
+  const bigBody = "x".repeat(700_000);
+  const bytes = await objectBytes([record(bigBody + "-first"), record(bigBody + "-second")]);
+  let secondAttempts = 0;
+  const deps = {
+    fetchObject: async () => bytes,
+    pushToLoki: async (_tenant, gz) => {
+      if (!(await pushedText(gz)).includes("-second")) return { status: 204 };
+      secondAttempts++;
+      // A retry near the limit can answer 204 with the excess streams dropped.
+      return secondAttempts === 1 ? { status: 429, message: STREAM_LIMIT_MESSAGE } : { status: 204 };
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const outcome = await drainKey(key, new Set(), deps);
+
+  assert.equal(secondAttempts, 1, "the refused chunk must not be retried into a silent 204");
+  assert.equal(outcome.outcome, "provisional");
+  assert.equal(outcome.reason, STREAM_LIMIT_MESSAGE, "the refused chunk must reach recordPartialReject");
+});
+
+for (const message of ["Ingestion rate limit exceeded for user browser (limit: 4194304 bytes/sec)", "Per stream rate limit exceeded (limit: 3MB/sec) while attempting to ingest for stream '{service_name=\"demos-api\"}'", undefined]) {
+  test(`a rate-limit 429 stays transient: retried, then error and stop (${message ? message.slice(0, 24) : "no body"})`, async () => {
+    const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
+    const neverReachedKey = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
+    const bytes = await objectBytes([record("rate-limited")]);
+    let attempts = 0;
+    let neverReachedFetched = false;
+    const deps = {
+      fetchObject: async (k) => {
+        if (k === neverReachedKey) neverReachedFetched = true;
+        return bytes;
+      },
+      pushToLoki: async () => {
+        attempts++;
+        return { status: 429, message };
+      },
+      symbolicate: noopSymbolicate,
+    };
+
+    const result = await drainBatch([key, neverReachedKey], new Set(), deps);
+
+    assert.equal(attempts, 4, "one push plus three retries");
+    assert.equal(result.outcomes[0].outcome, "error");
+    assert.equal(result.stoppedEarly, true);
+    assert.equal(neverReachedFetched, false);
+  });
+}
+
+// ---- an unreadable inbox object ----------------------------------------------
+
+test("a fetchObject throw on key 2 of 3 defers only that key: keys 1 and 3 still push and come back provisional", async () => {
+  const keys = [0, 1, 2].map((i) => `inbox/worker/2026-01-01/00/00000000000${i}.ndjson.gz`);
+  const objects = { [keys[0]]: await objectBytes([record("first")]), [keys[2]]: await objectBytes([record("third")]) };
+  const pushes = [];
+  const deps = {
+    fetchObject: async (k) => {
+      if (k === keys[1]) throw new Error("Too many subrequests.");
+      return objects[k] ?? null;
+    },
+    pushToLoki: async (_tenant, gz) => {
+      pushes.push(await pushedText(gz));
+      return { status: 204 };
+    },
+    symbolicate: noopSymbolicate,
+  };
+
+  const result = await drainBatch(keys, new Set(), deps);
+
+  assert.equal(result.stoppedEarly, false);
+  assert.deepEqual(
+    result.outcomes.map((o) => [o.key, o.outcome]),
+    [
+      [keys[0], "provisional"],
+      [keys[1], "deferred"],
+      [keys[2], "provisional"],
+    ],
+  );
+  assert.match(result.outcomes[1].reason ?? "", /^fetch_error: Too many subrequests\.$/);
+  assert.ok(pushes.some((p) => p.includes("first")) && pushes.some((p) => p.includes("third")));
+});
