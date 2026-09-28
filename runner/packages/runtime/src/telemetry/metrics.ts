@@ -18,14 +18,9 @@ import {
 
 // ---- §4: Analytics Engine layout (`runner_events`) -----------------------------
 
-/**
- * Column name → Analytics Engine slot (`blobN` / `doubleN`), plus `metric` →
- * `index1`. The single source SQL builders (local ClickHouse shim and any
- * Analytics Engine SQL) read to translate a human column name to its positional
- * slot (T00-D2: the local shim's table uses these same slot names as its column
- * names, so `SELECT blob8 AS outcome` style SQL is the only translation layer,
- * never a second name mapping).
- */
+/** Column name → Analytics Engine slot (`blobN`/`doubleN`), plus `metric` →
+ *  `index1`: the local shim's table uses these same slot names as columns,
+ *  so `SELECT blob8 AS outcome` is the only translation layer. */
 export const AE_COLUMNS: Readonly<Record<string, string>> = {
   metric: "index1",
   service_name: "blob1",
@@ -57,10 +52,9 @@ export const AE_COLUMNS: Readonly<Record<string, string>> = {
   cap: "double8",
 };
 
-/** Highest blob/double slot number any column occupies — `blob20` and
- *  `double9`–`double20` are reserved and unassigned (§4), but a point is always
- *  written at this fixed width so a stored row's shape never depends on which
- *  columns a particular metric happened to fill (T00-D2). */
+/** Highest blob/double slot any column occupies — a point is always written
+ *  at this fixed width so a stored row's shape never depends on which
+ *  columns a particular metric filled. */
 const BLOB_SLOT_COUNT = 20;
 const DOUBLE_SLOT_COUNT = 20;
 
@@ -366,26 +360,18 @@ function slotOffset(slot: string): number {
 /**
  * Build one Analytics Engine data point (§4) for `metric`, from its §5-declared
  * doubles and attributes. Positional and dense: every call returns a
- * `BLOB_SLOT_COUNT`/`DOUBLE_SLOT_COUNT`-wide array, unused slots `""` / `0`, so a
- * stored row's shape never depends on which columns happened to be filled
- * (T00-D2).
+ * `BLOB_SLOT_COUNT`/`DOUBLE_SLOT_COUNT`-wide array, unused slots `""`/`0`.
  *
- * Throws — never silently drops — when `metric` is unknown, when `attrs.outcome`
- * or `attrs.reason` is set for a metric whose §5 row does not list that column,
- * or when a value is set outside the column's closed set (per-metric `values`,
- * or a repo-wide closed set like `surface`/`tier`/`ht_major`). This is a producer
- * contract, enforced on our own call sites, not a scrub of untrusted input — see
- * `scrub.ts` for that.
+ * Throws — never silently drops — when `metric` is unknown, when
+ * `attrs.outcome`/`attrs.reason` is set for a metric whose §5 row does not
+ * list that column, or when a value is outside the column's closed set.
+ * This is a producer contract on our own call sites, not a scrub of
+ * untrusted input — see `scrub.ts` for that.
  *
- * **T00-D10, load-bearing for T02**: this check is runtime-only. `HotAttrs.outcome`
- * is typed `string` (§5's per-metric enums have no type-level encoding), so
- * `tsc` accepts any string at every call site — only calling this function
- * actually validates one. T02's ingest route extracts browser metrics from a
- * Faro item's `context`/`attributes`, which is client-controlled: a crafted
- * payload with `outcome: "anything"` reaches `toAePoint` and throws. The route
- * handler must catch that (or pre-validate against `METRICS[metric].values`
- * before calling), or a single malformed browser metric turns into a 500
- * instead of an `o11y.ingest` `dropped` point.
+ * Load-bearing for the ingest route: `HotAttrs.outcome` is typed `string`
+ * (no type-level encoding), so only calling this function validates a
+ * client-supplied outcome — the route handler must catch the throw or
+ * pre-validate against `METRICS[metric].values`.
  */
 export function toAePoint(
   metric: MetricName,
@@ -415,7 +401,7 @@ export function toAePoint(
     }
   };
 
-  // blob1–3: universal resource attrs, on every record (T00-D2).
+  // blob1–3: universal resource attrs, on every record.
   for (const column of ["service_name", "service_version", "environment"] as const) {
     const value = attrBag[column];
     if (value === undefined) continue;
@@ -443,7 +429,7 @@ export function toAePoint(
   // read, so a point that never sets it reads back as zero regardless of how
   // many really happened). This holds for every metric, not only the ones
   // whose own §5 row happens to list "count" among its Doubles — the
-  // double-side analogue of blob1–3 being universal (T00-D2).
+  // double-side analogue of blob1–3 being universal.
   doubles[slotOffset(AE_COLUMNS["count"] as string)] = valueBag["count"] ?? 1;
 
   for (const column of def.doubles) {

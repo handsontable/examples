@@ -18,9 +18,9 @@ import type {
   WriteFileOptions,
 } from "./types.js";
 // Re-exported so existing `@handsontable/demo-runtime/container` importers
-// (this task's own `apps/authoring/src/telemetry/metrics.ts`) keep working —
-// the interfaces themselves now live in `types.ts` (T07 phase 2), so
-// `DemoRuntime` can name the hook methods without a circular import.
+// (`apps/authoring/src/telemetry/metrics.ts`) keep working — the interfaces
+// themselves live in `types.ts`, so `DemoRuntime` can name the hook methods
+// without a circular import.
 export type { HmrRoundtripEvent, SessionStartTimingEvent } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
@@ -333,23 +333,20 @@ const RELOAD_TIMEOUT_MS = 10_000;
 const FAILED_POLL_INTERVAL_MS = 10_000;
 const FAILED_POLLS_MAX = 12;
 
-// Observability contract §5 timing hooks (T07): `SessionStartTimingEvent`,
-// `HmrRoundtripEvent` and the `onSessionStart`/`onHmr` methods below are now
+// Observability contract §5 timing hooks: `SessionStartTimingEvent`,
+// `HmrRoundtripEvent` and the `onSessionStart`/`onHmr` methods below are
 // declared on `DemoRuntime` itself (`types.ts`), as OPTIONAL members — this
-// module implements them, never imports
-// `@handsontable/demo-runtime/telemetry`, and `apps/authoring/src/
-// telemetry/metrics.ts#wireRuntimeMetrics` is what turns the callbacks into
-// `session.start_ms`/`hmr.roundtrip_ms` points against an injected
-// `Telemetry`, through `runtime.onX?.(cb)` — no cast to the concrete class
-// needed at the call site.
+// module implements them, never imports `@handsontable/demo-runtime/telemetry`,
+// and `apps/authoring/src/telemetry/metrics.ts#wireRuntimeMetrics` is what
+// turns the callbacks into `session.start_ms`/`hmr.roundtrip_ms` points
+// against an injected `Telemetry`, through `runtime.onX?.(cb)` — no cast to
+// the concrete class needed at the call site.
 
-/** D-M2 fix round: real in-place HMR (Vite) never triggers the
- *  consume-on-ready `onFrameLoad` path at all — only a dev server that does a
- *  full page reload on an edit does — so `lastEditFlushDispatchedAt` could
- *  otherwise sit set for many minutes (an edit made, then no further edits,
- *  then an unrelated reload much later) and get reported as the HMR
- *  round-trip duration for a load that has nothing to do with it. A real
- *  round trip completes in at most a few seconds; 30s is generous headroom
+/** Real in-place HMR (Vite) never triggers the consume-on-ready
+ *  `onFrameLoad` path — only a dev server that full-page-reloads on an edit
+ *  does — so this could otherwise sit set for minutes and get reported as
+ *  the HMR round-trip duration for an unrelated later reload. A real round
+ *  trip completes in at most a few seconds; 30s is generous headroom
  *  above that, chosen to bound the staleness window without being tight
  *  enough to false-negative a slow-but-real reload. */
 const HMR_ROUNDTRIP_STALE_MS = 30_000;
@@ -434,7 +431,7 @@ export class ContainerRuntime implements DemoRuntime {
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly progressCbs = new Set<(log: string) => void>();
   private readonly stderrCbs = new Set<(line: string) => void>();
-  // ---- T07 timing hooks ---------------------------------------------------
+  // ---- Timing hooks ---------------------------------------------------
   private readonly sessionStartCbs = new Set<(e: SessionStartTimingEvent) => void>();
   private readonly hmrCbs = new Set<(e: HmrRoundtripEvent) => void>();
   /** Set true for the span of an explicit `reload()` navigation, so `onFrameLoad`
@@ -543,7 +540,7 @@ export class ContainerRuntime implements DemoRuntime {
       this.emitProgress("Dev server not answering yet — retrying…");
       return;
     }
-    // §5 `hmr.roundtrip_ms` (T07). Non-invasive: everything below is unchanged —
+    // §5 `hmr.roundtrip_ms`. Non-invasive: everything below is unchanged —
     // this only reports a timing for a load the grace-timer dance below already
     // treats as ready (a no-op `confirmAndEmitReady`, since `didReady` is already
     // true). Excludes our own `reload()` navigation (`reloadInFlight`) and the very
@@ -551,10 +548,10 @@ export class ContainerRuntime implements DemoRuntime {
     if (wasReadyBeforeThisLoad && !this.reloadInFlight && this.lastEditFlushDispatchedAt !== null) {
       const durationMs = Math.round(performance.now() - this.lastEditFlushDispatchedAt);
       this.lastEditFlushDispatchedAt = null;
-      // D-M2 fix round: a load arriving long after the flush is not this
-      // flush's round trip — real in-place HMR never reaches this handler at
-      // all, so a stale timestamp here means an unrelated later reload, not
-      // a slow-but-real one. Drop it rather than report a bogus duration.
+      // A load arriving long after the flush is not this flush's round trip
+      // — real in-place HMR never reaches this handler at all, so a stale
+      // timestamp here means an unrelated later reload. Drop it rather than
+      // report a bogus duration.
       if (durationMs <= HMR_ROUNDTRIP_STALE_MS) {
         for (const cb of this.hmrCbs) cb({ durationMs });
       }
@@ -1018,8 +1015,8 @@ export class ContainerRuntime implements DemoRuntime {
     }
     if (this.disposed || !this.pointed || !this.previewUrl) return;
     // Marks the navigation this method is about to make as "ours", so `onFrameLoad`
-    // does not mistake it for an HMR-driven full-page reload (§5 `hmr.roundtrip_ms`,
-    // T07). Cleared in `settle()`, the only way out of the promise below.
+    // does not mistake it for an HMR-driven full-page reload (§5 `hmr.roundtrip_ms`).
+    // Cleared in `settle()`, the only way out of the promise below.
     this.reloadInFlight = true;
     return new Promise<void>((resolve) => {
       const iframe = this.opts.iframe;
@@ -1147,7 +1144,7 @@ export class ContainerRuntime implements DemoRuntime {
     const batch = [...this.quietPending.entries(), ...this.pending.entries()];
     this.quietPending.clear();
     this.pending.clear();
-    // §5 `hmr.roundtrip_ms` dispatch clock (T07) — only once the preview is already
+    // §5 `hmr.roundtrip_ms` dispatch clock — only once the preview is already
     // ready: the buffered flush `mount()` triggers for edits made mid-create is not
     // an HMR round trip, there is no preview yet for it to refresh.
     if (this.didReady && batch.length > 0) this.lastEditFlushDispatchedAt = performance.now();

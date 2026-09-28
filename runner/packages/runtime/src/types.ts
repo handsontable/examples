@@ -117,7 +117,7 @@ export interface WriteFileOptions {
   quiet?: boolean;
 }
 
-// ---- T07 timing hooks (observability contract §5) --------------------------
+// ---- Timing hooks (observability contract §5) --------------------------
 //
 // Declared here, not in `sandpack.ts`/`container.ts`, so `DemoRuntime` can name
 // them as optional members without a cycle (both engine files already import
@@ -133,7 +133,7 @@ export interface SandpackCompileTimingEvent {
   readonly outcome: "ok" | "error";
 }
 
-/** A compile diagnostic: a bundler `show-error` with no frames, or (R9C) the
+/** A compile diagnostic: a bundler `show-error` with no frames, or the
  *  parcel pre-transpile's own babel parse failure, which never reaches the
  *  bundler — on mount, and on the edit path for the newest push only. Never a
  *  Sandpack evaluation error — a runtime throw inside an already-evaluated

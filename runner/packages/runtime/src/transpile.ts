@@ -115,7 +115,7 @@ export function isCompilerUnavailable(e: unknown): boolean {
 }
 
 /**
- * The visitor's own source failed to parse (R9C, F10 compile half): babel threw inside
+ * The visitor's own source failed to parse: babel threw inside
  * `transpileFilesForParcel`. This is the parcel Tier-1 compile error — the bundler never
  * sees these sources, so it is the only place the failure exists as an error object.
  *

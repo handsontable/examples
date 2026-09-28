@@ -21,9 +21,9 @@ import type {
   WriteFileOptions,
 } from "./types.js";
 // Re-exported so existing `@handsontable/demo-runtime/sandpack` importers
-// (this task's own `apps/authoring/src/telemetry/metrics.ts`) keep working —
-// the interfaces themselves now live in `types.ts` (T07 phase 2), so
-// `DemoRuntime` can name the hook methods without a circular import.
+// (`apps/authoring/src/telemetry/metrics.ts`) keep working — the interfaces
+// themselves live in `types.ts`, so `DemoRuntime` can name the hook methods
+// without a circular import.
 export type {
   SandpackBundlerUnreachableEvent,
   SandpackCompileErrorEvent,
@@ -201,16 +201,16 @@ export class SandpackEvaluationError extends Error {
   }
 }
 
-// Observability contract §5 timing hooks (T07): `SandpackCompileTimingEvent`,
+// Observability contract §5 timing hooks: `SandpackCompileTimingEvent`,
 // `SandpackCompileErrorEvent`, `SandpackBundlerUnreachableEvent` and the
 // `onCompileTiming`/`onCompileError`/`onBundlerUnreachable` methods below are
-// now declared on `DemoRuntime` itself (`types.ts`), as OPTIONAL members —
-// this module implements them, never imports
-// `@handsontable/demo-runtime/telemetry`, and `apps/authoring/src/
-// telemetry/metrics.ts#wireRuntimeMetrics` is what turns the callbacks into
+// declared on `DemoRuntime` itself (`types.ts`), as OPTIONAL members — this
+// module implements them, never imports `@handsontable/demo-runtime/telemetry`,
+// and `apps/authoring/src/telemetry/metrics.ts#wireRuntimeMetrics` is what
+// turns the callbacks into
 // `sandpack.compile_ms`/`sandpack.compile_error`/`sandpack.bundler_unreachable`
-// points against an injected `Telemetry`, through `runtime.onX?.(cb)` —
-// no cast to the concrete class needed at the call site.
+// points against an injected `Telemetry`, through `runtime.onX?.(cb)` — no
+// cast to the concrete class needed at the call site.
 
 const COMPILE_ERROR_FALLBACK = "Sandpack compile error";
 
@@ -323,7 +323,7 @@ export class SandpackRuntime implements DemoRuntime {
    *  preview after the caller had already blanked it. */
   private disposed = false;
 
-  // ---- T07 timing hooks ---------------------------------------------------
+  // ---- Timing hooks ---------------------------------------------------
   private readonly compileTimingCbs = new Set<(e: SandpackCompileTimingEvent) => void>();
   private readonly compileErrorCbs = new Set<(e: SandpackCompileErrorEvent) => void>();
   private readonly bundlerUnreachableCbs = new Set<(e: SandpackBundlerUnreachableEvent) => void>();
@@ -591,12 +591,13 @@ export class SandpackRuntime implements DemoRuntime {
     try {
       setup = await this.buildSetup(files);
     } catch (err) {
-      // R9C (F10 compile half): a demo whose source does not parse at mount — a saved,
-      // shared or `?payload=` demo, or a remount of a broken workspace — is a compile
-      // error from the very first run, and counts at once (there is no edit burst to
-      // collapse). Reported, then rethrown unchanged: the mount still rejects exactly as
-      // before, so the error card, `preview.ready_ms outcome=error` and the Sentry
-      // capture downstream (`tier1Report`) see the same error they always did.
+      // A demo whose source does not parse at mount — a saved, shared or
+      // `?payload=` demo, or a remount of a broken workspace — is a compile
+      // error from the very first run, and counts at once (no edit burst to
+      // collapse). Reported, then rethrown unchanged: the mount still rejects
+      // exactly as before, so the error card, `preview.ready_ms
+      // outcome=error` and the Sentry capture downstream (`tier1Report`) see
+      // the same error they always did.
       if (isTranspileFailure(err)) this.reportTranspileFailure(err);
       throw err;
     }
@@ -677,7 +678,7 @@ export class SandpackRuntime implements DemoRuntime {
           // Only a real compile diagnostic (no frames — the module never evaluated)
           // resolves the compile clock and reports §5 `sandpack.compile_error`. An
           // evaluation error's compile already reached "done" (`ok`) — the module ran
-          // and threw afterwards, a runtime fault out of this task's scope (T06).
+          // and threw afterwards, a runtime fault, not a compile error.
           if (!evaluated) {
             this.resolveCompileTiming("error");
             for (const cb of this.compileErrorCbs) cb({ message });
@@ -857,8 +858,8 @@ export class SandpackRuntime implements DemoRuntime {
         /* mid-edit parse error — the user is still typing. Nothing reaches the bundler and
          * the last good render stays on screen (no error card per keystroke).
          *
-         * It is still the preview's compile error, though, and the only place it exists
-         * (R9C, F10 compile half): reported to `onCompileError`, and only for the newest
+         * It is still the preview's compile error, though, and the only place it exists:
+         * reported to `onCompileError`, and only for the newest
          * push — a superseded keystroke's failure is already typed past, and reporting it
          * would put a stale diagnostic into the edit burst the authoring app collapses
          * (`demoEventCollapse.ts`), which counts once per burst. `emitError` is NOT
@@ -880,7 +881,7 @@ export class SandpackRuntime implements DemoRuntime {
       });
   }
 
-  /** §5 `sandpack.compile_error` for a parcel pre-transpile failure (R9C) — the babel
+  /** §5 `sandpack.compile_error` for a parcel pre-transpile failure — the babel
    *  parse error the bundler never sees. Same event, and the same bounded message, as a
    *  bundler `show-error` diagnostic; no compile clock is involved (nothing was
    *  dispatched, so `sandpack.compile_ms` has nothing to time). */

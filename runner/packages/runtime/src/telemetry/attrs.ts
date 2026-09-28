@@ -1,11 +1,8 @@
 // Observability contract §3 — attribute keys, allowed values, Loki labels.
-//
-// Pure data/types, no DOM, no Cloudflare imports: this module is imported by the
-// authoring app, both Workers and `pipeline/` tests alike (see the package header
-// in index.ts). `pipeline/telemetry-contract.test.mjs` parses
-// `docs/observability-contract.md` §3 and fails if this file disagrees with it —
-// treat the doc as the source of truth and edit both together (README "Contract"
-// rule).
+// Pure data/types, no DOM, no Cloudflare imports: imported by the authoring
+// app, both Workers and `pipeline/` tests. `pipeline/telemetry-contract.test.mjs`
+// parses `docs/observability-contract.md` §3 and fails if this file
+// disagrees with it — edit both together.
 
 /** The four deployables that stamp `service.name` on every record they emit. */
 export const SERVICE_NAMES = [
@@ -39,27 +36,17 @@ export type Tier = (typeof TIERS)[number];
 export const HT_MAJORS = ["15", "16", "17", "18", "19", "next", "none"] as const;
 export type HtMajor = (typeof HT_MAJORS)[number];
 
-/**
- * `hot.framework` is an open set by contract ("a key of `config/frameworks.json`,
- * a docs-example framework, or `none`") — new frameworks land without a change
- * here. Kept as `string`, never validated against a closed list.
- */
+/** `hot.framework` is an open set by contract — new frameworks land without
+ *  a change here. Kept as `string`, never validated against a closed list. */
 export type Framework = string;
 
 /** `hot.outcome` has no single closed set: allowed values are per metric (§5),
  *  see `metrics.ts`. */
 export type Outcome = string;
 
-/**
- * Fix round (finding A-C1): `hot.framework` and `hot.outcome` are open sets
- * by contract, but "open" never meant "free text, any length" — nothing
- * enforced a bound before this, so a client could hoist a multi-kilobyte
- * `hot.framework` into a Loki label (risking `max_label_value_length`
- * rejections that reject a whole packed key, ADR §B.4) or an arbitrary
- * string into `hot.outcome`. Short, lowercase, dot/underscore/hyphen —
- * every real value in `config/frameworks.json`, the docs-example framework
- * ids, and every §5 outcome literal already fits comfortably inside this.
- */
+/** Bounds `hot.framework`/`hot.outcome`: open by contract, but not
+ *  unbounded — a client cannot hoist a multi-kilobyte value into a Loki
+ *  label (ADR §B.4). */
 export const OPEN_ATTR_VALUE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,47}$/;
 
 export function isValidOpenAttrValue(value: string): boolean {
@@ -85,11 +72,8 @@ export const ATTR_SESSION_ID = "session.id";
 export const ATTR_CF_RAY = "cf.ray";
 export const ATTR_HOT_KIND = "hot.kind";
 
-/** §3's closed value set for `hot.kind` — "the Faro item kind." `event` is
- *  Faro's `EventEvent` kind (unrelated to this repo's own open `EventName`,
- *  §6); `trace` is deliberately excluded — no trace is ever exported (ADR
- *  §C.4), so a record claiming that kind is malformed, not a fourth
- *  legitimate value. */
+/** §3's closed value set for `hot.kind` — the Faro item kind. `trace` is
+ *  excluded: no trace is ever exported (ADR §C.4). */
 export const HOT_KINDS = ["exception", "log", "event", "measurement"] as const;
 
 export const STRUCTURED_METADATA_KEYS = [
@@ -99,40 +83,11 @@ export const STRUCTURED_METADATA_KEYS = [
   ATTR_HOT_KIND,
 ] as const;
 
-/**
- * §3 "Diagnostic tags" — flat, non-dotted metadata on a handled-error or
- * diagnostic-event report only (§6). Distinct from `STRUCTURED_METADATA_KEYS`
- * as its own named category, but not a separate transport rule any more:
- * `convert.ts#hoistAttributes`'s `STRUCTURED_KEY_SET` is
- * `[...STRUCTURED_METADATA_KEYS, ...DIAGNOSTIC_TAG_KEYS]` (T02-D merge fix),
- * so these keys ARE hoisted into structured metadata, the same bucket the
- * dotted keys above land in — never a Loki resource attribute or label
- * either way. D-M5 fix round: this comment used to say the opposite
- * ("not hoisted"), which the contract doc repeated; both were stale against
- * `convert.ts`'s own `STRUCTURED_KEY_SET` and are now corrected together.
- *
- * Each entry is a boolean flag, an opaque platform id, an enum-like/bucketed
- * value, or a reporting call site's own name — never user or request content
- * (controller ruling, T06 fix round D1):
- *
- * - `handled` — `"true"` marks a §6 `error.handled` report (set by the
- *   browser facade's `Telemetry.error()`, contract §6).
- * - `context` — the reporting call site's own name (e.g. `tier1-compiler-asset`,
- *   `versions-fetch`), the same string passed to `fingerprint()`'s `context`
- *   argument (§7). An open set of short, developer-chosen literals, not free
- *   text.
- * - `sentry_event_id` — the ADR §E.2 tee: Sentry's own opaque event id,
- *   pushed as a Faro event alongside the page-load id going the other way.
- * - `versions_fetch_attempts`, `versions_fetch_outcome`,
- *   `versions_fetch_elapsed_bucket`, `versions_fetch_online` — the
- *   `versions-fetch` diagnostic's own tags (`fetchDiagnostics.ts#diagnosticTags`,
- *   prefixed by its `context`): a small integer, an enum (`ok`/`transport`/`timeout`),
- *   a latency bucket (`<1s`, `<5s`, …), and a boolean, all as strings.
- * - `api_base_origin` — `"same"` \| `"cross"` \| `"localhost"`
- *   (`fetchDiagnostics.ts#apiBaseOrigin`).
- * - `net_effective_type` — Chromium's `navigator.connection.effectiveType`
- *   (e.g. `"4g"`), omitted elsewhere.
- */
+/** §3 "Diagnostic tags": flat, non-dotted metadata on a handled-error or
+ *  diagnostic-event report (§6), hoisted into `attributes` by
+ *  `convert.ts#hoistAttributes`'s `STRUCTURED_KEY_SET` — never a Loki label.
+ *  Each entry is a boolean flag, an opaque platform id, an enum/bucketed
+ *  value, or a call site's own name — never user or request content. */
 export const DIAGNOSTIC_TAG_KEYS = [
   "handled",
   "context",
@@ -145,41 +100,11 @@ export const DIAGNOSTIC_TAG_KEYS = [
   "net_effective_type",
 ] as const;
 
-/**
- * T02-D4's AE-only browser attribute channel (T07 fix round, controller
- * ruling; extended by T12/ADR-0042). `workers/o11y/src/normalise/
- * browser-attrs.ts#readAeOnlyAttrs` reads `HotAttrs` fields `toAePoint`
- * (§4/§5) accepts but §3 gives no resource-attribute or structured-metadata
- * slot to — `bucket`, `reason`, `fingerprint` (T07), and `kind` (reserved as
- * `hot.metric_kind`, since `hot.kind` is already the Faro item kind, §3),
- * `ref`, `area` (T12, ADR-0042) — under a `hot.<column>` key in a Faro
- * item's raw context/attributes, from the wire body, BEFORE `scrubTelemetry`
- * runs server-side. `route_class`/`model`/`provider`/`device` remain
- * unmapped — no browser call site needs them yet.
- *
- * A key listed here has to survive `scrub.ts#allowlistAttributes` (both the
- * browser-side pass, Faro's `beforeSend`, and the re-run server-side pass) or
- * the browser would never even transmit it — but it is deliberately NOT a
- * `RESOURCE_ATTRS` entry (no Loki label, no `blob1`–`blob8` slot) and NOT a
- * `STRUCTURED_METADATA_KEYS` entry either: same non-hoisted treatment
- * `DIAGNOSTIC_TAG_KEYS`'s own doc comment already describes —
- * `convert.ts#hoistAttributes` only recognises `RESOURCE_ATTR_KEYS` and
- * `STRUCTURED_KEY_SET` (structured metadata + diagnostic tags), so a key
- * listed here is silently dropped there and never reaches a stored
- * `resourceAttributes`/`attributes` field — harmless for `example.*`, which
- * is never stored at all (§6), but true of every other metric that might use
- * these columns too. Only `readAeOnlyAttrs`, reading the raw wire body
- * directly (before `hoistAttributes` ever runs), sees it.
- *
- * Not part of contract §3's prose (no matching paragraph in
- * `docs/observability-contract.md`, no `pipeline/telemetry-contract.test.mjs`
- * case): the controller's T07 fix-round ruling was to edit the doc only when
- * a DOCUMENTED name changes, and none of these six names was previously
- * documented anywhere in §3 — they are §4/§5 (AE layout / metric registry)
- * concepts that `HotAttrs` already names, gaining a transport path here, not
- * a new resource attribute or Loki label the doc's attribute table would
- * need to grow.
- */
+/** The AE-only browser attribute channel (ADR-0042): `HotAttrs` fields
+ *  `toAePoint` accepts but §3 gives no resource/structured-metadata slot to.
+ *  Read only by `browser-attrs.ts#readAeOnlyAttrs` from the raw wire body,
+ *  BEFORE `scrubTelemetry` runs; `convert.ts#hoistAttributes` does not
+ *  recognise these keys, so they never reach `resourceAttributes`/`attributes`. */
 export const ATTR_HOT_BUCKET = "hot.bucket";
 export const ATTR_HOT_REASON = "hot.reason";
 export const ATTR_HOT_FINGERPRINT = "hot.fingerprint";
@@ -196,10 +121,9 @@ export const AE_ONLY_ATTRIBUTE_KEYS = [
   ATTR_HOT_AREA,
 ] as const;
 
-/** One row per §3 resource attribute: its OTLP key, the Loki label it promotes to
- *  (`undefined` when the contract says "no"), and the Analytics Engine blob slot
- *  it fills (`attrs.ts` and `metrics.ts` agree on these — `AE_COLUMNS` in
- *  `metrics.ts` is the single source `sink.ts`/`inbox.ts` builders read). */
+/** One row per §3 resource attribute: OTLP key, Loki label (`undefined` =
+ *  none), and Analytics Engine blob slot (`AE_COLUMNS` in `metrics.ts` is
+ *  the single source `sink.ts`/`inbox.ts` read). */
 export interface ResourceAttrDef {
   key: string;
   lokiLabel?: string;
@@ -226,16 +150,9 @@ export const LOKI_LABELS: readonly string[] = RESOURCE_ATTRS.filter((a) => a.lok
   (a) => a.lokiLabel as string,
 );
 
-/**
- * §3's forbidden list is enforced as an allowlist, not a denylist (T00-D1, see
- * the task Outcome): `scrub.ts` keeps only `RESOURCE_ATTRS` keys,
- * `STRUCTURED_METADATA_KEYS` and `DIAGNOSTIC_TAG_KEYS`, and drops everything
- * else. That satisfies both this file's forbidden-attribute rule and ADR
- * §E.4's "drop unknown attributes" — every forbidden attribute (`url.full`,
- * geo, ASN, the user pseudonym, an email, an IP, a user-agent string) is
- * simply absent from the allowlist, and a future unknown attribute is dropped
- * by the same mechanism without a code change.
- */
+/** §3's forbidden list enforced as an allowlist, not a denylist: every
+ *  forbidden attribute (`url.full`, geo, an IP, a user-agent string) is
+ *  simply absent, so a future one is dropped without a code change. */
 export const ALLOWED_ATTRIBUTE_KEYS: ReadonlySet<string> = new Set([
   ...RESOURCE_ATTRS.map((a) => a.key),
   ...STRUCTURED_METADATA_KEYS,
@@ -276,7 +193,7 @@ export interface HotAttrs {
 
 /** The three resource attrs stamped on every record (blob1–3), never part of a
  *  metric's own §5 "Blobs used" column because they are universal, not
- *  metric-specific (T00-D2). */
+ *  metric-specific. */
 export interface CommonResourceAttrs {
   service_name: ServiceName;
   service_version: string;
