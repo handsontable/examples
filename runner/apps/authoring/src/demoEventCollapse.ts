@@ -1,4 +1,4 @@
-// F26: the edit-burst collapse in front of the facade's demo-runtime reports.
+// The edit-burst collapse in front of the facade's demo-runtime reports.
 //
 // The Tier-1 preview re-runs on every keystroke, so typing ONE throwing line
 // relays the whole keystroke-prefix ladder: `s is not defined`, `se is not
@@ -49,7 +49,7 @@
 // fingerprint. Rule 1 of `normalizeMonitorMessage` folds most `is not
 // defined` rungs into one fingerprint, which keeps this small.
 //
-// A compile failure is a run that never happened (R9C, F10 compile half). When
+// A compile failure is a run that never happened. When
 // the newest edit does not compile (the parcel pre-transpile's babel error, or
 // a bundler diagnostic), nothing of it reaches the preview, so everything the
 // preview relays for the rest of the burst is from code already typed past —

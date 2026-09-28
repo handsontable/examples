@@ -146,7 +146,7 @@ export function exampleActionAttrs(taxonomy: ExampleTaxonomy): Record<string, st
 }
 
 /**
- * ADR-0042 T12-D2 fix — the one-shot URL marker `onFork`'s navigation to
+ * ADR-0042 — the one-shot URL marker `onFork`'s navigation to
  * `/edit/:id` leaves behind, so the saved-demo load effect can classify
  * that landing's `example.open` as `fork` rather than `deep-link`.
  *

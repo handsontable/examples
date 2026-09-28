@@ -1,10 +1,10 @@
 // What a relayed demo-runtime event becomes now that it leaves Sentry entirely
 // (ADR §E.1, "Moves to the new stack only": "...and demo-runtime preview
 // events"): a `preview.runtime_error` count through the facade. The Sentry
-// side is budgeted by the SAME two `monitor.ts` caps the pre-T06 Sentry
-// version used (DEV-2539) — a loud kind still spends the tight relay budget,
+// side is budgeted by the SAME two `monitor.ts` caps Sentry
+// used (DEV-2539) — a loud kind still spends the tight relay budget,
 // `console-warn` still spends the looser one. The facade side is bounded by
-// the F26 edit-burst collapse instead (`demoEventCollapse.ts`).
+// the edit-burst collapse instead (`demoEventCollapse.ts`).
 //
 // Split out of `sentry.ts` for the same reason as `tier1Report.ts` /
 // `tier2Report.ts` (see their headers): that module imports `@sentry/react`,
@@ -35,7 +35,7 @@ export type DemoMonitorKind = "error" | "rejection" | "console-error" | "console
 /** `preview.runtime_error`'s `reason` values (contract §5). */
 export type PreviewRuntimeErrorReason = "uncaught" | "console" | "network" | "stderr";
 
-/** F10 Loki: the `name` of the Faro exception record a collapsed report
+/** The `name` of the Faro exception record a collapsed report
  *  becomes (its Loki line is `<name>: <shape>`). The first two match the
  *  names `sentry.ts` gives the Sentry capture of the same kinds, so the two
  *  sides read alike.
@@ -79,7 +79,7 @@ export interface DemoEventReport {
   /** Which budget governs this event: `"relay"` (the tight
    *  `MONITOR_EVENT_CEILING`) for everything but a console warning,
    *  `"breadcrumb"` (the looser `MONITOR_BREADCRUMB_CEILING`) for
-   *  `console-warn` — the same split the pre-T06 Sentry breadcrumb path used,
+   *  `console-warn` — the same split the Sentry breadcrumb path used,
    *  so a chatty demo still cannot spend the tight budget on warnings alone. */
   budget: "relay" | "breadcrumb";
   /** `fingerprint()`'s `context` argument. Always `"demo-runtime"` — kept as an
@@ -90,10 +90,10 @@ export interface DemoEventReport {
   fingerprintContext: string;
   /** `fingerprint()`'s `message` argument — the raw relayed message,
    *  unnormalised; the caller runs it through `fingerprint()`, not this
-   *  function (T00 owns that normalisation, not this decision). */
+   *  function (a separate concern from this decision). */
   fingerprintMessage: string;
   reason: PreviewRuntimeErrorReason;
-  /** F10 Loki: the Faro exception record's `name` (see `RECORD_NAME_BY_KIND`),
+  /** The Faro exception record's `name` (see `RECORD_NAME_BY_KIND`),
    *  or `null` for no record at all (`console-warn`). Its message is the §7
    *  fingerprint shape of the relayed message, never the raw message —
    *  computed by the caller (`fingerprintShape`), for the import-free reason
