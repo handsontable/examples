@@ -1,8 +1,8 @@
 // `POST /telemetry/lite` — the §9 lite beacon from `/d` and `/embed`'s
-// standalone reporter (ADR §C.5, T08). Reuses T02's ingest machinery
-// end-to-end: the browser gate (`checkBrowserGates`), the capped body reader,
-// the shared converter (T00-D6's beacon order: `beaconToRecord` → `scrubTelemetry`,
-// the *reverse* of the Faro path), `withResourceAttrDefaults`, `hashRecord`,
+// standalone reporter (ADR §C.5). Reuses the ingest machinery end-to-end:
+// the browser gate (`checkBrowserGates`), the capped body reader, the
+// shared converter (beacon order: `beaconToRecord` → `scrubTelemetry`, the
+// *reverse* of the Faro path), `withResourceAttrDefaults`, `hashRecord`,
 // `InboxWriter.ingest` on the `browser` tenant, and `respond.ts`'s single
 // `o11y.ingest` point per outcome.
 //
@@ -34,26 +34,23 @@ import { withResourceAttrDefaults, writePoint } from "./normalise/points.js";
 import { recordOversizeDrop, respondDrop, respondIngested } from "./normalise/respond.js";
 import { registerRoute } from "./router.js";
 
-/** §3: the lite beacon has no natural build identity the way the authoring
- *  app or a Worker deploy does (a client with no bundle of its own cannot
- *  report its own `service.version`) — `"unknown"` is `withResourceAttrDefaults`'s
- *  own fallback for exactly this "no natural value" case (`normalise/points.ts`'s
- *  doc comment), restated explicitly here rather than left to that default,
- *  since this is the *only* record shape in the o11y worker built with this
- *  identity from the start rather than falling into it. */
+/** §3: the lite beacon has no natural build identity (a client with no
+ *  bundle of its own cannot report its own `service.version`) —
+ *  `"unknown"` is `withResourceAttrDefaults`'s own fallback for exactly
+ *  this case, restated explicitly here since this is the only record
+ *  shape built with this identity from the start. */
 function liteServiceIdentity(env: Env): ServiceIdentity {
   return { name: "demos-embed", version: "unknown", environment: env.O11Y_ENV };
 }
 
-/** §7's fingerprint input for a lite `err` payload: the error's own name and
- *  (truncated, client-side) message — **never the stack** (T08-D, see the
- *  task Outcome). `convert.ts#beaconBody`'s stored `body` includes the stack
- *  for a human reading Loki; folding it into the fingerprint too would mean a
- *  hashed chunk name or line number in the first frame mints a "new"
- *  fingerprint on every rebuild that shifts one, exactly the DEV-2853 ladder
- *  problem the contract's own `normalizeMonitorMessage` exists to collapse —
- *  and unlike `demo-runtime`, `d`/`embed` surfaces feed the new-fingerprint
- *  alert (`feedsNewFingerprintAlert`), so a false "new" here pages someone. */
+/** §7's fingerprint input for a lite `err` payload: the error's own name
+ *  and (truncated, client-side) message — never the stack.
+ *  `convert.ts#beaconBody`'s stored `body` includes the stack for a human
+ *  reading Loki; folding it into the fingerprint too would mean a hashed
+ *  chunk name or line number mints a "new" fingerprint on every rebuild
+ *  that shifts one — and unlike `demo-runtime`, `d`/`embed` surfaces feed
+ *  the new-fingerprint alert (`feedsNewFingerprintAlert`), so a false
+ *  "new" here pages someone. */
 function liteErrorFingerprintMessage(payload: Extract<LiteBeaconPayload, { t: "err" }>): string {
   return `${payload.n}: ${payload.m}`;
 }
@@ -81,10 +78,9 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
   }
 
   // The one place every field of an untrusted, client-crafted beacon is
-  // re-checked (T00-D5's own doc comment on `isValidLitePayload`): shape,
-  // per-field caps, and — decisively — the total serialized size again, so a
-  // payload that grew past 2 KB only once JSON-decoded (impossible for valid
-  // JSON, but not assumed here) is still caught.
+  // re-checked (`isValidLitePayload`): shape, per-field caps, and —
+  // decisively — the total serialized size again, so a payload that grew
+  // past 2 KB only once JSON-decoded is still caught.
   if (!isValidLitePayload(body)) {
     return respondDrop(env, ctx, { ok: false, reason: "invalid_item", status: 400 });
   }
@@ -92,27 +88,25 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
   const receivedAtMs = Date.now();
   const service = liteServiceIdentity(env);
 
-  // T00-D6, beacon order (the reverse of Faro's): convert first, scrub the
-  // built record second — `beaconToRecord`'s own fields (`m`, `st`) never
-  // passed through `scrubTelemetry` before this point.
+  // Beacon order (the reverse of Faro's): convert first, scrub the built
+  // record second — `beaconToRecord`'s own fields (`m`, `st`) never passed
+  // through `scrubTelemetry` before this point.
   const record = beaconToRecord(body, { service, receivedAtMs });
   // Never `null` here: only a Faro item (`isFaroItem`) can make `scrubTelemetry`
   // drop the record entirely (a console item, §3); the OTLP-record branch
   // always returns its scrubbed clone.
   const scrubbed = scrubTelemetry(record)!;
-  // T02-D's own extra pass (`text-scrub.ts`): `scrubTelemetry` only strips a
-  // query string from a *discrete* URL-shaped field, never one embedded
-  // inside free body text — and a beacon's `st` (a stack) routinely carries a
-  // bundler's cache-busting `?t=`/`?v=` on a chunk URL.
+  // `scrubTelemetry` only strips a query string from a *discrete*
+  // URL-shaped field, never one embedded inside free body text — and a
+  // beacon's `st` (a stack) routinely carries a bundler's cache-busting
+  // `?t=`/`?v=` on a chunk URL.
   scrubbed.body = scrubBodyText(scrubbed.body);
   withResourceAttrDefaults(scrubbed.resourceAttributes, env);
 
-  // QA follow-up ("lite-beacon vitals"): the same `storeRecord = false`
-  // pattern F18 applied to a Faro measurement (`normalise/faro.ts`) — a lite
-  // web-vital beacon (`t !== "err"`) is AE-only, contract §6/§9's own ruling
-  // (measurements never need a stored Loki record; only an error report
-  // does). Errors are unaffected: `body.t === "err"` still stores its
-  // record, symbolication and all.
+  // A lite web-vital beacon (`t !== "err"`) is AE-only, contract §6/§9's
+  // own ruling (measurements never need a stored Loki record; only an
+  // error report does). Errors are unaffected: `body.t === "err"` still
+  // stores its record, symbolication and all.
   const storeRecord = body.t === "err";
 
   if (
@@ -121,9 +115,9 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
   ) {
     // Unreachable in practice — the whole request body is already capped at
     // `LITE_PAYLOAD_MAX_BYTES` (2 KB), far under `INBOX_RECORD_MAX_BYTES`
-    // (256 KB) — kept for the same defence-in-depth reason the Faro and OTLP
-    // paths both carry this check (I2, T02's task Outcome). Skipped entirely
-    // for a vital: there is nothing to store for it regardless of size.
+    // (256 KB) — kept for the same defence-in-depth reason the Faro and
+    // OTLP paths both carry this check. Skipped entirely for a vital: there
+    // is nothing to store for it regardless of size.
     recordOversizeDrop(env, ctx, "lite beacon record exceeds 256 KB");
     return respondIngested(env, ctx, "lite", { accepted: 0, duplicate: 0 }, bytes.byteLength);
   }
@@ -164,22 +158,20 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
     // source timestamp, exactly as received") — `ts` is epoch ms, restated as
     // a string, the same way OTLP's raw `time_unix_nano` is.
     rawEventTime: String(body.ts),
-    // F32: the reporter's per-beacon id, hash-only (never in the stored
-    // record, attributes or a Loki label — no cardinality). A conditional
-    // spread, never `extra: body.id !== undefined ? {...} : undefined` —
+    // The reporter's per-beacon id, hash-only (never in the stored record,
+    // attributes or a Loki label — no cardinality). A conditional spread,
+    // never `extra: body.id !== undefined ? {...} : undefined` —
     // `stableStringify` walks `Object.entries`, so a present `extra` key
-    // holding `undefined` would still serialize (as `"extra":undefined`) and
-    // change the hash for every old-reporter beacon that has no `id` at all.
-    // With the spread, an id-less beacon (an old reporter still cached on a
-    // `/d`/`/embed` page) hashes exactly as it did before this field existed.
+    // holding `undefined` would still serialize and change the hash for
+    // every old-reporter beacon that has no `id` at all. With the spread,
+    // an id-less beacon hashes exactly as it did before this field existed.
     ...(body.id !== undefined ? { extra: { beacon_id: body.id } } : {}),
   });
 
-  // A-I4 remainder's own pattern (`normalise/faro.ts`): a hash-only item with
-  // no `record` still gets a real dedupe transaction
-  // (`InboxWriter.ingest`/`appendRows` skip a `record`-less item entirely —
-  // nothing is ever stored for it), so a retried/redelivered vital beacon
-  // still cannot double-count its `web_vital` point.
+  // Same pattern as `normalise/faro.ts`: a hash-only item with no `record`
+  // still gets a real dedupe transaction (`InboxWriter.ingest`/`appendRows`
+  // skip a `record`-less item entirely), so a retried/redelivered vital
+  // beacon still cannot double-count its `web_vital` point.
   const item: IngestItem = storeRecord
     ? { hash, record: scrubbed, fingerprint: itemFingerprint }
     : { hash, fingerprint: itemFingerprint };
@@ -188,18 +180,11 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
   let duplicate = 0;
   for (const r of result.results) r.outcome === "duplicate" ? duplicate++ : accepted++;
 
-  // `writePoint` (`normalise/points.ts`) is what every other route's own
-  // metric extraction uses (`normalise/faro.ts`'s `processOneItem` for the
-  // browser metrics inside a Faro batch) — this route's points are
-  // `error.uncaught`/`web_vital`, not the `o11y.ingest` self-metric
-  // `respond.ts`'s helpers write, but the sink and the `ctx.waitUntil`/never-
-  // throw contract are the same for every point this Worker writes.
-  //
-  // Fix round (finding A-I4): only write this route's own metric point when
-  // the record was actually a NEW record — the previous unconditional write
-  // meant a duplicated beacon (a `sendBeacon` retry, a redelivered request)
-  // wrote a second `error.uncaught`/`web_vital` point even while the
-  // matching `o11y.ingest` point already said `duplicate`.
+  // Only write this route's own metric point when the record was actually
+  // a NEW record — an unconditional write would mean a duplicated beacon
+  // (a `sendBeacon` retry, a redelivered request) writes a second
+  // `error.uncaught`/`web_vital` point even while the matching
+  // `o11y.ingest` point already says `duplicate`.
   if (accepted > 0) {
     for (const point of aePoints) writePoint(env, ctx, point);
   }

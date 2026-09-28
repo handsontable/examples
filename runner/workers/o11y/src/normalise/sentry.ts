@@ -4,9 +4,8 @@
 // (https://docs.sentry.io/product/integrations/integration-platform/webhooks/#issue-alerts):
 // `{action, data: {issue: {id, shortId, title, level, permalink, ...}}}`
 // roughly — every field read here is optional and falls back to `"unknown"`,
-// since the exact shape is not pinned by this contract and a webhook replay
-// (this task's fixture) is hand-built, not captured from a real Sentry
-// account.
+// since the exact shape is not pinned by this contract and the test fixture
+// webhook replay is hand-built, not captured from a real Sentry account.
 
 import { msToUnixNano, scrubTelemetry, type NormalisedRecord } from "@handsontable/demo-runtime/telemetry";
 import type { Env, IngestItem } from "../env.js";
@@ -26,18 +25,17 @@ export async function processSentryPayload(
   payload: unknown,
   env: Env,
   receivedAtMs: number,
-  // Fix round (finding A-M7): `rawEventTime` used to be a fixed `""`, so an
-  // issue that flips regression -> resolved -> regression inside one 24h
-  // dedupe window (`DEDUPE_WINDOW_MS`) produced two records with an
-  // IDENTICAL derived body (same `action`, same `title`/`issueId`/`release`)
-  // — the second, genuinely new regression silently deduped away. Sentry
-  // sends a real per-delivery `Sentry-Hook-Timestamp` header
+  // A fixed `rawEventTime` would mean an issue that flips regression ->
+  // resolved -> regression inside one 24h dedupe window (`DEDUPE_WINDOW_MS`)
+  // produces two records with an IDENTICAL derived body (same `action`,
+  // same `title`/`issueId`/`release`) — the second, genuinely new
+  // regression silently dedupes away. Sentry sends a real per-delivery
+  // `Sentry-Hook-Timestamp` header
   // (https://docs.sentry.io/product/integrations/integration-platform/webhooks/#headers)
   // — the caller (`index.ts`) passes it through here; falls back to the
-  // worker's own bucketed receive time (same scheme as `deploy.ts`) when the
-  // header is absent, so a hand-built payload or a future header change
-  // still gets SOME per-event distinction instead of silently reverting to
-  // the old collapsing-empty-string behaviour.
+  // worker's own bucketed receive time (same scheme as `deploy.ts`) when
+  // the header is absent, so a hand-built payload still gets some
+  // per-event distinction.
   rawEventTime: string | null,
 ): Promise<IngestItem> {
   const p = (typeof payload === "object" && payload !== null ? payload : {}) as Record<string, unknown>;
@@ -63,10 +61,9 @@ export async function processSentryPayload(
     resourceAttributes,
     attributes: {},
   };
-  // Fix round (finding A-I3): this record was stored with NO scrubbing at
-  // all — Sentry's own issue `title`/`permalink` routinely embed a preview
-  // host (a session credential), a query string, an email or a user-agent,
-  // none of which contract §3 allows. Run the same authoritative pass every
+  // Sentry's own issue `title`/`permalink` routinely embed a preview host
+  // (a session credential), a query string, an email or a user-agent, none
+  // of which contract §3 allows. Run the same authoritative pass every
   // other ingest path runs (`lite.ts`'s own order: convert, then
   // `scrubTelemetry`, then this worker's own extra text pass).
   record = scrubTelemetry(record)!;

@@ -1,30 +1,9 @@
-// Replaces the deleted Cloudflare Access gate. Controller decision K1 (the
-// feasibility probe concluded no Cloudflare Access application is needed):
-// `/grafana/*` and `POST /grafana/_o11y/reopen` gate on the Worker's own HMAC-signed
-// session cookie, minted once a Handsontable login broker token (ADR-0007)
-// has been verified through `gates/broker.ts`. `grafana/login.ts` owns the
+// Replaces the deleted Cloudflare Access gate: `/grafana/*` and
+// `POST /grafana/_o11y/reopen` gate on the Worker's own HMAC-signed session
+// cookie, minted once a Handsontable login broker token (ADR-0007) has been
+// verified through `gates/broker.ts`. `grafana/login.ts` owns the
 // login/callback/session/logout routes that mint and clear the two cookies
 // this file signs and verifies; this file has no route of its own.
-//
-// `verifySession` keeps `verifyAccess`'s exact contract (COMMON.md pinned
-// interface 3, superseded by the K1 controller ruling): `(req, env) =>
-// Promise<{ email } | null>`, honouring `DEV_ADMIN` only when
-// `O11Y_ENV === "local"` (fail-closed, unchanged from the Access gate).
-//
-// K1 fix round (security review of the broker login round trip,
-// findings I1/I2/M2): the review's live probe found a 1-byte secret signed
-// and verified, a session token with no `exp` or `v:99` verified, and a
-// tossed `Domain=` cookie could lock a victim out with no way for login or
-// logout to clear it. Fixed here: `O11Y_SESSION_SECRET` must be at least 32
-// bytes or every gate fails closed; the session and login-nonce cookies are
-// signed with SEPARATE HKDF-derived keys (`o11y_session/v1`/`o11y_login/v1`)
-// so an anonymous `GET /login` — which hands out a readable, Worker-signed
-// JWT to anyone — never yields a known-plaintext sample under the SAME key
-// that guards a session; both cookies use the `__Host-` prefix (`Path=/`,
-// `Secure`, no `Domain`), which browsers refuse to let a subdomain toss;
-// both tokens require `exp`/`iat`, pin `v: 1`, and are bound to `aud:
-// publicOrigin(env)` so a cookie minted under `wrangler dev` cannot be
-// replayed against production even if the two secrets happen to match.
 
 import { jwtVerify, SignJWT } from "jose";
 import { PRODUCTION_HOST } from "./util.js";
@@ -35,34 +14,19 @@ export interface SessionIdentity {
 }
 
 /** ADR-0041 §B.1: every request reaches the o11y worker on this hostname in
- *  production. Used for the `return_to` the login route builds, and as the
- *  `aud` claim every signed token carries (M2) — both values that must
- *  never be attacker-influenced, so neither is ever derived from a
- *  client-sent `Host`. */
+ *  production. Used for `return_to` and the `aud` claim on every signed
+ *  token; neither must ever be derived from a client-sent `Host`. */
 export const PUBLIC_ORIGIN = `https://${PRODUCTION_HOST}`;
 
 /**
  * The origin `grafana/login.ts#handleLogin` builds `return_to` against, and
- * the `aud` every token minted in THIS request is signed for. Locally this
- * MUST resolve to the actual `wrangler dev` origin (mirrors `box.ts`'s own
- * `O11Y_LOCAL_PUBLIC_ORIGIN` → `GF_SERVER_ROOT_URL` pattern) — a real local
- * broker login (`http://localhost` is on the broker's default allowlist,
- * feasibility report §3) otherwise redirects the callback at the hardcoded
- * PRODUCTION host, which does not run this Worker's `/grafana/_o11y/callback`
- * route at all and can never complete. Found by K1's own real local round
- * trip against a stubbed broker, not guessed. `O11Y_LOCAL_PUBLIC_ORIGIN`
- * unset falls back to `O11Y_DEV_PORT`'s own default (`scripts/o11y-dev.mjs`,
- * `docs/run-and-deploy.md`).
- *
- * Gated strictly on `O11Y_ENV === "local"` (fix round M2): this is also the
- * `aud` bound into every token, so ONLY this check stands between a
- * `wrangler dev` session and a production one signed with the same secret
- * value (e.g. a developer testing locally against the real
- * `O11Y_SESSION_SECRET`) — `verifySession`/`verifyLoginCookie` verify
- * `audience: publicOrigin(env)`, so a token minted while `O11Y_ENV=local`
- * carries the local origin and is refused by a production Worker (whose own
- * `O11Y_ENV` always comes from `wrangler.jsonc`'s committed `vars`, never a
- * secret) regardless of the secret.
+ * the `aud` every token is signed for. Locally it must resolve to the real
+ * `wrangler dev` origin (`box.ts`'s `O11Y_LOCAL_PUBLIC_ORIGIN` pattern), or
+ * the broker callback lands on a host this route doesn't run on.
+ * `O11Y_LOCAL_PUBLIC_ORIGIN` unset falls back to `O11Y_DEV_PORT`'s default
+ * (`scripts/o11y-dev.mjs`, `docs/run-and-deploy.md`). Gated on
+ * `O11Y_ENV === "local"` only: since it is also the token `aud`, this is
+ * what stops a `wrangler dev` session from being accepted in production.
  */
 export function publicOrigin(env: Env): string {
   if (env.O11Y_ENV === "local") {
@@ -71,61 +35,35 @@ export function publicOrigin(env: Env): string {
   return PUBLIC_ORIGIN;
 }
 
-// `__Host-` (fix round I2): requires `Secure`, `Path=/`, and refuses a
-// `Domain=` attribute outright — browsers will not even STORE a `Set-Cookie`
-// claiming this prefix unless every one of those conditions holds, and will
-// not accept a cookie of this name set via `document.cookie` from a
-// subdomain either. That closes both halves of the review's I2 finding: an
-// anonymous Tier-2 preview host (`*.demos.handsontable.com`, publicly
-// obtainable — feasibility §5) tossing `Domain=demos.handsontable.com` to
-// lock a victim out of `/grafana/*` with no way for login or logout to clear
-// it, and the matching login-CSRF variant against `o11y_login`. Trade-off,
-// accepted per the feasibility report and the review: `Path=/` means both
-// cookies are now also sent to `/telemetry/*`, the API worker and the
-// authoring app on the same host — both are HttpOnly (no `document.cookie`
-// exposure) and neither of those code paths reads an incoming `Cookie`
-// header at all (checked: no `req.headers.get("cookie")` anywhere in
-// `workers/api/src` or `apps/authoring/src`), so they are inert there.
-// Exported (not just `const`) so `pipeline/o11y-session.test.mjs` builds its
-// assertions and hand-crafted test tokens against these exact names/claim
-// values rather than a second, hand-copied literal that could silently
-// drift from what the code actually uses.
+// `__Host-` refuses `Domain=`, so a subdomain (e.g. a Tier-2 preview host)
+// cannot toss a cookie to lock a victim out of `/grafana/*`. `Path=/` also
+// reaches `/telemetry/*` and other workers on the host, but both are
+// HttpOnly and unread there, so it's inert. Exported for
+// `pipeline/o11y-session.test.mjs`'s assertions.
 export const SESSION_COOKIE = "__Host-o11y_session";
 export const LOGIN_COOKIE = "__Host-o11y_login";
 const COOKIE_PATH = "/";
 
-/** `typ` claims distinguish the two cookies' PAYLOAD SHAPE (a login-nonce
- *  token can never be mistaken for a session token's fields even if it were
- *  somehow verified under the wrong key) — the actual key separation is now
- *  the HKDF `info` string below (fix round I1), not this claim alone. */
+/** `typ` distinguishes the two cookies' payload shapes; the actual key
+ *  separation is the HKDF `info` string below, not this claim alone. */
 export const SESSION_TYP = "o11y_session";
 const LOGIN_TYP = "o11y_login";
 
-/** I3 (controller ruling, security review): the session is capped at
- *  `min(now + 12h, brokerTokenExp)` — never a flat 12h regardless of the
- *  broker token's own lifetime. Exported so `grafana/login.ts#handleSession`
- *  (the only caller with the broker token's `exp` in hand) can compute the
- *  actual TTL through {@link computeSessionTtlSeconds}. See that function's
- *  own doc comment, and ADR-0041 §M's K1 delta, for why this exists: before
- *  this cap, a 1h stolen broker token (DEV-3088) could be turned into an
- *  unrevocable 12h Grafana session. */
+/** Capped at `min(now + 12h, brokerTokenExp)`: a stolen 1h broker token
+ *  (DEV-3088) must not become an unrevocable 12h session. See ADR-0041 §M,
+ *  {@link computeSessionTtlSeconds}. */
 export const SESSION_MAX_TTL_SECONDS = 12 * 60 * 60;
-/** Used when the broker token carries no readable `exp` claim (see
- *  `gates/broker.ts#resolveBrokerIdentity`'s doc comment for exactly when
- *  that happens) — 1h matches the authoring app's own broker-token
- *  lifetime, so an operator relying on "how long does a login last"
- *  intuition from that surface is not surprised here. */
+/** Used when the broker token carries no readable `exp` claim
+ *  (`gates/broker.ts#resolveBrokerIdentity`). 1h matches the authoring
+ *  app's own broker-token lifetime. */
 export const SESSION_FALLBACK_TTL_SECONDS = 60 * 60;
 /** Login-CSRF/fixation window: long enough for a real Google sign-in
  *  round trip, short enough that a leaked login cookie is useless quickly. */
 const LOGIN_TTL_SECONDS = 10 * 60;
 
-/** I1: a secret shorter than this is treated exactly like a MISSING one —
- *  every gate fails closed, `/login` and `/session` answer 500. 32 bytes
- *  matches the runbook's own `openssl rand -hex 32` instruction; this is
- *  what actually enforces it instead of merely suggesting it. Measured in
- *  UTF-8 BYTES, not characters — a secret pasted as hex (64 hex chars = 32
- *  bytes) or as raw high-entropy text both need to clear the same bar. */
+/** Shorter than this is treated as MISSING (every gate fails closed). 32
+ *  bytes matches the runbook's `openssl rand -hex 32`, measured in UTF-8
+ *  bytes so hex and raw high-entropy text clear the same bar. */
 const MIN_SECRET_BYTES = 32;
 
 /** Present AND at least {@link MIN_SECRET_BYTES} long. `grafana/login.ts`
@@ -141,24 +79,12 @@ export function isSessionSecretValid(env: Env): boolean {
 const SESSION_HKDF_INFO = "o11y_session/v1";
 const LOGIN_HKDF_INFO = "o11y_login/v1";
 
-/** One derived `CryptoKey` per (env, purpose) pair, cached for the isolate's
- *  lifetime — HKDF-SHA256 with an empty salt (the secret itself is already
- *  high-entropy; HKDF here is purely a domain-separation primitive, not a
- *  password KDF) and `info` = {@link SESSION_HKDF_INFO}/{@link LOGIN_HKDF_INFO}.
- *  Fix round I1: before this, both cookies were signed with the literal
- *  `O11Y_SESSION_SECRET` bytes under the same key, so the review's own
- *  probe — an anonymous `GET /login` — handed any visitor a known-plaintext
- *  HMAC sample signed with the SAME key that guards a session. Deriving
- *  separate keys means a broken or brute-forced login-cookie key no longer
- *  implies the session key is broken too (and vice versa).
- *
- *  Keyed by `env` object identity (a `WeakMap`), never by the secret's own
- *  string value — so nothing here ever has to hold the raw secret as a
- *  cache key in long-lived memory. Throws (via {@link secretBytes}) when
- *  the secret is missing or short; every caller below awaits this inside a
- *  `try`/`catch` (or a caller that has already checked
- *  {@link isSessionSecretValid}), so that failure always resolves to the
- *  same "not authenticated" / 500 outcomes a missing secret always had. */
+/** One derived `CryptoKey` per (env, purpose): HKDF-SHA256, pure domain
+ *  separation (not a password KDF), keyed by
+ *  {@link SESSION_HKDF_INFO}/{@link LOGIN_HKDF_INFO} so a broken login key
+ *  does not imply the session key is broken too. Keyed by `env` identity
+ *  (`WeakMap`), never the secret string, so the raw secret is never held
+ *  as a cache key. Throws when the secret is missing or short. */
 const derivedKeyCache = new WeakMap<Env, Map<string, Promise<CryptoKey>>>();
 
 function secretBytes(env: Env): Uint8Array {
@@ -208,15 +134,13 @@ export async function _deriveLoginKeyForTests(env: Env): Promise<CryptoKey> {
   return deriveKey(env, LOGIN_HKDF_INFO);
 }
 
-/** Every value present for `name` in the `Cookie` header, in header order
- *  (fix round I2: the review's probe found the OLD single-match
- *  `readCookie` resolves `o11y_session=junk; o11y_session=<valid>` to
- *  `null` — the first, attacker-tossed value wins and the real one is never
- *  even tried). `__Host-` already stops a genuinely cross-host toss from
- *  ever being stored, but this is defence in depth for any other source of
- *  a duplicate name (a stale pre-`__Host-` cookie from before this fix, a
- *  proxy that folds headers oddly) — every verify function below tries each
- *  value in turn and accepts the first that verifies. */
+/** Every value present for `name` in the `Cookie` header, in header order.
+ *  A single-match lookup would resolve a duplicate name
+ *  (`o11y_session=junk; o11y_session=<valid>`) to the attacker-tossed first
+ *  value. `__Host-` already stops a cross-host toss from being stored, but
+ *  this is defence in depth for any other source of a duplicate (a proxy
+ *  that folds headers oddly); every verify function below tries each value
+ *  in turn and accepts the first that verifies. */
 function readCookieValues(req: Request, name: string): string[] {
   const raw = req.headers.get("cookie");
   if (!raw) return [];
@@ -242,8 +166,8 @@ function clearCookieHeader(name: string): string {
 
 // ---- session cookie ---------------------------------------------------
 
-/** `ttlSeconds` is the caller's decision (I3: `grafana/login.ts#handleSession`
- *  computes it via {@link computeSessionTtlSeconds}) — this function has no
+/** `ttlSeconds` is the caller's decision (`grafana/login.ts#handleSession`
+ *  computes it via {@link computeSessionTtlSeconds}); this function has no
  *  default of its own, so the cap cannot be silently bypassed by a call site
  *  that forgets to pass one. */
 export async function signSessionCookie(env: Env, email: string, ttlSeconds: number): Promise<string> {
@@ -265,16 +189,13 @@ export function sessionClearCookieHeader(): string {
 }
 
 /**
- * I3: the session TTL is `min(now + 12h, brokerExpSeconds)`, never a flat
- * 12h — `grafana/login.ts#handleSession` is the only caller, right after
- * `gates/broker.ts#resolveBrokerIdentity` has returned an identity (i.e.
- * the broker has already accepted the token; `brokerExpSeconds` is read
- * from that SAME token's own payload, never trusted as a signature-checked
- * value in its own right — see that function's doc comment). A missing,
- * unparseable, or already-past `exp` falls back to
- * {@link SESSION_FALLBACK_TTL_SECONDS} (1h) rather than the 12h ceiling —
- * treating "we can't read how long this token is good for" the same as "not
- * very long" is the conservative direction to err in.
+ * `min(now + 12h, brokerExpSeconds)`, never a flat 12h.
+ * `grafana/login.ts#handleSession` is the only caller, right after
+ * `gates/broker.ts#resolveBrokerIdentity` has accepted the token;
+ * `brokerExpSeconds` is read from that same token's own payload, never
+ * re-verified here. A missing, unparseable or already-past `exp` falls back
+ * to {@link SESSION_FALLBACK_TTL_SECONDS} (1h) rather than the 12h ceiling
+ * — the conservative direction to err in.
  */
 export function computeSessionTtlSeconds(
   brokerExpSeconds: number | null,
@@ -290,12 +211,10 @@ export function computeSessionTtlSeconds(
  * Verifies the `__Host-o11y_session` cookie's HMAC signature, expiry,
  * audience and claims, returning the identity it carries or `null`.
  *
- * `DEV_ADMIN` is honoured **only** when `O11Y_ENV === "local"` — fail-closed
- * the same way `verifyAccess` documented it: a production deploy's
- * `O11Y_ENV` always comes from `wrangler.jsonc`'s committed `vars` block
- * (never a secret), so `DEV_ADMIN` being accidentally set in production
- * still could not bypass the session check, because the environment check
- * comes first.
+ * `DEV_ADMIN` is honoured **only** when `O11Y_ENV === "local"`, fail-closed:
+ * a production deploy's `O11Y_ENV` always comes from `wrangler.jsonc`'s
+ * committed `vars` (never a secret), so an accidental `DEV_ADMIN` in
+ * production still could not bypass the session check.
  */
 export async function verifySession(req: Request, env: Env): Promise<SessionIdentity | null> {
   if (env.O11Y_ENV === "local" && env.DEV_ADMIN) {
@@ -309,18 +228,16 @@ export async function verifySession(req: Request, env: Env): Promise<SessionIden
   try {
     key = await deriveKey(env, SESSION_HKDF_INFO);
   } catch {
-    // Missing or too-short secret — treated identically to "not
-    // authenticated" (I1: fail closed exactly like a missing secret did).
+    // Missing or too-short secret — treated identically to "not authenticated".
     return null;
   }
 
   for (const token of tokens) {
     try {
-      // M2: `exp`/`iat` are now REQUIRED (a token with no `exp` used to
-      // verify forever — `jwtVerify` only checks `exp` when present), and
-      // `audience` binds the token to the environment it was minted in, so
-      // a cookie signed by `wrangler dev` cannot be replayed in production
-      // even under a shared secret value.
+      // `exp`/`iat` are required (`jwtVerify` only checks `exp` when
+      // present), and `audience` binds the token to the environment it was
+      // minted in, so a cookie signed by `wrangler dev` cannot be replayed
+      // in production even under a shared secret value.
       const { payload } = await jwtVerify(token, key, {
         algorithms: ["HS256"],
         audience: publicOrigin(env),
@@ -364,16 +281,12 @@ export function loginClearCookieHeader(): string {
 }
 
 /** Verifies the `__Host-o11y_login` cookie the same way {@link verifySession}
- *  verifies the session cookie — signature, expiry, audience, `typ`, every
- *  duplicate value tried in turn — and returns the nonce/`next` it carries,
- *  or `null`. This is the login-CSRF/fixation binding:
+ *  verifies the session cookie, and returns the nonce/`next` it carries, or
+ *  `null`. This is the login-CSRF/fixation binding:
  *  `grafana/login.ts#handleSession` requires the body's `n` to equal this
- *  cookie's `nonce` before ever calling the broker, and — as important —
- *  requires this cookie to be PRESENT at all: a request with no
- *  `__Host-o11y_login` cookie returns `null` here, which
- *  `handleSession` must treat as a hard refusal (fix round M7: the review
- *  found no test exercised "no login cookie at all", the real shape a
- *  login-CSRF attack takes, only a mismatched-nonce case). */
+ *  cookie's `nonce`, and requires the cookie to be PRESENT at all — a
+ *  missing `__Host-o11y_login` cookie must be a hard refusal, not just a
+ *  mismatched-nonce case. */
 export async function verifyLoginCookie(req: Request, env: Env): Promise<LoginState | null> {
   const tokens = readCookieValues(req, LOGIN_COOKIE);
   if (tokens.length === 0) return null;
@@ -418,24 +331,18 @@ const RESERVED_PREFIX = "/grafana/_o11y/";
 const DEFAULT_NEXT = "/grafana/";
 
 /**
- * Only a same-origin path under `/grafana/`, never under the reserved
+ * Only a same-origin path under `/grafana/`, never the reserved
  * `/grafana/_o11y/` namespace (the login machinery's own routes). Anything
  * else falls back to `/grafana/`. `next` never reaches the broker (it rides
- * only inside the signed `o11y_login` cookie), so the broker round trip
- * cannot influence this value at all — this validator is the only defense,
- * and it runs on both the mint side (`handleLogin`) and read side
- * (`handleSession`, defence in depth against a cookie forged some other
- * way).
+ * only inside the signed `o11y_login` cookie), so this validator is the
+ * only defense, on both the mint side (`handleLogin`) and read side
+ * (`handleSession`).
  *
- * Fix round M1 (security review): the OLD version was a string-prefix test,
- * not a URL parse — `raw` beginning `/grafana/` was accepted verbatim, so
- * `/grafana/../api/admin` and the WHATWG-decoded `/grafana/%2e%2e/api/admin`
- * both passed (the leading literal matched) and then resolved OUTSIDE
- * `/grafana/` once a browser's `location.replace` normalized the dot
- * segments. Parsing with `new URL(raw, publicOrigin(env))` first and
- * re-deriving the check from the NORMALIZED `pathname` closes that: the
- * browser's own path-normalization runs here, server-side, before the
- * `/grafana/`-prefix check, instead of after it on the client.
+ * Parses with `new URL(raw, publicOrigin(env))` and re-derives the check
+ * from the normalized `pathname`, rather than a string-prefix test:
+ * `/grafana/../api/admin` and `/grafana/%2e%2e/api/admin` both pass a
+ * prefix test yet resolve outside `/grafana/` once a browser normalizes the
+ * dot segments — normalizing here, server-side, closes that gap.
  */
 export function sanitizeNext(raw: string | null | undefined, env: Env): string {
   if (!raw) return DEFAULT_NEXT;

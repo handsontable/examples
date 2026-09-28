@@ -1,12 +1,9 @@
 // One place to (a) pick the Analytics Engine sink (real binding in
 // production, the local ClickHouse shim in `O11Y_ENV === "local"`, per
 // contract §10 — "No local emulation" for the real binding) and (b) fill in
-// the eight §3 resource attributes every stored record must carry (T02-D, see
-// the task Outcome: the contract's exit criterion 15 needs every key present,
-// but several sources — a Cloudflare export line, a deploy event, a Sentry
-// webhook — have no natural value for `hot.tier`/`hot.framework`/
-// `hot.ht_major`/`hot.outcome`, and the contract itself never says what a
-// worker-origin record's `hot.surface` should default to).
+// the eight §3 resource attributes every stored record must carry
+// (ADR-0041 §L.15 needs every key present; several sources have no natural
+// value for `hot.tier`/`hot.framework`/`hot.ht_major`/`hot.outcome`).
 
 import {
   ATTR_DEPLOYMENT_ENVIRONMENT_NAME,
@@ -37,23 +34,15 @@ const SURFACE_BY_SERVICE_NAME: Readonly<Record<string, string>> = {
 };
 
 /**
- * Fills every §3 resource-attribute key `mutable` does not already carry with
- * a default, in place, and returns it. `"none"` for `hot.tier`/
- * `hot.framework`/`hot.ht_major` (all three list `"none"` as a real contract
- * value); `"none"` for `hot.outcome` too — `Outcome` has no closed set at the
- * OTLP-record level (only `toAePoint`'s per-metric check constrains it), so a
- * worker log line with no natural outcome carries a syntactically valid
- * placeholder rather than an absent label. `deployment.environment.name`
- * falls back to `env.O11Y_ENV`; `hot.surface` falls back to the
+ * Fills every §3 resource-attribute key `mutable` does not already carry
+ * with a default, in place, and returns it. `"none"` for
+ * `hot.tier`/`hot.framework`/`hot.ht_major`/`hot.outcome` (all four list
+ * `"none"` as a real contract value). `deployment.environment.name` falls
+ * back to `env.O11Y_ENV`; `hot.surface` falls back to the
  * `service.name`-keyed table above. `service.version` falls back to
- * `"unknown"` — a real finding, not a defensive guess (T02-D, see the task
- * Outcome, sandbox probe re-run): a real Cloudflare automatic invocation-log
- * export carries `service.name` (the deployed script name) but **never**
- * `service.version` at all — Cloudflare has no way to know an application's
- * own `SERVICE_VERSION` var — so every worker-origin record that reaches
- * this function through `otlp.ts` would otherwise store an empty
- * `service.version`, even though every metric registry row implicitly
- * expects it filled (T00-D2: blob1–3 are universal on every record).
+ * `"unknown"`: a real Cloudflare invocation-log export carries
+ * `service.name` but never `service.version`, so a worker-origin record
+ * would otherwise store it empty though every metric row expects it filled.
  */
 export function withResourceAttrDefaults(
   mutable: Record<string, string>,
@@ -69,33 +58,23 @@ export function withResourceAttrDefaults(
   return mutable;
 }
 
-// T02-D (see the task Outcome): keyed by the `env` object itself
-// (`WeakMap`), not by `O11Y_ENV`'s string value — a first version cached by
-// value alone, which is harmless in production (one Worker isolate's `env`
-// binding is stable across the requests it serves) but silently made every
-// test in one `node --test` process share a *single* fake `RUNNER_EVENTS`
-// sink across every distinct `env` fixture with the same `O11Y_ENV`
-// ("production"), so a later test's assertions read points an earlier
-// test's request actually wrote. Caught by `o11y-routes.test.mjs`'s exit
-// criterion 4 test failing for the wrong reason (a real duplicate point
-// existed, just in a different test's sink) until this fix.
+// Keyed by the `env` object itself (`WeakMap`), not by `O11Y_ENV`'s string
+// value: caching by value alone is harmless in production (one isolate's
+// `env` binding is stable) but would make every test in one `node --test`
+// process share a single fake `RUNNER_EVENTS` sink across every `env`
+// fixture with the same `O11Y_ENV`, so a later test's assertions could
+// read points an earlier test's request actually wrote.
 const sinkByEnv = new WeakMap<Env, AeSink>();
 
-/** Production: `bindingSink(env.RUNNER_EVENTS)`. Local (`O11Y_ENV ===
- *  "local"`): `clickhouseSink` against `env.RUNNER_EVENTS_CLICKHOUSE_URL`,
- *  falling back to `http://localhost:8123` when unset — the same var and the
- *  same default `alerts/ae-query.ts#runAnalyticsEngineSqlApi` already reads
- *  for the QUERY side (T04-D). Found live (T11's own required local
- *  walkthrough, not by reading source): this WRITE side hardcoded
- *  `http://localhost:8123` unconditionally, so a local ClickHouse on any
- *  other port silently received zero browser-metric points while alert
- *  queries against `RUNNER_EVENTS_CLICKHOUSE_URL` read an empty table —
- *  T04's own tests never caught it because they inject `queryFn` directly
- *  and never exercise `aeSink` itself. `AE_SQL_TOKEN` doubles as the
- *  ClickHouse password, matching `containers/o11y/compose.yml`'s
- *  `CLICKHOUSE_PASSWORD` default — T01's convention, `sink.ts`'s own doc
- *  comment. Cached per `env` object (cheap, and `clickhouseSink` holds no
- *  connection state to go stale). */
+/** Production: `bindingSink(env.RUNNER_EVENTS)`. Local: `clickhouseSink`
+ *  against `env.RUNNER_EVENTS_CLICKHOUSE_URL`, falling back to
+ *  `http://localhost:8123` — the same var/default
+ *  `alerts/ae-query.ts#runAnalyticsEngineSqlApi` reads for the QUERY side.
+ *  The write and query sides must agree, or a local ClickHouse on a
+ *  non-default port silently receives zero points while alert queries read
+ *  an empty table. `AE_SQL_TOKEN` doubles as the ClickHouse password
+ *  (`containers/o11y/compose.yml`'s `CLICKHOUSE_PASSWORD`). Cached per
+ *  `env` object (cheap; `clickhouseSink` holds no connection state). */
 export function aeSink(env: Env): AeSink {
   const cached = sinkByEnv.get(env);
   if (cached) return cached;
@@ -110,14 +89,11 @@ export function aeSink(env: Env): AeSink {
   return sink;
 }
 
-/** Fix round (finding A-M1): `aeSink(env).writeDataPoint(point)` was called
- *  directly inside `Promise.resolve(...)`'s argument position — a
- *  SYNCHRONOUS throw from the real binding (an over-limit point, per the
- *  finding) happens before `Promise.resolve` ever runs, so it escapes as an
- *  uncaught exception, not a rejected promise the `.catch` below could
- *  reach. Wrapped in a `try` so both a synchronous throw and an async
- *  rejection land in the same `never throws into the caller` contract this
- *  function's doc comment already promised. */
+/** `aeSink(env).writeDataPoint(point)` can throw SYNCHRONOUSLY from the
+ *  real binding (an over-limit point) before any `.then`/`.catch` can run,
+ *  so it's wrapped in a `try` alongside the async-rejection `.catch` below
+ *  — both must land in the same "never throws into the caller" contract
+ *  this function's doc comment promises. */
 function writeDataPointSafely(sink: AeSink, point: AePoint): Promise<void> {
   try {
     return Promise.resolve(sink.writeDataPoint(point)).catch((err: unknown) => {
@@ -139,16 +115,14 @@ export function writePoint(env: Env, ctx: ExecutionContext, point: AePoint): voi
   ctx.waitUntil(writeDataPointSafely(aeSink(env), point));
 }
 
-/** T03 addition: the same fire-and-forget write, from inside a Durable
- *  Object (`InboxWriter`'s ledger, `GrafanaBox`'s wake/drain orchestration)
- *  rather than a route handler — a DO method never has an `ExecutionContext`
- *  (`env`/`ctx` are only handed to a `fetch`/`scheduled` export), but
- *  `DurableObjectState` (`this.ctx` in any DO) has its own `waitUntil` with
- *  the identical fire-and-forget contract. Kept as a second, explicitly
- *  narrower-typed function rather than widening {@link writePoint}'s `ctx`
- *  parameter to a structural union: `ExecutionContext` also declares
- *  `passThroughOnException`/`tracing`/`abort`, which `DurableObjectState`
- *  does not have, so the two are not interchangeable at the type level. */
+/** The same fire-and-forget write, from inside a Durable Object
+ *  (`InboxWriter`'s ledger, `GrafanaBox`'s wake/drain orchestration) rather
+ *  than a route handler — a DO method has no `ExecutionContext`, but
+ *  `DurableObjectState` (`this.ctx`) has its own `waitUntil` with the
+ *  identical contract. Kept as a second, narrower-typed function rather
+ *  than widening {@link writePoint}'s `ctx` to a structural union:
+ *  `ExecutionContext` also declares `passThroughOnException`/`tracing`/
+ *  `abort`, which `DurableObjectState` lacks. */
 export function writePointFromDo(env: Env, ctx: DurableObjectState, point: AePoint): void {
   ctx.waitUntil(writeDataPointSafely(aeSink(env), point));
 }

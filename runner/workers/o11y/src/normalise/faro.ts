@@ -1,15 +1,9 @@
 // ADR §B.2 step 1 (Faro half) + §6's item → Analytics Engine / inbox table.
-// T00-D6's order for Faro: `scrubTelemetry(item)` → `faroItemToRecord(scrubbedItem, …)`.
-//
-// T02-D — unpacking the wire body (see the task Outcome): `@grafana/faro-web-sdk`'s
-// real transport posts a `TransportBody` — one shared `meta` plus separate
-// arrays (`exceptions`, `logs`, `measurements`, `events`, `traces`) — not an
-// array of self-contained items the way `ScrubbableFaroItem` (and this
-// contract's item-shaped functions) assume. This module is what reconstructs
-// `{type, payload, meta}` items from that body before anything else runs.
-// `traces` is never unpacked (ADR §C.4: no trace is ever exported) — any
-// item under that key is counted as a dropped, invalid item, not silently
-// ignored.
+// Order: `scrubTelemetry(item)` → `faroItemToRecord(scrubbedItem, …)`.
+// Faro's transport posts a `TransportBody` (one shared `meta` plus separate
+// `exceptions`/`logs`/`measurements`/`events`/`traces` arrays), not an array
+// of items; this module reconstructs `{type, payload, meta}` items from it.
+// `traces` is never unpacked (ADR §C.4): any item there is invalid.
 
 import {
   ATTR_HOT_DEMO_ID,
@@ -41,15 +35,11 @@ import { hashRecord } from "./hash.js";
 import { withResourceAttrDefaults } from "./points.js";
 import { scrubAttributeValues, scrubBodyText } from "./text-scrub.js";
 
-/** Fix round (finding A-I4): a real Faro `TransportBody` batch is bounded
- *  (the SDK's own batch limit is 50 items); nothing enforced any bound
- *  server-side before this, so an unauthenticated client could inflate one
- *  request's Analytics Engine points and DO dedupe-check load arbitrarily —
- *  measured at ~16.7k items in one 1 MB body. Generous headroom over the
- *  SDK's own limit, not a tight fit to it. `handleCollect` (`index.ts`)
- *  rejects the whole request above this, the same way it already rejects
- *  an oversized body — a partially-processed giant batch is not a
- *  meaningfully safer middle ground than rejecting it outright. */
+/** Bounds a Faro `TransportBody` batch, generous headroom over the SDK's
+ *  own limit (50 items) — an unbounded batch let a client inflate AE
+ *  points/dedupe load (measured ~16.7k items in one 1 MB body).
+ *  `handleCollect` rejects the whole request above this, like an oversized
+ *  body. */
 export const MAX_FARO_ITEMS_PER_BODY = 200;
 
 /** Total item count across every unpacked kind (`traces` included, since a
@@ -82,29 +72,16 @@ const LITE_VITAL_KEYS: Readonly<Record<string, string>> = {
 };
 
 /**
- * Controller handoff (defence in depth for finding D-I2's server-side half,
- * "not fixed / handed off" by the final review): F3 applied the shared noise gates
- * to Faro's browser-side `beforeSend`
- * (`apps/authoring/src/eventGate.ts#isUnhandledNoise`/`isOfficeScannerRejection`),
- * which already closes the failure scenario the finding names for a normal
- * client. This is the server-side backstop for a client that skips or
- * bypasses that gate — the same two message/type-shaped rules, re-checked
- * here on the scrubbed item before it can mint an `error.uncaught` point or
- * an `fp:` registry entry.
- *
- * Deliberately duplicated, not imported: `apps/authoring` and `workers/o11y`
- * are separate pnpm workspace packages with no dependency between them (the
- * shared code both surfaces import from is `@handsontable/demo-runtime`,
- * `packages/runtime`, not `apps/authoring/src`), so a cross-package source
- * import would not resolve. Keep these two lists in sync with
- * `eventGate.ts#UNHANDLED_NOISE`/`INJECTED_SCANNER_MESSAGES` by hand.
- *
- * Not reimplemented here: `isForeignUnhandled` (needs the request's own
- * origin plus per-frame URLs, a browser-side concept with no clean
- * server-side analogue once frames are already rendered into `record.body`
- * text) and `isEdgelessForeignSessionStart` (reads Sentry-only session tags
- * this ingest path never receives). Both stay browser-gate-only, same as
- * F3's own scope decision for D-I2.
+ * Server-side backstop for a client that skips or bypasses the shared
+ * noise gates that already run in Faro's `beforeSend`
+ * (`apps/authoring/src/eventGate.ts#isUnhandledNoise`/`isOfficeScannerRejection`) —
+ * re-checked here before an item can mint an `error.uncaught` point or an
+ * `fp:` registry entry. Deliberately duplicated, not imported (`apps/authoring`
+ * and `workers/o11y` are separate packages with no dependency between them):
+ * keep in sync with `eventGate.ts#UNHANDLED_NOISE`/`INJECTED_SCANNER_MESSAGES`
+ * by hand. `isForeignUnhandled`/`isEdgelessForeignSessionStart` stay
+ * browser-gate-only: both need browser-only context (per-frame URLs,
+ * Sentry-only session tags) this ingest path never receives.
  */
 const SERVER_SIDE_UNHANDLED_NOISE: readonly RegExp[] = [
   /^ResizeObserver loop/i,
@@ -127,24 +104,15 @@ function isServerSideNoiseException(value: string | undefined, type: string | un
 }
 
 export interface ProcessedFaroItem {
-  /** Absent for a console-dropped item, an unrecoverable item (a bad
-   *  `item.type`/`toAePoint` input, T00-D10), or an oversize record.
-   *  Fix round (A-I4 remainder, closed second wave): an `example.*` event
-   *  now ALSO carries an `ingestItem` — a hash-only one, `record` absent —
-   *  purely so `InboxWriter.ingest`'s own dedupe transaction covers it too;
-   *  §6's "AE points only, never stored" is unchanged, since
-   *  `InboxWriter.ingest`/`appendRows` skip a `record`-less item entirely. */
+  /** Absent for a console-dropped, unrecoverable or oversize item. An
+   *  `example.*` event also carries a hash-only `ingestItem` (`record`
+   *  absent) so `InboxWriter.ingest`'s dedupe transaction covers it too,
+   *  without storing anything (§6). */
   ingestItem?: IngestItem;
-  /** Fix round (finding A-I4): when {@link ingestItem} is set, the caller
-   *  (`index.ts#handleCollect`) must write these points only for a hash
-   *  `InboxWriter.ingest` reports as `"accepted"`, never `"duplicate"` — a
-   *  retried/redelivered batch must not double-count `error.uncaught`,
-   *  `error.handled`, any browser metric point, or (A-I4 remainder) an
-   *  `example.*` analytics counter, the way a stored log record already
-   *  avoids double-storage. When {@link ingestItem} is absent (an item that
-   *  never reached even hash-only ingest, e.g. an oversize/unrecoverable
-   *  one), these points have no hash to gate on and are written
-   *  unconditionally. */
+  /** When {@link ingestItem} is set, write these only for a hash
+   *  `InboxWriter.ingest` reports `"accepted"`, never `"duplicate"` — a
+   *  retried batch must not double-count a point. When absent, these have
+   *  no hash to gate on and are written unconditionally. */
   aePoints: AePoint[];
   /** Set when this item could not be converted/validated at all — the caller
    *  writes one `invalid_item` `o11y.ingest` point and moves on (never a
@@ -153,11 +121,8 @@ export interface ProcessedFaroItem {
   invalid?: string;
   /** Set when the built record alone (well-formed, otherwise storable)
    *  exceeds `INBOX_RECORD_MAX_BYTES` (ADR §B.2 step 1, "drop records over
-   *  256 KB") — fix round I2: the OTLP path already had this check
-   *  (`otlp.ts`'s `droppedOversize`); the Faro path did not, even though
-   *  `pack.ts`'s row-chunking assumes normalise already enforces the cap.
-   *  Distinct from `invalid` so the caller writes a `reason: "size"` point
-   *  (I3), not `reason: "invalid_item"`. */
+   *  256 KB"). Distinct from `invalid` so the caller writes a
+   *  `reason: "size"` point, not `reason: "invalid_item"`. */
   oversize?: boolean;
 }
 
@@ -240,36 +205,17 @@ function processExampleEvent(
   ];
 }
 
-/** Fix round (findings A-C2, D-I3): picks the fingerprint a client offered,
- *  validated, or falls back to computing it server-side.
- *
- * - `wireFingerprint` is Faro's own `payload.fingerprint` (the browser
- *   facade's `contractFingerprint(context, message)`, §7's exact shape,
- *   never over the stack) — preferred, since it is the one value that
- *   actually distinguishes two call sites reporting the same message
- *   (D-I3: `computeFingerprint` below only ever sees `hot.surface`, not the
- *   call site).
- * - `aeOnlyFingerprint` (`context["hot.fingerprint"]`) is the fallback a
- *   caller may already be sending; same validation.
- * - Neither trusted verbatim (A-C2): a value that does not match §7's
- *   `<context>:<16 hex>` shape is discarded — an attacker cannot inject
- *   arbitrary text into the exact first-seen registry or, from there, an
- *   unescaped Slack line this way.
- * - `fallbackMessage` (fix round, finding D-I3 remainder, second wave) is
- *   the LAST resort, used only when NEITHER of the above is present — this
- *   is exactly the raw `window.onerror`/`unhandledrejection`/render-crash
- *   path (`ErrorsInstrumentation`, `reportUncaughtError`), since every
- *   explicit, on-purpose `Telemetry.error()` call already sets
- *   `payload.fingerprint` (`apps/authoring/src/telemetry/faro.ts`'s
- *   `buildFacade().error`). It must be the contract-normalised `type: value`
- *   head ONLY (see `exceptionFingerprintMessage` at the call site below) —
- *   never `record.body`, which also carries the rendered stack-frame lines
- *   (`convert.ts#faroBody`'s exception branch). A minified production
- *   bundle's chunk hash and line:col shift on every deploy even when the
- *   thrown error is identical, so hashing the stack churned a genuinely
- *   recurring defect into a fresh `fp:` entry (and Slack "new fingerprint"
- *   post) on every single release — the D-I3 failure this closes.
- */
+/** Picks the fingerprint a client offered, validated, or falls back to
+ *  computing it server-side. `wireFingerprint` (Faro's `payload.fingerprint`,
+ *  §7's exact shape) is preferred, since it distinguishes two call sites
+ *  reporting the same message; `aeOnlyFingerprint` (`context["hot.fingerprint"]`)
+ *  is the next fallback. Neither is trusted verbatim: a value not matching
+ *  §7's `<context>:<16 hex>` shape is discarded. `fallbackMessage` is the
+ *  last resort (the raw `window.onerror`/`unhandledrejection` path); it must
+ *  be the `type: value` head only (`exceptionFingerprintMessage`), never
+ *  `record.body`'s stack lines — a minified bundle's chunk hash shifts every
+ *  deploy even for an identical error, so hashing the stack would turn a
+ *  recurring defect into a fresh `fp:` entry on every release. */
 function resolveFingerprint(
   wireFingerprint: string | undefined,
   aeOnlyFingerprint: string | undefined,
@@ -283,11 +229,8 @@ function resolveFingerprint(
 
 /** The `type: value` head of a Faro exception payload, with NO stack —
  *  deliberately mirrors `convert.ts#faroBody`'s own exception-head
- *  construction (that function is outside this task's file ownership;
- *  duplicated here rather than touched there — see this module's own doc
- *  comment style for the same tradeoff elsewhere, e.g.
- *  `SERVER_SIDE_UNHANDLED_NOISE`'s hand-copy of `eventGate.ts`'s lists).
- *  `pipeline/telemetry-contract.test.mjs`/`o11y-normalise.test.mjs` pin this
+ *  construction (duplicated here rather than imported, same tradeoff as
+ *  `SERVER_SIDE_UNHANDLED_NOISE` above). `o11y-normalise.test.mjs` pins this
  *  shape directly, so a future drift between the two shows up as a failing
  *  test, not a silent mismatch. */
 function exceptionFingerprintMessage(payload: { type?: string; value?: string }): string {
@@ -295,28 +238,14 @@ function exceptionFingerprintMessage(payload: { type?: string; value?: string })
   return payload.type ? `${payload.type}: ${value}` : value;
 }
 
-/** QA follow-up ("Faro dedupe hash inputs"): inputs that can change what
- *  this item produces (an AE point, an alert) but never make it into
- *  `hashRecord`'s ordinary `body`/`attributes` fields — see
- *  `hash.ts#PreHashRecord.extra`'s own doc comment for why each one is
- *  missing there.
- *
- *  - `type`: the raw Faro payload `type` (e.g. a measurement's own metric
- *    name, `"web-vitals"` vs. a browser `MetricName` — `faroBody()`'s
- *    measurement case stringifies only `values`, never `type`, so two
- *    DIFFERENT measurements with the same `values` in the same millisecond
- *    hashed identically before this).
- *  - `aeOnly`: the `hot.*` AE-only attributes (`hot.reason`, `hot.bucket`,
- *    …) — read from the item's raw context but never hoisted into a stored
- *    record's `attributes` (`browser-attrs.ts`'s own doc comment), so two
- *    items differing only in one of these collapsed to the same hash.
- *  - `sessionId`: Faro's `meta.session.id` (§6/§3: "the facade sets
- *    `session.id` = the page-load id on every item") — set as a Faro META
- *    field (`faro.metas.add`), never copied into an item's own
- *    `context`/`attributes`, so `faroItemToRecord` never sees it and it
- *    never reached the hash at all. Read from the RAW `meta` parameter
- *    (before `ScrubbableFaroItem`'s narrower, untyped-for-`session` shape),
- *    since that is the one place this value actually exists on the wire. */
+/** Inputs that can change this item's output (an AE point, an alert) but
+ *  never reach `hashRecord`'s `body`/`attributes` (`hash.ts#PreHashRecord.extra`).
+ *  - `type`: `faroBody()`'s measurement case stringifies only `values`, so
+ *    two different measurements with the same `values` would hash the same.
+ *  - `aeOnly`: `hot.*` AE-only attributes never reach a stored record's
+ *    `attributes` (`browser-attrs.ts`), so they'd otherwise be invisible here.
+ *  - `sessionId`: a Faro META field, never copied into `context`/`attributes`,
+ *    so `faroItemToRecord` never sees it; read from the raw `meta` param. */
 function hashExtra(
   payload: Record<string, unknown>,
   aeOnly: ReturnType<typeof readAeOnlyAttrs>,
@@ -351,10 +280,10 @@ function processException(
   return { points: [point], fingerprint: feedsNewFingerprintAlert(surface) ? fp : undefined };
 }
 
-/** Unpacks a Faro `TransportBody`, scrubs/converts/validates every item
- *  (T00-D6, T00-D10), and returns one {@link ProcessedFaroItem} per item,
- *  each with its `IngestItem.hash` already computed (ADR §B.2 step 2) — the
- *  route handler hashes nothing itself. */
+/** Unpacks a Faro `TransportBody`, scrubs/converts/validates every item,
+ *  and returns one {@link ProcessedFaroItem} per item, each with its
+ *  `IngestItem.hash` already computed (ADR §B.2 step 2) — the route
+ *  handler hashes nothing itself. */
 export async function processFaroBody(
   body: unknown,
   env: Env,
@@ -391,11 +320,9 @@ async function processOneItem(
   service: ServiceIdentity,
   receivedAtMs: number,
 ): Promise<ProcessedFaroItem> {
-  // Fix round (finding A-M1): an untrusted client can put a `null`/
-  // non-object entry inside a Faro batch array (`{"logs":[null]}` is valid
-  // JSON) — the destructure below (`payload["context"]`) threw a
-  // `TypeError` on that shape, escaping as an uncaught `500`. Caught as an
-  // ordinary invalid item instead, the same as any other malformed one.
+  // An untrusted client can put a `null`/non-object entry inside a Faro
+  // batch array (`{"logs":[null]}` is valid JSON); guard against that
+  // shape here rather than letting the destructure below throw.
   if (typeof payload !== "object" || payload === null) {
     return { aePoints: [], invalid: "item is not an object" };
   }
@@ -406,12 +333,11 @@ async function processOneItem(
   };
   const aeOnly = readAeOnlyAttrs(rawContext);
   const handled = rawContext["handled"] === "true";
-  // Fix round (finding D-I3): Faro's own `pushError({ fingerprint })` option
-  // lands in `payload.fingerprint`, a sibling of `context`/`attributes`, not
-  // inside either — `readAeOnlyAttrs` (which only reads `context`) never
-  // sees it. Read here, validated together with `aeOnly.fingerprint` in
-  // `resolveFingerprint` (A-C2). Length-capped defensively before that
-  // regex runs against untrusted input.
+  // Faro's own `pushError({ fingerprint })` option lands in
+  // `payload.fingerprint`, a sibling of `context`/`attributes`, not inside
+  // either — `readAeOnlyAttrs` (which only reads `context`) never sees it.
+  // Length-capped defensively before the validation regex in
+  // `resolveFingerprint` runs against untrusted input.
   const rawWireFingerprint = payload["fingerprint"];
   const wireFingerprint =
     typeof rawWireFingerprint === "string" && rawWireFingerprint.length <= 128 ? rawWireFingerprint : undefined;
@@ -421,18 +347,15 @@ async function processOneItem(
   try {
     scrubbed = scrubTelemetry(item);
   } catch (err) {
-    // Fix round (finding A-M1): `scrubTelemetry` itself can throw on a
-    // malformed nested shape (the stacktrace-frame case is now fixed at
-    // the root in `scrub.ts`, but this per-item boundary stays as the
-    // "never a 500" backstop for whatever shape is discovered next).
+    // `scrubTelemetry` itself can throw on a malformed nested shape; this
+    // per-item boundary is the "never a 500" backstop for that.
     return { aePoints: [], invalid: err instanceof Error ? err.message : String(err) };
   }
   if (scrubbed === null) return { aePoints: [] }; // console item, intentionally dropped (§3)
 
-  // Controller handoff (D-I2 server-side backstop, see SERVER_SIDE_UNHANDLED_NOISE's
-  // own doc comment): dropped exactly like a console item — no stored
-  // record, no AE point, no fingerprint — the same thing Sentry/Faro's own
-  // `beforeSend` returning `null` would have done browser-side.
+  // Dropped exactly like a console item (see SERVER_SIDE_UNHANDLED_NOISE
+  // above): no stored record, no AE point, no fingerprint — the same thing
+  // Sentry/Faro's own `beforeSend` returning `null` does browser-side.
   if (
     type === "exception" &&
     isServerSideNoiseException(scrubbed.payload.value, scrubbed.payload.type, handled)
@@ -446,43 +369,37 @@ async function processOneItem(
   } catch (err) {
     return { aePoints: [], invalid: err instanceof Error ? err.message : String(err) };
   }
-  // T02-D — snapshot *before* filling §3 resource-attribute defaults (see
-  // the task Outcome): `toAePoint` throws when `outcome`/`reason` is set for
-  // a metric whose §5 row has no such slot (a caller-bug guard). Once
-  // `withResourceAttrDefaults` fills `hot.outcome = "none"` for the *stored*
-  // record (needed for exit criterion 15's "every label populated"), reusing
-  // that same defaulted bag for AE point attrs would set `outcome: "none"`
-  // on every metric — including ones like `example.open` that carry no
-  // outcome slot at all — turning a metric with no client-supplied outcome
-  // into a spurious throw. `clientResourceAttributes` is what every
-  // `browserHotAttrs()` call below reads instead; only the record that gets
-  // stored sees the defaulted bag.
+  // Snapshot before `withResourceAttrDefaults` fills `hot.outcome = "none"`
+  // for the stored record (ADR-0041 §L.15, "every label populated"):
+  // `toAePoint` throws on `outcome`/`reason` for a metric whose §5 row has
+  // no such slot, so reusing the defaulted bag for AE point attrs would
+  // turn a metric like `example.open` into a spurious throw.
+  // `clientResourceAttributes` is what `browserHotAttrs()` reads instead.
   const clientResourceAttributes = { ...record.resourceAttributes };
   withResourceAttrDefaults(record.resourceAttributes, env);
-  // Fix round (finding A-M3): the Faro path ran `scrubTelemetry` only on
-  // the raw item, never on the assembled OTLP record — `stripCodeFrame`
-  // (via `scrubText`) and the attribute allowlist never got a second pass
-  // over fields `faroItemToRecord` itself builds (exception `type`, event
-  // `name`, stack-frame `function` text folded into `body`). Run it again
-  // here, the OTLP-record branch, exactly like `lite.ts`/`otlp.ts` already
+  // `stripCodeFrame` (via `scrubText`) and the attribute allowlist need a
+  // second pass over fields `faroItemToRecord` itself builds (exception
+  // `type`, event `name`, stack-frame `function` text folded into `body`),
+  // which the first `scrubTelemetry` call on the raw item never saw. Run it
+  // again here on the OTLP-record branch, exactly like `lite.ts`/`otlp.ts`
   // do for their own converted records — it never returns `null` for that
   // branch (only a Faro item can be dropped as a console item).
   record = scrubTelemetry(record)!;
-  // T02-D (see the task Outcome, `text-scrub.ts`): `scrubTelemetry` strips
-  // query strings only from discrete URL fields, never from an embedded URL
-  // inside the built body text — this task's own extra pass closes that gap.
+  // `scrubTelemetry` strips query strings only from discrete URL fields,
+  // never from an embedded URL inside the built body text; this closes
+  // that gap.
   record.body = scrubBodyText(record.body);
-  // Fix round (finding A-M3, "also"): an allowlisted attribute/resource-
-  // attribute value only got `redactPreviewHosts` inside `scrubTelemetry` —
-  // a query string or an embedded user-agent in `context`/a diagnostic tag
-  // value survived otherwise. Same extra pass `body` gets, applied to every
-  // attribute value.
+  // An allowlisted attribute/resource-attribute value only gets
+  // `redactPreviewHosts` inside `scrubTelemetry` — a query string or an
+  // embedded user-agent in `context`/a diagnostic tag value would survive
+  // otherwise. Same extra pass `body` gets, applied to every attribute
+  // value.
   record.attributes = scrubAttributeValues(record.attributes);
   record.resourceAttributes = scrubAttributeValues(record.resourceAttributes) ?? record.resourceAttributes;
   const demoId = record.attributes?.[ATTR_HOT_DEMO_ID];
 
-  // Metric extraction (T00-D10: a crafted `outcome`/`reason`/attribute value
-  // throws inside `toAePoint`) is isolated in its own try/catch, deliberately
+  // Metric extraction (a crafted `outcome`/`reason`/attribute value throws
+  // inside `toAePoint`) is isolated in its own try/catch, deliberately
   // separate from record storage below it — a malformed metric attribute
   // must cost only its own point, never the underlying log record, which is
   // already valid at the OTLP level regardless of what the metric extraction
@@ -494,41 +411,28 @@ async function processOneItem(
     if (type === "event") {
       const name = typeof scrubbed.payload.name === "string" ? scrubbed.payload.name : "";
       if (name.startsWith("example.")) {
-        // Set BEFORE calling the extractor (advisor review, this fix round):
-        // the catch block below reads `storeRecord` to decide whether a
-        // throwing extractor should surface as `invalid` (nothing to
-        // salvage) or fall through to still storing the record. Setting the
-        // flag AFTER a call that can itself throw left it at its default
-        // `true` on that path — a crafted `example.*` attribute that made
-        // `processExampleEvent`/`toAePoint` throw would have stored a
-        // record anyway, contradicting §6 ("AE points only, never stored")
-        // and this function's own catch-block comment.
+        // Set BEFORE calling the extractor: the catch block below reads
+        // `storeRecord` to decide whether a throwing extractor should
+        // surface as `invalid` (nothing to salvage) or fall through to
+        // still storing the record. Setting the flag AFTER a call that can
+        // itself throw would leave it at its default `true` on that path —
+        // a crafted `example.*` attribute that made
+        // `processExampleEvent`/`toAePoint` throw would then store a record
+        // anyway, contradicting §6 ("AE points only, never stored").
         storeRecord = false; // §6: example.* events are AE points only, never stored
         aePoints = processExampleEvent(name, clientResourceAttributes, aeOnly, service);
       }
     } else if (type === "measurement") {
-      // R3 F18: a Faro measurement (including a `web-vitals` measurement,
-      // `processMeasurement`'s other branch below — both arrive as Faro item
-      // `type === "measurement"`, never a distinct wire type of their own)
-      // is ~99% of the browser Loki tenant's lines and drained bytes
-      // (R3-triage F18), pollutes the "Recent … errors" panels (no panel
-      // ever parses a measurement's body — no `unwrap`/`json` over
-      // `{"duration_ms":N}` — so it only ever showed as an unlabeled,
-      // message-less line), and no dashboard reads a stored measurement
-      // record at all: the AE point above is the only consumer. ADR §F.1
-      // ("Counts and latencies go to Analytics Engine; Loki holds the
-      // text") already said this; contract §6 is the ruling this fixes.
-      // AE points and the dedupe hashing are unchanged — this only flips
-      // `storeRecord`, reusing the exact hash-only `ingestItem` path
-      // `example.*` events already take above (A-I4 remainder), so a
-      // retried/redelivered batch still cannot double-count the AE point.
+      // A Faro measurement (incl. `web-vitals`, `processMeasurement`'s
+      // other branch below) is ~99% of the browser Loki tenant's lines and
+      // drained bytes, and no dashboard reads a stored measurement record —
+      // the AE point above is the only consumer (ADR §F.1). Reuses the
+      // hash-only `ingestItem` path `example.*` events already take above.
       //
-      // Set BEFORE calling `processMeasurement` (advisor review, this fix
-      // round — same reasoning as the `example.*` branch above): a crafted
-      // `hot.outcome`/`hot.reason` that makes `toAePoint` throw inside
-      // `processMeasurement` (T00-D10) must surface as `invalid`, not fall
-      // through and store a measurement record — that would leave a stored
-      // record with zero AE points, contradicting the §6 "none" ruling.
+      // Set BEFORE calling `processMeasurement`: a crafted
+      // `hot.outcome`/`hot.reason` that makes `toAePoint` throw must
+      // surface as `invalid`, not fall through and store a record with
+      // zero AE points (§6 "none" ruling).
       storeRecord = false;
       aePoints = processMeasurement(payload, clientResourceAttributes, demoId, aeOnly, service);
     } else if (type === "exception") {
@@ -556,18 +460,15 @@ async function processOneItem(
   }
 
   if (!storeRecord) {
-    // A-I4 remainder (rereview.md, closed second wave): an `example.*`
-    // event skipped row storage (§6: AE points only, correct — unchanged
-    // below) but was ALSO skipping `InboxWriter.ingest`'s own hash/dedupe
-    // transaction entirely, so a retried/redelivered batch double-counted
-    // its AE point the same way A-I4's original fix already closed for
-    // every other item type. Reuses the exact hash shape `hashRecord`
-    // computes for a stored record below (same fields, including the raw
-    // client `timestamp` — not the clamped one — so two genuine clicks a
-    // browser reports with distinct timestamps never collapse into one)
-    // purely for dedupe: no `record` is attached, so
-    // `InboxWriter.ingest`/`appendRows` (`inbox/writer.ts`, `inbox/pack.ts`)
-    // skip a `record`-less item entirely — nothing is ever stored for it.
+    // An `example.*` event skips row storage (§6: AE points only) but must
+    // still go through `InboxWriter.ingest`'s hash/dedupe transaction, so a
+    // retried/redelivered batch does not double-count its AE point. Reuses
+    // the exact hash shape `hashRecord` computes for a stored record below
+    // (same fields, including the raw client `timestamp` — not the clamped
+    // one — so two genuine clicks a browser reports with distinct
+    // timestamps never collapse into one) purely for dedupe: no `record` is
+    // attached, so `InboxWriter.ingest`/`appendRows` skip a `record`-less
+    // item entirely — nothing is ever stored for it.
     const hash = await hashRecord({
       body: record.body,
       resourceAttributes: record.resourceAttributes,
@@ -578,11 +479,9 @@ async function processOneItem(
     return { aePoints, ingestItem: { hash } };
   }
 
-  // I2 (fix round, see the task Outcome): the OTLP path already dropped
-  // records over `INBOX_RECORD_MAX_BYTES` before this fix; the Faro path
-  // did not, even though `pack.ts`'s row-chunking (and the contract's own
-  // "records over 256 KB are dropped" rule, §8) assumes normalise already
-  // enforces this everywhere, not just on one ingest path.
+  // `pack.ts`'s row-chunking (and the contract's own "records over 256 KB
+  // are dropped" rule, §8) assumes normalise enforces this on every ingest
+  // path, so the Faro path checks it here the same way the OTLP path does.
   if (new TextEncoder().encode(JSON.stringify(record)).length > INBOX_RECORD_MAX_BYTES) {
     return { aePoints, oversize: true };
   }
