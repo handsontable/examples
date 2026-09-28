@@ -17,6 +17,7 @@ import {
   isValidFingerprint,
   msToUnixNano,
   RESOURCE_ATTRS,
+  sanitizeResourceAttributes,
   scrubTelemetry,
   SERVICE_NAMES,
   type NormalisedRecord,
@@ -234,7 +235,9 @@ async function toIngestItem(
   const merged = remapCloudflareServiceName(
     remapCloudflareKeys({ ...bodyJsonAttrs, ...resourceLogs.resourceAttributes, ...record.attributes }),
   );
-  const { resourceAttributes, attributes } = hoistAttributes(merged);
+  const hoisted = hoistAttributes(merged);
+  const resourceAttributes = sanitizeResourceAttributes(hoisted.resourceAttributes);
+  const attributes = hoisted.attributes;
 
   const scrubbable: ScrubbableOtlpRecord = { body: record.body, attributes, resourceAttributes };
   const scrubbed = scrubTelemetry(scrubbable) as ScrubbableOtlpRecord;

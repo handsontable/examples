@@ -128,9 +128,15 @@ can promote them to labels.
 | `deployment.environment.name` | `production`, `local` | `deployment_environment_name` | `blob3` |
 | `hot.surface` | `authoring`, `share`, `embed`, `d`, `api`, `demo-runtime`, `o11y` | `hot_surface` | `blob4` |
 | `hot.tier` | `1`, `2`, `static`, `none` | `hot_tier` | `blob5` |
-| `hot.framework` | a key of `config/frameworks.json`, a docs-example framework, or `none` | `hot_framework` | `blob6` |
+| `hot.framework` | a key of `config/frameworks.json` (every docs-example framework is one), or `none` | `hot_framework` | `blob6` |
 | `hot.ht_major` | `15`…`19`, `next`, `none` | `hot_ht_major` | `blob7` |
-| `hot.outcome` | per metric, see §5 | `hot_outcome` | `blob8` |
+| `hot.outcome` | per metric, see §5; `none` on a record no metric describes | `hot_outcome` | `blob8` |
+
+Ingest bounds both open labels, since each distinct value is a Loki stream: a
+`hot.framework` outside the list above, or a `hot.outcome` outside the set of the
+item's metric (the measurement type or event name, else `none`), is stored as
+`other`. `packages/runtime/src/telemetry/attrs.ts#KNOWN_FRAMEWORKS` mirrors
+`config/frameworks.json`.
 
 Structured metadata only — never a Loki label, never an Analytics Engine index:
 `hot.demo_id`, `session.id` (an in-memory page-load id), `cf.ray`, `hot.kind` (the Faro item

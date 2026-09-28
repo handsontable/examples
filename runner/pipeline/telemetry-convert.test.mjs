@@ -98,10 +98,10 @@ test("sanitizeResourceAttributes drops an out-of-enum closed-set value, keeps a 
   assert.deepEqual(out, { "hot.surface": "o11y", "hot.ht_major": "18" });
 });
 
-test("sanitizeResourceAttributes drops an over-length/bad-charset open-set value (hot.framework, hot.outcome)", () => {
+test("sanitizeResourceAttributes stores an over-length/bad-charset hot.framework or hot.outcome as \"other\"", () => {
   const tooLong = "F".repeat(3000);
   const out = sanitizeResourceAttributes({ "hot.framework": tooLong, "hot.outcome": "attacker-<script>" });
-  assert.deepEqual(out, {});
+  assert.deepEqual(out, { "hot.framework": "other", "hot.outcome": "other" });
 });
 
 test("isValidOpenAttrValue accepts real framework/outcome shapes, rejects the forged ones from the probe", () => {
@@ -131,15 +131,15 @@ test("faroItemToRecord: the route's service identity always wins over a client-h
   // The route's own identity, never the client's.
   assert.equal(record.resourceAttributes["service.name"], "demos-authoring");
   assert.equal(record.resourceAttributes["deployment.environment.name"], "production");
-  // Out-of-enum / over-length hot.* values are dropped, not stored verbatim.
+  // Out-of-enum / over-length hot.* values never reach the record verbatim.
   assert.equal(record.resourceAttributes["hot.tier"], undefined);
-  assert.equal(record.resourceAttributes["hot.framework"], undefined);
-  assert.equal(record.resourceAttributes["hot.outcome"], undefined);
+  assert.equal(record.resourceAttributes["hot.framework"], "other");
+  assert.equal(record.resourceAttributes["hot.outcome"], "other");
   // A legitimate closed-set value survives untouched.
   assert.equal(record.resourceAttributes["hot.surface"], "o11y");
 });
 
-test("beaconToRecord: an over-length hot.framework (fw) is dropped, not stored verbatim — lite path", () => {
+test("beaconToRecord: an over-length hot.framework (fw) is stored as \"other\", not verbatim — lite path", () => {
   const record = beaconToRecord(
     {
       v: 1,
@@ -155,7 +155,7 @@ test("beaconToRecord: an over-length hot.framework (fw) is dropped, not stored v
     },
     { service: SERVICE, receivedAtMs: RECEIVED_AT_MS },
   );
-  assert.equal(record.resourceAttributes["hot.framework"], undefined);
+  assert.equal(record.resourceAttributes["hot.framework"], "other");
 });
 
 function faroLogItem(overrides = {}) {

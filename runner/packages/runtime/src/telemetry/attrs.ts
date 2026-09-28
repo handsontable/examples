@@ -36,17 +36,48 @@ export type Tier = (typeof TIERS)[number];
 export const HT_MAJORS = ["15", "16", "17", "18", "19", "next", "none"] as const;
 export type HtMajor = (typeof HT_MAJORS)[number];
 
-/** `hot.framework` is an open set by contract — new frameworks land without
- *  a change here. Kept as `string`, never validated against a closed list. */
+/** `hot.framework` on a stored record: the `config/frameworks.json` keys (the
+ *  docs-example frameworks are among them) plus `none`. Ingest replaces any
+ *  other value with {@link OTHER_ATTR_VALUE}; `pipeline/telemetry-contract.test.mjs`
+ *  fails when this list and `frameworks.json` disagree. */
+export const KNOWN_FRAMEWORKS = [
+  "blank",
+  "blank-ts",
+  "blank-react",
+  "example1",
+  "javascript",
+  "typescript",
+  "react",
+  "react-js",
+  "ant-design",
+  "mui",
+  "base-web",
+  "fluent-ui",
+  "vue",
+  "angular",
+  "next.js",
+  "next-shadcn.js",
+  "astro",
+  "nuxt",
+  "remix",
+  "none",
+] as const;
+
 export type Framework = string;
 
-/** `hot.outcome` has no single closed set: allowed values are per metric (§5),
- *  see `metrics.ts`. */
+/** `hot.outcome` allowed values are per metric (§5, `metrics.ts`); a record no
+ *  metric describes (a log, an exception, a plain event) carries only these. */
+export const RECORD_OUTCOMES = ["none"] as const;
+
 export type Outcome = string;
 
-/** Bounds `hot.framework`/`hot.outcome`: open by contract, but not
- *  unbounded — a client cannot hoist a multi-kilobyte value into a Loki
- *  label (ADR §B.4). */
+/** What ingest stores for a `hot.framework`/`hot.outcome` outside its known set:
+ *  both are Loki labels, and each distinct value is a stream (Loki's default
+ *  limit is 5000 per tenant). */
+export const OTHER_ATTR_VALUE = "other";
+
+/** Bounds a client-sent `fw` before it reaches the known-set mapping, so a
+ *  multi-kilobyte value is refused outright (ADR §B.4). */
 export const OPEN_ATTR_VALUE_PATTERN = /^[a-z0-9][a-z0-9._-]{0,47}$/;
 
 export function isValidOpenAttrValue(value: string): boolean {
