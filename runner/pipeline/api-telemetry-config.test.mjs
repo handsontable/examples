@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 // API worker signals, error lines, the Sentry scope switch (ADR-0041 §D,
 // §E.1, §E.3; contract §2). Pins the exact config the ADR names, so a
 // revert of any one value goes red: full-fidelity head sampling with
-// invocation logs off, the sampled 1% trace rate with no destination (no
-// trace is ever exported), the `o11y-logs` export destination, the `*/5`
+// invocation logs off, no export destination yet (`o11y-logs` can only be
+// created after this Worker's first deploy — run-and-deploy.md "First
+// deploy, in order" — and is added back by a follow-up), the sampled 1%
+// trace rate with no destination (no trace is ever exported), the `*/5`
 // observability cron beside the unchanged nightly one, and
 // `SERVICE_VERSION` wired into the deploy script.
 //
@@ -57,13 +59,13 @@ test("stripLineComments does not corrupt a string containing //", () => {
   );
 });
 
-test("observability.logs: full fidelity, invocation logs off, persisted, o11y-logs destination", () => {
+test("observability.logs: full fidelity, invocation logs off, persisted, no export destination yet", () => {
   assert.deepEqual(wrangler.observability.logs, {
     enabled: true,
     head_sampling_rate: 1.0,
     invocation_logs: false,
     persist: true,
-    destinations: ["o11y-logs"],
+    destinations: [],
   });
 });
 

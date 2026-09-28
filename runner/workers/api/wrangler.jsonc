@@ -20,7 +20,10 @@
       "head_sampling_rate": 1.0,
       "invocation_logs": false,
       "persist": true,
-      "destinations": ["o11y-logs"]
+      // Empty until the `o11y-logs` Cloudflare export destination exists — it can
+      // only be created after this Worker's first deploy (run-and-deploy.md "First
+      // deploy, in order"). A follow-up deploy re-adds it once created.
+      "destinations": []
     },
     "traces": { "enabled": true, "head_sampling_rate": 0.01, "persist": true }
   },

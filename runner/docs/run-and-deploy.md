@@ -495,13 +495,21 @@ in [ADR-0038](adr/0038-waf-exception-for-source-code-payloads.md).
 On the `handsontable.com` zone → **Security → WAF → Managed rules → Cloudflare
 Managed Ruleset → Add exception**. Requires *Zone WAF: Edit* on the zone.
 
-- Skip **only** rule `9c8dda9708cc4452ac76e7be7b58420b` (ruleset
-  `efb7b8c949ac4650a09736fc376e9aee`), not the whole ruleset.
+- Skip **only** managed-ruleset rule `9c8dda9708cc4452ac76e7be7b58420b` (in the
+  Cloudflare Managed Ruleset, id `efb7b8c949ac4650a09736fc376e9aee`), not the
+  whole ruleset.
 - Expression:
   `http.host eq "demos.handsontable.com" and starts_with(http.request.uri.path, "/api/")`
 
 Scoped to `/api/*` on purpose: `/d/:id` and `/embed/:id` are the paths that serve
 HTML to a browser, and they stay behind the full ruleset.
+
+"Add exception" creates its own custom rule in the zone's
+`http_request_firewall_managed` entrypoint — the skip/override rule, distinct
+from the managed rule it skips: `97dde65c10e049d5821a7c3643a0382d` ("demos
+runner: source-code payloads trip Script Tag XSS (DEV-2631, ADR-0038)"). "WAF
+exception for `/telemetry/*`" below extends **this** rule, not
+`9c8dda9708cc4452ac76e7be7b58420b`.
 
 Verify — a body the Worker itself would refuse, so `401` proves the request
 arrived and `403` proves the edge ate it:
@@ -817,10 +825,14 @@ npx wrangler secret put LOKI_S3_SECRET_ACCESS_KEY
 
 ### 4. Export destination (`o11y-logs`) + `O11Y_EXPORT_SECRET`
 
-The API worker's own `wrangler.jsonc` already names the destination
-(`observability.logs.destinations: ["o11y-logs"]`) — it does not exist until
-created once, in the dashboard: **Workers & Pages → Observability →
-Telemetry → Add destination**.
+**Do this after the first deploy of both Workers, not before** — creating the
+destination runs a pre-flight `POST` to
+`https://demos.handsontable.com/telemetry/v1/logs`, which answers 405 until the
+o11y worker's `/telemetry/*` routes are actually deployed. `workers/api/wrangler.jsonc`
+ships with `observability.logs.destinations: []` for exactly this reason; a
+follow-up deploy adds `"o11y-logs"` back once the destination exists (see "First
+deploy, in order" below). Create it once, in the dashboard: **Workers & Pages →
+Observability → Telemetry → Add destination**.
 
 - Destination Name: `o11y-logs`
 - Destination Type: **Logs**
@@ -978,14 +990,17 @@ but worth knowing rather than discovering silently).
 
 ### 10. WAF exception for `/telemetry/*`
 
-Extends the same exception "WAF exception for `/api/*` (one-time)" above
-already created, on the same rule (`9c8dda9708cc4452ac76e7be7b58420b`,
-ruleset `efb7b8c949ac4650a09736fc376e9aee`) — Faro payloads
-(`/telemetry/collect`) and the Cloudflare OTLP export
+Extends the exception rule created by "WAF exception for `/api/*` (one-time)"
+above — `97dde65c10e049d5821a7c3643a0382d` ("demos runner: source-code
+payloads trip Script Tag XSS (DEV-2631, ADR-0038)"), in the zone's
+`http_request_firewall_managed` entrypoint. **Not** the managed-ruleset rule it
+skips (`9c8dda9708cc4452ac76e7be7b58420b`, in the Cloudflare Managed Ruleset,
+id `efb7b8c949ac4650a09736fc376e9aee`) — that one is Cloudflare's, read-only.
+Faro payloads (`/telemetry/collect`) and the Cloudflare OTLP export
 (`/telemetry/v1/logs`) both carry arbitrary JSON bodies that can contain a
 `<script` substring (a stack trace frame, a console message) exactly the way
-an authored demo's HTML entry does (ADR-0038). Edit the existing exception's
-expression to:
+an authored demo's HTML entry does (ADR-0038). Edit the existing exception
+rule's expression to:
 
 ```
 http.host eq "demos.handsontable.com" and (starts_with(http.request.uri.path, "/api/") or starts_with(http.request.uri.path, "/telemetry/"))
@@ -1018,6 +1033,22 @@ push) — so from the first merge onward this is handled without a manual step.
 The same order applies to a throwaway sandbox probe of either worker: stand
 up the probe o11y worker (or a stub) before the probe API worker if the
 probe exercises the mutual binding at all.
+
+**The `o11y-logs` export destination follows one deploy later, for the same
+reason.** Creating it also runs a pre-flight `POST` to `/telemetry/v1/logs`,
+which 405s until the o11y worker's routes are live, so it cannot exist before
+either Worker's first deploy:
+
+1. This merge ships the API worker with `observability.logs.destinations: []`
+   — no destination named yet.
+2. Once `master.yml` has deployed both Workers, an operator creates
+   `o11y-logs` in the dashboard ("One-time setup" step 4 above).
+3. A follow-up, one-line PR adds `"destinations": ["o11y-logs"]` back to
+   `workers/api/wrangler.jsonc`; its deploy turns the export on.
+
+Until step 3 lands, the API worker's structured log lines still reach Workers
+Logs (`persist: true`), just not Loki — the worker-tenant Grafana panels
+(§F.2) stay empty until then.
 
 ## Launch plan (ADR-0041 §L)
 
@@ -1067,6 +1098,12 @@ These are carried from the tasks that found them, not newly discovered here:
 - **`smoke`'s job (`master.yml`) has no `/telemetry/*` or `/grafana/*` coverage** — it only
   ever checked `/api/health` and the authoring bundle hash. The post-deploy smoke list below
   is what stands in for that until (if ever) a task adds real `@smoke`-tagged coverage.
+- **Workers Observability pricing terms must be accepted on the account before the
+  first real deploy.** Until they are, the account records only 1% of Workers
+  events instead of the full sample this task assumes, which makes the
+  exported-log volume check (post-deploy smoke item 6, ADR §L criterion 8) read
+  artificially low — a false "under half the allotment" that does not reflect
+  what the account records once the terms are accepted.
 
 ### Post-deploy smoke (run once, right after the first real deploy of all three Workers)
 
