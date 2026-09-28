@@ -305,8 +305,10 @@ collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
   the burst closed) a report is emitted at once;
 - a fingerprint counts once until the next edit or preview mount, and at most 50
   (`DEMO_COLLAPSE_CEILING`) points per page load.
-On Tier 2, where a rebuild outlasts the 2 s window, a superseded rebuild's report can
-land after the burst closed and count on its own. The Sentry side is not behind this collapse; its relay budgets are
+An async report of the previous run (a timer, a rejected promise, a failed request) that
+fires after the next run started can still add one point. On Tier 2, where a rebuild
+outlasts the 2 s window, a superseded rebuild's report can land after the burst closed
+and count on its own. The Sentry side is not behind this collapse; its relay budgets are
 unchanged.
 
 `example.saved` is written by the API worker when an editor Save (`PATCH /api/demos/:id`
