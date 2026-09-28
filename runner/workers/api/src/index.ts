@@ -2085,9 +2085,26 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         // overlong segment makes `get` throw, and a malformed request would then
         // be reported to Sentry as our 500. Ids are what `shortId` mints.
         const payloadId = parts[2]!;
-        if (!/^[a-z0-9]{1,32}$/i.test(payloadId)) return json({ error: "not found" }, 404);
-        const record = await env.CACHE.get(`payload:${payloadId}`, "json");
-        if (!record) return json({ error: "not found" }, 404);
+        // A playground link that cannot boot is recorded here, where every failure is seen
+        // (contract §5); the record's framework is unknown, hence `other`.
+        const bootFailed = () =>
+          ctx.waitUntil(emitPoint(env, "payload.boot", { count: 1 }, { framework: "other", outcome: "error" }));
+        if (!/^[a-z0-9]{1,32}$/i.test(payloadId)) {
+          bootFailed();
+          return json({ error: "not found" }, 404);
+        }
+        let record: unknown;
+        try {
+          record = await env.CACHE.get(`payload:${payloadId}`, "json");
+        } catch (error) {
+          reportDiagnostic(env, error, { context: "payload-load", routeClass: "api/payload/:id", tags: { route: "payload" } });
+          bootFailed();
+          return json({ error: "could not load that project" }, 500);
+        }
+        if (!record) {
+          bootFailed();
+          return json({ error: "not found" }, 404);
+        }
         // Immutable under an unguessable id, so the edge may hold it.
         return cors(cacheableJson(record));
       }

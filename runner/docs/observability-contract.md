@@ -342,10 +342,16 @@ stay `5xx`.
 StrictMode runs the share page's load effect twice, so one `/share/<id>` view gives 2
 points. A production build gives 1 (measured on `vite preview`).
 
-`payload.boot` is emitted only at `POST /api/payload`, the Theme
-Builder hand-off — never at the actual playground boot, `GET /api/payload/:id`. A
-`?payload=<bad-id>` failure on that boot is recorded as `error.handled
-context=payload-boot`, not as a `payload.boot` point.
+`payload.boot` records the Theme Builder hand-off at both ends:
+- `ok` and `error` at `POST /api/payload`, when the link is minted;
+- `error` (`framework=other`) at the playground boot, `GET /api/payload/:id`, when the
+  link cannot boot: a miss (expired or never minted), a malformed id, or a KV failure.
+  A link that boots adds no point, so each hand-off counts one `ok` at most.
+
+The server-side `error` point is the record of a `?payload=` boot that failed. The
+browser shows the "expired" message for the 404 without reporting it. `error.handled
+context=payload-boot` is only the browser failing to reach the API at all (a network
+error), which the server never sees.
 
 ## 6. Browser facade and Faro
 
