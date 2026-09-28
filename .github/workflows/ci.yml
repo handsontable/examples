@@ -214,22 +214,15 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  # T10 — the CI home the local telemetry path (contract §10) never had
-  # (T06-D8/T07: E2E_TELEMETRY specs were flagged but never wired). Its own
-  # build, separate from the `authoring`/`e2e` jobs above: VITE_TELEMETRY_LOCAL=1
+  # The CI home for the local telemetry path (contract §10). Its own build,
+  # separate from the `authoring`/`e2e` jobs above — VITE_TELEMETRY_LOCAL=1
   # must never reach the real authoring-dist artifact those jobs share (the
-  # post-build leak check in master.yml exists specifically to catch that), so
-  # this job builds its own dist and never uploads it. Both specs are
-  # self-contained — their own preview server (telemetry-faro.spec.ts: 4711,
-  # example-analytics.spec.ts: 5301), `page.route` interception of
-  # `/telemetry/collect`, no o11y worker or API worker — so they fit the
-  # deterministic PR suite unlike e2e/telemetry-metrics.spec.ts (E2E_LIVE +
-  # a local API worker + a live Tier-2 container). That spec, plus
-  # e2e/o11y-local.spec.ts (E2E_O11Y_LOCAL, needs Docker + two `wrangler dev`
-  # processes + a compose stack on top), have their own workflow instead —
-  # `.github/workflows/e2e-o11y-local.yml` — kept off the per-PR gate and run
-  # on workflow_dispatch, nightly, and PRs that touch the ingest path. See
-  # docs/run-and-deploy.md's "Tests (CI)" section.
+  # post-build leak check in master.yml exists to catch that), so this job
+  # builds its own dist and never uploads it. Both specs are self-contained
+  # (own preview server, `page.route` interception of `/telemetry/collect`,
+  # no o11y or API worker), unlike e2e/telemetry-metrics.spec.ts and
+  # e2e/o11y-local.spec.ts, which need a live worker/compose stack and run
+  # instead in `.github/workflows/e2e-o11y-local.yml`, off the per-PR gate.
   e2e-telemetry:
     needs: build
     runs-on: ubuntu-latest
@@ -241,13 +234,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Minor triage item 5 (C-M7/D-M8): the leak checks used to run ONLY
-      # post-merge, in master.yml, after the production authoring bundle had
-      # already been built there — a regression that broke dead-code
-      # elimination of the local telemetry seam (or the dev-login bypass
-      # sentinel check itself) was only caught after merge, as a blocked
-      # deploy. actionlint here too, so a workflow-YAML mistake in either
-      # fix is itself caught in PR CI, not just by reading the diff.
+      # The leak checks now run in PR CI as well as post-merge in master.yml,
+      # so a regression here (dead-code elimination of the local telemetry
+      # seam, or the dev-login bypass sentinel check itself) is caught before
+      # merge instead of surfacing as a blocked deploy. actionlint runs here
+      # too, so a workflow-YAML mistake in either fix is itself caught in PR
+      # CI, not just by reading the diff.
       - name: actionlint (workflow YAML)
         uses: reviewdog/action-actionlint@v1
         with:
@@ -298,11 +290,11 @@ jobs:
         env:
           VITE_TELEMETRY_LOCAL: '1'
 
-      # Negative control (minor triage item 5 / D-M8): nothing in CI
-      # previously proved `check:telemetry-leak` can actually FAIL — only
-      # that it passes against builds where the sentinels are already
-      # absent. Assert it fails against a build made WITH the local
-      # telemetry path enabled; if the checker itself regresses (a
+      # Negative control: nothing in CI otherwise proves `check:telemetry-leak`
+      # can actually FAIL — only that it passes against builds where the
+      # sentinels are already absent. Assert it fails against a build made
+      # WITH the local telemetry path enabled; if the checker itself
+      # regresses (a
       # dead-code-elimination change, a sentinel string edit) and stops
       # detecting the leak, this step turns red instead of the check quietly
       # passing everything forever.
