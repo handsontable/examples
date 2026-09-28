@@ -960,14 +960,14 @@ sized from what one IP actually sends:
   items span a URL change goes out as one POST per page URL.
   `sandpack.compile_ms` is sent once per mount and once per edit burst, not
   once per keystroke. Measured (a Tier-1 `javascript` example, typing for 70 s,
-  `/telemetry/collect` stubbed): 5–8 POSTs in the busiest 60 s, page load
+  `/telemetry/collect` stubbed): 5 POSTs in the busiest 60 s, page load
   included, for a comment or a string literal at 150 or 250 ms per key, and for
   statements at 150 ms.
 - **Embed or `/d` page view:** on average 0.4 lite beacons (four vitals on the
   10 % of views that sample them), plus at most 20 error beacons
   (`MONITOR_EVENT_CEILING`) from a demo that throws.
 - **One IP:** 100/60 s covers 8 authoring tabs flushing at the 12/min ceiling,
-  12 at the measured worst of 8, or about 250 embed views a minute. That is
+  20 at the measured 5, or about 250 embed views a minute. That is
   enough headroom for an office NAT, so the limit stays at 100.
 
 A 429 carries `Retry-After: 60`. Faro's transport retries up to
