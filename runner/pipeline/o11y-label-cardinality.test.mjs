@@ -94,28 +94,65 @@ test("Faro: a metric outcome on a log is stored as none", async () => {
   assert.equal(log.ingestItem.record.resourceAttributes["hot.outcome"], "none");
 });
 
-/** Every label tuple a stored browser record can reach: collect items (any
- *  surface/tier, a known framework or `other`, any major, outcome `none`) plus
- *  lite errors (tier `static`). `service.name` and the environment are fixed
- *  per route. */
-const COLLECT_TUPLES = SURFACES.length * TIERS.length * (KNOWN_FRAMEWORKS.length + 1) * HT_MAJORS.length;
-const LITE_TUPLES = LITE_SURFACES.length * (KNOWN_FRAMEWORKS.length + 1) * HT_MAJORS.length;
+/** The values each Loki label can take on a stored browser record, per route:
+ *  collect items (outcome always `none`) and lite errors (tier `static`).
+ *  `service.name` and the environment are fixed by the route. */
+const FRAMEWORK_VALUES = [...KNOWN_FRAMEWORKS, "other"];
+const REACHABLE_BY_ROUTE = {
+  collect: {
+    "service.name": ["demos-authoring"],
+    "deployment.environment.name": ["production"],
+    "hot.surface": SURFACES,
+    "hot.tier": TIERS,
+    "hot.framework": FRAMEWORK_VALUES,
+    "hot.ht_major": HT_MAJORS,
+    "hot.outcome": RECORD_OUTCOMES,
+  },
+  lite: {
+    "service.name": ["demos-embed"],
+    "deployment.environment.name": ["production"],
+    "hot.surface": LITE_SURFACES,
+    "hot.tier": ["static"],
+    "hot.framework": FRAMEWORK_VALUES,
+    "hot.ht_major": HT_MAJORS,
+    "hot.outcome": RECORD_OUTCOMES,
+  },
+};
 
-/** The box's configured per-tenant stream limit; the config files are JSON with
- *  `${VAR}` placeholders, some unquoted. */
-function lokiStreamLimit(file) {
+/** A box Loki config; the files are JSON with `${VAR}` placeholders, some unquoted. */
+function lokiConfig(file) {
   const raw = readFileSync(fileURLToPath(new URL(`../containers/o11y/loki/${file}`, import.meta.url)), "utf8");
-  const config = JSON.parse(raw.replace(/"\$\{[A-Z0-9_]+\}"/g, '""').replace(/\$\{[A-Z0-9_]+\}/g, "null"));
-  return config.limits_config.max_global_streams_per_user;
+  return JSON.parse(raw.replace(/"\$\{[A-Z0-9_]+\}"/g, '""').replace(/\$\{[A-Z0-9_]+\}/g, "null"));
 }
 
+function indexLabels(config) {
+  return config.limits_config.otlp_config.resource_attributes.attributes_config
+    .filter((c) => c.action === "index_label")
+    .flatMap((c) => c.attributes);
+}
+
+/** Streams one route can reach: the product over every label Loki indexes. */
+function routeTuples(route, labels) {
+  const reachable = REACHABLE_BY_ROUTE[route];
+  return labels.reduce((product, label) => {
+    assert.ok(reachable[label], `index_label "${label}" has no reachable-value entry for the ${route} route in this test`);
+    return product * reachable[label].length;
+  }, 1);
+}
+
+const LOKI_CONFIGS = ["loki-config.yaml", "loki-config.filesystem.yaml"];
+
 test("the browser tenant's reachable label tuples stay under the box's configured Loki stream limit", () => {
-  for (const file of ["loki-config.yaml", "loki-config.filesystem.yaml"]) {
-    const limit = lokiStreamLimit(file);
+  for (const file of LOKI_CONFIGS) {
+    const config = lokiConfig(file);
+    const labels = indexLabels(config);
+    const limit = config.limits_config.max_global_streams_per_user;
     assert.equal(typeof limit, "number", `${file}: max_global_streams_per_user is set`);
+    const collect = routeTuples("collect", labels);
+    const lite = routeTuples("lite", labels);
     assert.ok(
-      COLLECT_TUPLES + LITE_TUPLES < limit,
-      `${file}: ${COLLECT_TUPLES} + ${LITE_TUPLES} tuples reach max_global_streams_per_user (${limit}); raise it with the new label value`,
+      collect + lite < limit,
+      `${file}: ${collect} + ${lite} reachable tuples over [${labels.join(", ")}] reach max_global_streams_per_user (${limit})`,
     );
   }
 });
@@ -151,7 +188,7 @@ test(`Faro: ${DISTINCT} logs with distinct label combinations add no outcome dim
   const labelKeys = RESOURCE_ATTRS.filter((a) => a.lokiLabel).map((a) => a.key);
   const tuples = new Set(records.map((r) => labelKeys.map((k) => r.resourceAttributes[k]).join("|")));
   assert.equal(tuples.size, baseTuples.size, "one stream per surface/tier/framework/major combination");
-  assert.ok(tuples.size <= COLLECT_TUPLES);
+  assert.ok(tuples.size <= routeTuples("collect", indexLabels(lokiConfig(LOKI_CONFIGS[0]))));
 });
 
 test(`lite beacon: ${DISTINCT} distinct fw values store at most |known frameworks|+1 label values; a real one is kept`, () => {
