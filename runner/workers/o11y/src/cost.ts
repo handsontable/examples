@@ -1,18 +1,16 @@
 // ADR-0041 §G: `GrafanaBox`'s awake seconds, reported to the API worker's
 // `O11yUsage` `WorkerEntrypoint` over the `API` service binding (not an
 // HTTP route — see `workers/api/src/o11y-usage.ts`'s header). Called from
-// `box.ts#onStop` (T04-D, a small necessary edit to a file T01 owns — see
-// this task's Outcome) and from the alert cron's cap check.
+// `box.ts#onStop` and from the alert cron's cap check.
 
 import type { Env } from "./env.js";
 
-/** Structural mirror of `O11yUsage`'s RPC surface (T04-D, same reasoning
- *  `o11y-watchdog.ts`'s own doc comment gives on the API side: the two
- *  Workers are separate `tsconfig.json` projects, so this is a local cast
- *  target, not a cross-project type import). `env.API` stays typed
- *  `Fetcher` (T00's own declaration) — `workers/o11y/wrangler.jsonc` now
- *  binds it to the named `O11yUsage` entrypoint, so the RPC methods below
- *  are real at runtime even though the ambient type does not know it. */
+/** Structural mirror of `O11yUsage`'s RPC surface: the two Workers are
+ *  separate `tsconfig.json` projects, so this is a local cast target, not
+ *  a cross-project type import. `env.API` stays typed `Fetcher` —
+ *  `workers/o11y/wrangler.jsonc` now binds it to the named `O11yUsage`
+ *  entrypoint, so the RPC methods below are real at runtime even though
+ *  the ambient type does not know it. */
 interface O11yUsageRpc {
   recordAwakeSeconds(awakeSeconds: number): Promise<void>;
   o11ySpend(): Promise<{ spendUsd: number; capUsd: number }>;

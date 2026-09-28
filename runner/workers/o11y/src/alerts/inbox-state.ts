@@ -1,10 +1,7 @@
-// Pure, storage-agnostic helpers for the T04 additions to `InboxWriterApi`
-// (contract §8: `alert:<rule>`, `drainsPaused`, `heartbeat`, plus the
-// backlog/rejected/fingerprint reads the ADR §F.3 rules need) — same pattern
-// `dedupe.ts`/`registry.ts`/`pack.ts` use next to `writer.ts`: unit-testable
-// over `inbox/storage.ts#memoryStorage()` without a real Durable Object
-// (`pipeline/o11y-alerts.test.mjs`), and `writer.ts` only adapts these to its
-// thin RPC shell.
+// Pure, storage-agnostic helpers for the alert-related additions to
+// `InboxWriterApi` (contract §8) — same pattern `dedupe.ts`/`registry.ts`
+// use next to `writer.ts`: unit-testable over `memoryStorage()` without a
+// real Durable Object.
 
 import {
   alertStorageKey,
@@ -42,13 +39,10 @@ export async function writeCronHeartbeat(storage: StorageLike, nowMs: number): P
 }
 
 /**
- * Oldest still-`written` inbox key's age, in ms, or `null` when nothing is
- * backlogged. An inbox key only carries `<yyyy-mm-dd>/<hh>` (contract §8),
- * never a precise arrival time, so the age is measured from the END of that
- * hour (`hh:59:59.999Z`) — a deliberate lower bound (T04-D, see this task's
- * Outcome): the true key is somewhere inside that hour, so measuring from
- * its end means the backlog-age alert can only fire LATE relative to the
- * real age, never early/falsely.
+ * Oldest still-`written` inbox key's age, or `null` when nothing is
+ * backlogged. An inbox key only carries `<yyyy-mm-dd>/<hh>`, so the age is
+ * measured from the END of that hour — a deliberate lower bound: the
+ * backlog-age alert can only fire LATE, never early/falsely.
  */
 export async function backlogOldestAgeMs(storage: StorageLike, nowMs = Date.now()): Promise<number | null> {
   const keys = await storage.list<InboxKeyState>({ prefix: KEY_PREFIX });
@@ -76,24 +70,15 @@ export async function rejectedKeyCount(storage: StorageLike): Promise<number> {
   return count;
 }
 
-/** How many `fpts:` rows one `newFingerprintsAfterKey` call may read — bounds
- *  the cost of the "new fingerprint" alert's own ten-minute cron tick (B-C1/
- *  A-I1 remainder, rereview.md row 13: "bound `newFingerprintsSince` so it
- *  doesn't list all of `fp:` every tick"). Generous relative to realistic
- *  per-tick fingerprint volume — truncation only matters under a sustained
- *  forged-fingerprint flood (N7), which is already a disclosed, non-blocking
- *  residual risk (rate-capping Slack posts, not this read). */
+/** How many `fpts:` rows one `newFingerprintsAfterKey` call may read —
+ *  bounds the ten-minute cron tick's cost. Generous relative to realistic
+ *  volume; truncation only matters under a sustained forged flood. */
 const NEW_FINGERPRINT_SCAN_LIMIT = 2000;
 
 export interface NewFingerprintEntry {
   /** The exact `fpts:` storage key this entry was read from. The caller
-   *  (`alerts/rules.ts#newFingerprintRule`) persists this verbatim as its
-   *  keyset cursor so the next call resumes exactly after it — never by
-   *  millisecond (re-review 2, NB1: a millisecond shared by
-   *  {@link NEW_FINGERPRINT_SCAN_LIMIT} or more entries stalled the old
-   *  ms-based cursor forever, because `lastMs - 1` always re-equalled the
-   *  stored cursor on the next tick, so the same truncated page was read
-   *  again every time). */
+   *  persists this verbatim as its keyset cursor, never by millisecond
+   *  (a shared ms would stall an ms-based cursor forever). */
   key: string;
   name: string;
   firstSeenMs: number;
@@ -106,17 +91,13 @@ export interface NewFingerprintsPage {
   truncated: boolean;
 }
 
-/** `fp:<fingerprint>` entries read via the `fpts:` time-ordered index
- *  (`registry.ts`), strictly after `afterKey` — a bounded `start`/`end`
- *  range scan, never the full (alphabetically, not chronologically,
- *  ordered) `fp:` prefix. `afterKey === null` means "no cursor yet" (first
- *  ever call): the scan instead starts just after `fallbackSinceMs`.
- *
- *  `start` is documented as INCLUSIVE (`storage.ts#ListOptions`), so an
- *  `afterKey` is re-fetched and dropped rather than appending a separator
- *  byte to make the read exclusive — a real DO `list()`'s handling of a
- *  literal NUL byte inside `start` was never probed, so this file does not
- *  depend on it (re-review 2, NB1 fix). */
+/** `fp:<fingerprint>` entries via the `fpts:` time-ordered index, after
+ *  `afterKey` — a bounded `start`/`end` range scan, never the full
+ *  (alphabetical, not chronological) `fp:` prefix. `null` means no cursor
+ *  yet: the scan starts after `fallbackSinceMs`. `start` is INCLUSIVE, so
+ *  an `afterKey` is re-fetched and dropped rather than making the read
+ *  exclusive with a separator byte (a real DO `list()`'s NUL-byte handling
+ *  was never probed). */
 export async function newFingerprintsAfterKey(
   storage: StorageLike,
   afterKey: string | null,

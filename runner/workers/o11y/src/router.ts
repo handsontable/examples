@@ -1,5 +1,5 @@
-// COMMON.md pinned interface 2. `registerRoute(method, path, handler)` — T03,
-// T04, T08 plug their own routes in through this, never by editing
+// COMMON.md pinned interface 2. `registerRoute(method, path, handler)` —
+// callers plug their own routes in through this, never by editing
 // `index.ts`'s dispatch logic directly.
 
 import type { Env } from "./env.js";
@@ -16,11 +16,9 @@ interface Route {
 
 const routes: Route[] = [];
 
-/** `path` is exact, or a prefix when it ends in `/*` (same convention the T00
- *  scaffold's `ROUTES` list already used). Throws on a duplicate
- *  `method`+`path` registration — a silent second registration shadowing the
- *  first would be a much harder bug to find than a boot-time throw (T02-D,
- *  see the task Outcome). */
+/** `path` is exact, or a prefix when it ends in `/*`. Throws on a duplicate
+ *  `method`+`path` registration — a silent second registration shadowing
+ *  the first would be a much harder bug to find than a boot-time throw. */
 export function registerRoute(method: RouteMethod, path: string, handler: RouteHandler): void {
   const isPrefix = path.endsWith("/*");
   if (routes.some((r) => r.method === method && r.path === path)) {
@@ -38,8 +36,8 @@ function matches(route: Route, method: string, pathname: string): boolean {
 /**
  * Finds the best match for `method`/`pathname`: an exact-path route beats
  * every prefix route, and among prefix routes the longest `path` wins (so
- * `/grafana/_o11y/reopen` — T03's exact route — beats `/grafana/*` — T01's
- * catch-all — regardless of registration order).
+ * `/grafana/_o11y/reopen` beats `/grafana/*` regardless of registration
+ * order).
  */
 export function findRoute(method: string, pathname: string): RouteHandler | null {
   let best: Route | null = null;

@@ -1,49 +1,9 @@
-// The ledger (ADR §B.3, task "Ledger" scope): `written` → `provisional(wakeId)`
-// → `committed` | `rejected` transitions, resolved at every cron tick and at
-// the start of each wake, plus `backlog()` and the manual `reopen` window.
-// Pure functions over `StorageLike` (T02's pattern — see `storage.ts`'s
-// header): no direct `DurableObjectStorage`/R2 import, so every rule here is
-// unit-testable over `memoryStorage()` without a real DO. `inbox/writer.ts`
-// (the real `InboxWriter` DO, T02's file — T03 adds RPC methods to it per
-// COMMON.md interface 1's explicit "further methods are added by ... T03
-// (ledger/backlog)") wires these against the real storage/R2/GrafanaBox stub.
-//
-// F2 fix round (final review, B-C1/A-I1/B "reopen-window unbounded", must-fix):
-// the previous
-// version scanned the ENTIRE `key:` prefix once per wake inside a loop over
-// every `wake:` entry ever recorded (O(wakes × keys), and both factors grew
-// forever — nothing ever deleted a `key:`/`wake:` entry). At 30 days of
-// traffic that was measured at ~22-65M storage rows read per call, heading
-// toward the DO CPU limit and the platform's rows-read billing. This version:
-//   1. Moves `committed` keys OUT of the `key:` prefix entirely, into
-//      `done:<key>` (see `doneKeyStorageKey`, packages/runtime) — `key:` then
-//      holds only `written`/`provisional:*`/`rejected:*`, the LIVE set every
-//      read here needs, never the ever-growing committed history.
-//   2. Resolves every already-over wake with ONE shared `key:` scan grouped
-//      by wakeId (not one scan per wake) — see `resolveOverWakes` below.
-//   3. Closes the B-I1 race directly: for the one wake that becomes `over`
-//      DURING this call (the only wake `recordWake`'s invariant allows to be
-//      not-over), the write of `over: true` happens BEFORE that wake's
-//      provisional keys are (freshly) read — so a `markKeysProvisional` call
-//      delivered while `isBoxRunning()`/`markerExists()` is in flight either
-//      lands before the fresh read (correctly captured) or after `over` is
-//      already true, in which case `markKeysProvisional` itself refuses it
-//      (ledger.ts's own `markKeysProvisional`, below). The previous version's
-//      bug was using a STALE "does this wake have any provisional keys"
-//      boolean (computed before the `isBoxRunning` await) to decide whether
-//      the marker even needed checking — a late-arriving key could then be
-//      committed without ever consulting the marker.
-//   4. Deletes a wake's `wake:<id>` entry once fully resolved, instead of
-//      flagging it "resolved" and scanning it forever after — nothing reads
-//      an already-resolved wake again, so there is nothing to gain from
-//      keeping it, and deleting it is what keeps the top-level `wake:` scan
-//      itself bounded to "wakes not yet resolved" rather than all-time.
-//   5. `done:`/`hash:` pruning (`pruneLedger`, `dedupe.ts`) always uses a
-//      `start`/`end`/`limit`-bounded range read, never a full-prefix scan —
-//      see `storage.ts`'s `ListOptions` doc comment.
-// See `pipeline/o11y-ledger-scale.test.mjs` for the 10k-key/500-wake bound
-// this is measured against, and the `A-findings.md`/`B-findings.md` text
-// above for the exact failure scenarios this closes.
+// The ledger (ADR §B.3): `written` → `provisional(wakeId)` → `committed` |
+// `rejected` transitions, resolved at every cron tick and at the start of
+// each wake, plus `backlog()` and the manual `reopen` window. Pure over
+// `StorageLike` (unit-testable via `memoryStorage()`, no real DO needed).
+// Bounded throughout: `key:`/`wake:` scans and `done:`/`hash:` pruning stay
+// O(live rows), not O(all-time history) — see `pipeline/o11y-ledger-scale.test.mjs`.
 
 import {
   doneKeyStorageKey,
@@ -60,43 +20,22 @@ const WAKE_PREFIX = "wake:";
 const KEY_PREFIX = "key:";
 const DONE_PREFIX = "done:";
 const PROVISIONAL_PREFIX = "provisional:";
-// Fix round (finding B-M5): the box's `o11y.drain` point never emitted the
-// contract's `reason: "reopen"` value (`docs/observability-contract.md`'s
-// `o11y.drain` row / `METRICS["o11y.drain"].values.reason`, which already
-// lists it) — `nextWrittenKeys` deliberately does not distinguish a
-// reopened key from an ordinary one (see its own doc comment: sort order
-// alone gives reopened keys drain PRIORITY, which is all the ledger itself
-// needs). Reporting *that a drain replayed reopened keys* needs a real
-// signal, so `reopenWindow` now also drops a one-shot marker per key it
-// moves to `written` — consumed (read AND deleted) by `takeReopenedFlag`,
-// called once per drain batch (`box.ts#drainStepBody`). A marker is
-// deliberately transient: it exists only to answer "was any key in the
-// batch just drained a reopen" once, not to track reopen provenance
-// forever.
+// `nextWrittenKeys`'s sort order alone gives reopened keys drain priority,
+// so `reopenWindow` also drops a one-shot `reopenmark:` per key it moves to
+// `written`, consumed by `takeReopenedFlag` so the drain's `o11y.drain`
+// point can report `reason: "reopen"`.
 const REOPEN_MARK_PREFIX = "reopenmark:";
 function reopenMarkStorageKey(inboxKey: string): string {
   return `${REOPEN_MARK_PREFIX}${inboxKey}`;
 }
 
-/** Contract §8: inbox objects live 7 days (R2 lifecycle). A `done:<key>`
- *  entry (a committed key, kept only so a manual reopen can find it) is
- *  worthless once the underlying R2 object is gone, so pruning uses the same
- *  window — see `pruneLedger`. Also the manual-reopen window cap (B-M9): a
- *  window that could never find a live entry past this age is refused
- *  up front by `reopenWindow`/`grafana/reopen.ts`. */
+/** Contract §8: inbox objects live 7 days (R2 lifecycle) — `done:<key>`
+ *  pruning and the manual-reopen window cap both use this same window. */
 export const KEY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** How many `done:` rows one `pruneLedger` call may delete — bounds the cost
- *  of a call that runs after a quiet period has let a backlog of stale rows
- *  build up (T03-D2's own "bounded number of objects per invocation"
- *  principle, applied to storage housekeeping too).
- *
- *  B-C1/A-I1 remainder (final review, rereview.md row 13): raised from 500
- *  — see `dedupe.ts#HASH_PRUNE_BATCH_LIMIT`'s doc comment for the same
- *  throughput arithmetic (500/tick tops out at 72,000/day against a 10-min
- *  cron; ADR §D's own 10× headroom projects ~220,000 worker records/day).
- *  Each `delete()` call is still chunked to the real 128-key DO limit
- *  (`deleteChunked`), independently of this list-side batch size. */
+/** How many `done:` rows one `pruneLedger` call may delete. Raised from 500
+ *  — a 10-min cron at 500/tick tops out at 72,000/day, below ADR §D's 10×
+ *  headroom projection of ~220,000/day. */
 const PRUNE_BATCH_LIMIT = 5000;
 
 function wakeIdOf(storageKey: string): string {
@@ -107,19 +46,12 @@ function inboxKeyOf(storageKey: string): string {
 }
 
 export interface LedgerDeps {
-  /** Best-available "is the box still running the wake the ledger thinks is
-   *  current" signal (`GrafanaBox.isAwake()`, box.ts, T03 — see that file's
-   *  doc comment on why this is `getState()`-backed, not the container's
-   *  live flag directly, and the delta this is recorded under). Called with
-   *  no wakeId: the invariant `recordWake` maintains (COMMON.md interface 1
-   *  — every earlier wake marked `over: true` before a new one starts) means
-   *  at most one wake is ever not-over at a time, so "is the box running"
-   *  and "is THAT wake still running" are the same question. This is also an
-   *  outbound RPC (a real cross-DO call), which — unlike a plain storage
-   *  get/put — briefly opens this DO's input gate, letting another request
-   *  (e.g. `drainStep`'s own `markKeysProvisional`) run while it is pending.
-   *  `resolveOverWakes` is written to be correct across exactly that
-   *  reopening (see this file's header, point 3). */
+  /** Best-available "is the box still running the wake the ledger thinks
+   *  is current" signal (`GrafanaBox.isAwake()`), backed by `getState()`
+   *  rather than the container's live flag. Called with no wakeId: at most
+   *  one wake is ever not-over at a time. An outbound RPC briefly opens
+   *  this DO's input gate; `resolveOverWakes` is written to be correct
+   *  across that reopening. */
   isBoxRunning(): Promise<boolean>;
   /** `state/wakes/<wakeId>/clean` exists in the Loki bucket (ADR §A/§B.3).
    *  Also a real R2 `head()` call — same input-gate note as
@@ -132,7 +64,7 @@ export interface WakeResolution {
   reason: WakeState["reason"];
   clean: boolean;
   keysAffected: number;
-  /** F8: the wake's `readyMs` as stored at resolution time (read inside the
+  /** The wake's `readyMs` as stored at resolution time (read inside the
    *  resolving transaction, so the freshest value) — `undefined` when the
    *  box never became ready during this wake. */
   readyMs?: number;
@@ -144,39 +76,20 @@ export interface ResolveResult {
    *  observed the box not running). */
   newlyOver: string[];
   /** Every wake this call actually resolved (deleted `wake:<id>` for) —
-   *  `keysAffected` can be 0 (an empty-backlog/visit-only wake, F3) — still
-   *  included, since the `o11y.wake` clean/unclean point is about the
-   *  wake's own outcome, not whether it happened to have keys left. */
+   *  `keysAffected` can be 0 and still counts, since the `o11y.wake` point
+   *  is about the wake's outcome, not whether it had keys left. */
   resolved: WakeResolution[];
 }
 
-/** Resolves a single wake's provisional keys (already known, from a fresh or
- *  shared read — see call sites) against the marker, moving each to
- *  `done:`/`written` as appropriate and deleting the `wake:<id>` entry.
- *
- *  N2/N8 fix (final review, rereview.md "atomicity trap" + row-count minor
- *  N8): the previous version did a `get` (existence re-check), a `put` and
- *  a `delete` as three SEPARATE, non-transactional `storage` calls — a
- *  crash between them could already leave `wake:<id>` deleted with some of
- *  its provisional keys never resolved (orphaned in `provisional:<wakeId>`
- *  forever: `markKeysProvisional` refuses an unknown wake, so nothing ever
- *  revisits them). Chunking the put/delete to the real DO 128-key limit
- *  (N2) would make this markedly WORSE — a crash between chunk 1 and chunk
- *  2 orphans exactly the keys in the chunks that never ran. The whole
- *  function now runs inside one `storage.transaction()`: every chunked
- *  put/delete inside it commits or rolls back together, so a crash mid-way
- *  leaves the PRE-transaction state, not a partial one. `wake:<id>` is
- *  still deleted last (defense in depth, cheap, no reason not to) even
- *  though the transaction's own atomicity no longer depends on the order.
- *
- *  N8 (rereview.md §2 Minor): re-reads each key's CURRENT state inside this
- *  same transaction, rather than trusting the caller's (possibly stale,
- *  snapshot-at-some-earlier-point) `provisionalStorageKeys` list blindly —
- *  a concurrent manual reopen (`reopenWindow`, below) can move a key OUT of
- *  `provisional:<wakeId>` (back to `written`) between that snapshot and
- *  this point; applying the snapshot's decision on top of that would
- *  silently undo the reopen. A key whose current state no longer matches
- *  `provisional:<wakeId>` is skipped, not resolved. */
+/** Resolves a single wake's provisional keys against the marker, moving
+ *  each to `done:`/`written` as appropriate and deleting `wake:<id>` — all
+ *  inside one `storage.transaction()`, so a crash mid-way leaves the
+ *  pre-transaction state rather than an orphaned partial write (chunked
+ *  put/delete would otherwise leave keys stuck in `provisional:<wakeId>`
+ *  forever). Re-reads each key's CURRENT state inside the transaction,
+ *  rather than trusting a possibly-stale caller snapshot — a concurrent
+ *  manual reopen can move a key back to `written` between the read and
+ *  this point, and that must not be silently undone. */
 async function finalizeWakeResolution(
   storage: StorageLike,
   wake: WakeState,
@@ -197,10 +110,10 @@ async function finalizeWakeResolution(
     const toDelete: string[] = [];
     let keysAffected = 0;
     for (const storageKey of provisionalStorageKeys) {
-      if (currentStates.get(storageKey) !== marker) continue; // N8: no longer this wake's — a concurrent reopen won
+      if (currentStates.get(storageKey) !== marker) continue; // no longer this wake's — a concurrent reopen won
       keysAffected++;
       if (clean) {
-        // F2 fix: move OUT of `key:` into `done:` on commit, so `key:` never
+        // Move OUT of `key:` into `done:` on commit, so `key:` never
         // accumulates committed history (see this file's header, point 1).
         toDelete.push(storageKey);
         doneWrites[doneKeyStorageKey(inboxKeyOf(storageKey))] = 1;
@@ -219,12 +132,9 @@ async function finalizeWakeResolution(
 
 /**
  * ADR §B.3: "at each cron tick and at the start of each wake, InboxWriter
- * resolves every wake that still owns provisional keys and is over."
- *
- * A wake is over when a newer wake has started (already reflected as
- * `over: true` by `recordWake`) or when the box is observed not running
- * (this function's own job for the CURRENT wake). A wake still running is
- * left alone entirely.
+ * resolves every wake that still owns provisional keys and is over." A
+ * wake is over when a newer wake started, or the box is observed not
+ * running (this call's own job for the CURRENT wake).
  */
 export async function resolveOverWakes(storage: StorageLike, deps: LedgerDeps): Promise<ResolveResult> {
   const wakes = await storage.list<WakeState>({ prefix: WAKE_PREFIX });
@@ -238,11 +148,9 @@ export async function resolveOverWakes(storage: StorageLike, deps: LedgerDeps): 
     else active = [storageKey, wake]; // at most one, by construction (recordWake's invariant)
   }
 
-  // ---- Phase 1: wakes already `over` at snapshot time --------------------
-  // Their key sets cannot grow any further (`markKeysProvisional` refuses
-  // once `over` is true — see below), so one SHARED `key:` scan, grouped by
-  // wakeId, safely resolves every one of them: O(wakes-already-over + live
-  // keys), never O(wakes × keys).
+  // Wakes already `over`: their key sets cannot grow further
+  // (`markKeysProvisional` refuses once `over` is true), so one SHARED
+  // `key:` scan grouped by wakeId resolves all of them: O(wakes+keys).
   if (alreadyOver.length > 0) {
     const keys = await storage.list<InboxKeyState>({ prefix: KEY_PREFIX });
     const byWake = new Map<string, string[]>();
@@ -255,30 +163,25 @@ export async function resolveOverWakes(storage: StorageLike, deps: LedgerDeps): 
     }
     for (const [wakeId, wake] of alreadyOver) {
       const provisionalKeys = byWake.get(wakeId) ?? [];
-      // F3: zero provisional keys ever recorded for this wake is trivially
-      // clean — no marker was ever going to exist (see the F3 tests).
+      // Zero provisional keys ever recorded for this wake is trivially
+      // clean — no marker was ever going to exist.
       const clean = provisionalKeys.length > 0 ? await deps.markerExists(wakeId) : true;
       const outcome = await finalizeWakeResolution(storage, wake, wakeId, provisionalKeys, clean);
       if (outcome) resolved.push(outcome);
     }
   }
 
-  // ---- Phase 2: the one wake that may become `over` THIS call ------------
+  // The one wake that may become `over` THIS call.
   if (active) {
     const [storageKey, wake] = active;
     const wakeId = wakeIdOf(storageKey);
     const stillRunning = await deps.isBoxRunning(); // input-gate-opening await
     if (!stillRunning) {
-      // Durably mark over FIRST — before reading this wake's provisional
-      // keys — so any `markKeysProvisional` call delivered while the next
-      // await (`markerExists`) is pending either lands before the fresh
-      // read just below (correctly captured) or is refused outright
-      // (`markKeysProvisional` checks `over` itself). This ordering is the
-      // B-I1 fix (see this file's header, point 3).
-      // F8: re-read before writing — `wake` is the pre-`isBoxRunning()`
-      // snapshot, and a `recordWakeReady` delivered while that RPC was
-      // pending would otherwise be overwritten by `...wake`. (No await
-      // between this get and the put, so nothing can interleave there.)
+      // Mark over FIRST, before reading provisional keys, so a concurrent
+      // `markKeysProvisional` either lands before the fresh read or is
+      // refused (it checks `over` itself). Re-read `wake` here too — a
+      // `recordWakeReady` landed during `isBoxRunning()` must not be
+      // overwritten by the stale snapshot.
       const fresh = (await storage.get<WakeState>(storageKey)) ?? wake;
       await storage.put({ [storageKey]: { ...fresh, over: true } satisfies WakeState });
       newlyOver.push(wakeId);
@@ -297,18 +200,12 @@ export async function resolveOverWakes(storage: StorageLike, deps: LedgerDeps): 
   return { newlyOver, resolved };
 }
 
-/** A key becomes `provisional(wakeId)` only after all its requests returned
- *  `2xx` (ADR §B.3). F2 fix (B-I1): refuses — inside one storage transaction
- *  — when `wake:<wakeId>` is over OR missing (a wake `resolveOverWakes` has
- *  already deleted, or one that never existed): a key marked provisional
- *  under a wake the ledger has already decided is over/gone would sit there
- *  forever, never resolved by anything, and — if written to storage BEFORE
- *  `resolveOverWakes` observes `over: true` but read by a STALE snapshot
- *  taken before this write — could be committed without ever passing the
- *  marker check (the exact data-loss race B-I1 describes). Read-then-write
- *  inside `storage.transaction()` so the check and the write are atomic with
- *  respect to this DO's own input gate (the same gate `resolveOverWakes`'s
- *  awaits open). */
+/** A key becomes `provisional(wakeId)` only after all its requests
+ *  returned `2xx` (ADR §B.3). Refuses — inside one transaction — when
+ *  `wake:<wakeId>` is over or missing: a key marked provisional under a
+ *  gone wake would sit there forever, and a stale-snapshot race could
+ *  commit it without ever passing the marker check. Read-then-write inside
+ *  `storage.transaction()` makes the check and the write atomic. */
 export async function markKeysProvisional(storage: StorageLike, wakeId: string, keys: readonly string[]): Promise<void> {
   if (keys.length === 0) return;
   await storage.transaction(async (txn) => {
@@ -316,34 +213,25 @@ export async function markKeysProvisional(storage: StorageLike, wakeId: string, 
     if (!wake || wake.over) return; // refuse: unknown or already-over wake
     const writes: Record<string, InboxKeyState> = {};
     for (const key of keys) writes[inboxKeyStorageKey(key)] = `provisional:${wakeId}`;
-    // N2: a drain batch can carry more than 128 keys (DRAIN_BATCH_SIZE, box.ts).
+    // A drain batch can carry more than 128 keys (DRAIN_BATCH_SIZE, box.ts).
     await putChunked(txn, writes);
   });
 }
 
-/** B-M4 fix (minor triage item 3): a key whose drain pushed ZERO bytes to
- *  Loki (every record was already deduped or too old — `drain.ts#drainKey`'s
- *  zero-chunk `provisional` case) has nothing that could be lost by an
- *  unclean stop, so it never needs the wake-marker durability check
- *  `provisional:<wakeId>` → {@link finalizeWakeResolution} exists for.
- *  Routing it through `markKeysProvisional` instead was the actual bug: a
- *  wake whose ONLY provisional keys are all zero-byte never gets a Loki
- *  index/marker written for it (nothing was ever pushed), so
- *  `resolveOverWakes` reads that wake as unclean and bounces every one of
- *  those keys back to `written` — which re-adds them to the backlog, wakes
- *  the box again ~10 minutes later, drains them again (still zero bytes),
- *  and repeats forever. This moves such a key straight `written` → `done:`,
- *  exactly like a normal key's CLEAN commit path
- *  ({@link finalizeWakeResolution}'s `clean` branch), skipping the
- *  provisional/marker step entirely — safe because there is nothing durable
- *  riding on it. */
+/** A key whose drain pushed ZERO bytes (already deduped/too old) has
+ *  nothing an unclean stop could lose, so it skips the wake-marker
+ *  durability check entirely. Routing it through `markKeysProvisional`
+ *  instead would leave a wake with only zero-byte keys looking unclean
+ *  forever (no Loki marker was ever written for it), re-waking and
+ *  re-draining the same empty keys on a loop. This commits straight
+ *  `written` → `done:`, safe since nothing durable rides on it. */
 export async function commitKeys(storage: StorageLike, keys: readonly string[]): Promise<void> {
   if (keys.length === 0) return;
   await storage.transaction(async (txn) => {
     const doneWrites: Record<string, 1> = {};
     for (const key of keys) doneWrites[doneKeyStorageKey(key)] = 1;
     await putChunked<unknown>(txn, doneWrites);
-    // N2: chunked to the real 128-key DO limit, same as `finalizeWakeResolution`.
+    // Chunked to the real 128-key DO limit, same as `finalizeWakeResolution`.
     await deleteChunked(
       txn,
       keys.map((key) => inboxKeyStorageKey(key)),
@@ -356,13 +244,9 @@ export async function commitKeys(storage: StorageLike, keys: readonly string[]):
 export interface InboxObjectInfo {
   key: string;
   size: number;
-  /** R2's own `uploaded` timestamp — the exact object age, not an estimate
-   *  derived from the key's own hour-bucket prefix (which would only be
-   *  accurate to the hour and, worse, systematically UNDERSTATES age by up
-   *  to 59 minutes if read as "now - the hour boundary", wrongly wakes the
-   *  box early, and inflates the wake count exit criterion 7's cost model
-   *  is measured against — an R2 `list()` already returns `uploaded` per
-   *  object at no extra request cost, so there is no reason to approximate). */
+  /** R2's own `uploaded` timestamp — exact, unlike deriving age from the
+   *  key's hour bucket (which understates age by up to 59 minutes and
+   *  wakes the box early). No extra request cost from `list()`. */
   uploaded: Date;
 }
 
@@ -414,15 +298,12 @@ export async function computeBacklog(
 // ---- Drain support: ordering, rejection ---------------------------------------
 
 /**
- * `written` keys, in key order (ascending string sort). The inbox key format
- * (`inbox/<tenant>/<yyyy-mm-dd>/<hh>/<seq:012d>.ndjson.gz`) sorts
- * chronologically within a tenant by construction, so this single sort
- * already satisfies "re-opened keys first, then new `written` keys, in key
- * order" (ADR §B.3/task Scope) without tracking "was this key re-opened"
- * separately: a re-opened key is, by definition, older than any key from the
- * current wake, so it already sorts first. Cross-tenant interleaving is
- * irrelevant — Loki isolates ingester state per `X-Scope-OrgID` tenant, so
- * ordering only has to hold within one tenant's own keys, which it does. */
+ * `written` keys, in key order. The inbox key format sorts chronologically
+ * within a tenant by construction, so this satisfies "re-opened keys
+ * first" without a separate flag — a re-opened key is always older than
+ * any key from the current wake. Cross-tenant interleaving is irrelevant:
+ * Loki isolates ingester state per tenant.
+ */
 export async function nextWrittenKeys(storage: StorageLike, limit: number): Promise<string[]> {
   const keys = await storage.list<InboxKeyState>({ prefix: KEY_PREFIX });
   const written: string[] = [];
@@ -433,21 +314,10 @@ export async function nextWrittenKeys(storage: StorageLike, limit: number): Prom
   return written.slice(0, limit);
 }
 
-// ---- rejectedEvent: audit log (row 19 / B-C1/A-I1 remainder) ------------------
-//
-// `rejectedKeyRule` used to fire on `rejectedKeyCount() > 0` and never
-// resolve — `rejected:<reason>` `key:` entries are never pruned (rare,
-// operator-diagnosable, by design — see `rejectKey`'s own doc comment), so
-// once ANY key was ever rejected, the alert fired forever (rereview.md's
-// "resolve the rejected-inbox-key rule: fire once per new rejection,
-// resolve when none are recent"). Fixing this needs a REJECTION TIME, which
-// `rejected:<reason>` never carried — this chronological, independently
-// prunable event log provides it without changing `key:`'s own value shape
-// at all (no compat/migration burden on the ledger's live state). Also used
-// by `recordPartialReject` (drain partial-400 durability fix, row 19,
-// below): a key that stays `provisional`/resolves to `done:` (its accepted
-// chunks ARE durable) can still log a rejection event for a permanently
-// dropped chunk, without the ledger conflating "durable" and "rejected."
+// ---- rejectedEvent: audit log ----------------------------------------------
+// `rejected:` `key:` entries are never pruned, so a plain count-based rule
+// would fire forever; this chronological, independently-prunable log gives
+// the alert a REJECTION TIME to fire-once/resolve-once on instead.
 const REJECTED_EVENT_PREFIX = "rejectedEvent:";
 const REJECTED_EVENT_TIMESTAMP_DIGITS = 15;
 /** Same window contract §8 already uses for `done:`/`hash:`/reopen (the
@@ -459,16 +329,11 @@ function rejectedEventStorageKey(ms: number, inboxKeyStr: string): string {
   return `${REJECTED_EVENT_PREFIX}${Math.max(0, Math.trunc(ms)).toString().padStart(REJECTED_EVENT_TIMESTAMP_DIGITS, "0")}:${inboxKeyStr}`;
 }
 
-/** A `400` (e.g. `too_far_behind`) marks the key `rejected`, logged with
- *  Loki's message (ADR §B.3) — never retried by a later wake. Rejected keys
- *  are rare (a genuine, not-just-stale, Loki-side rejection) and stay under
- *  `key:` past retention only via `pruneLedger`'s value-filtered sweep
- *  (B-C1/A-I1 remainder — see that function) rather than `done:`'s blind
- *  range delete: unlike `committed`, this is not the dominant growth path
- *  B-C1 measured, and a rejected key is exactly what an operator diagnosing
- *  the `rejected-inbox-key` alert (ADR §F.3) needs to still be able to
- *  find, for as long as its underlying object could still exist. Also logs
- *  a `rejectedEvent:` entry — see this section's header — so the alert can
+/** A `400` marks the key `rejected`, logged with Loki's message (ADR
+ *  §B.3) — never retried by a later wake. Stays under `key:` past
+ *  retention only via `pruneLedger`'s value-filtered sweep (not `done:`'s
+ *  blind range delete), since an operator diagnosing the alert needs to
+ *  still find it. Also logs a `rejectedEvent:` entry so the alert can
  *  tell "rejected, ever" from "rejected, recently." */
 export async function rejectKey(storage: StorageLike, key: string, reason: string, nowMs = Date.now()): Promise<void> {
   await storage.put({
@@ -477,15 +342,11 @@ export async function rejectKey(storage: StorageLike, key: string, reason: strin
   });
 }
 
-/** Row 19 (drain partial-400 durability): a key with at least one 2xx chunk
- *  AND at least one permanently-400'd chunk stays `provisional` (its
- *  accepted content follows the normal §B.3 marker/commit path — see
- *  `drain.ts#drainKey`'s own doc comment for why), so it never becomes
- *  `key:<key> = rejected:<reason>` and `rejectedKeyCount`/`pruneLedger`'s
- *  value-filtered sweep never sees it. This still logs the SAME
- *  `rejectedEvent:` entry `rejectKey` would, so the alert stays accurate —
- *  a permanently-dropped chunk is real operator-visible information even
- *  though the key itself durably resolves. */
+/** A key with at least one 2xx chunk AND one permanently-400'd chunk
+ *  stays `provisional` (its accepted content is durable — see
+ *  `drain.ts#drainKey`), so it never becomes `rejected:<reason>`. Logs the
+ *  SAME `rejectedEvent:` entry `rejectKey` would, so the loss is still
+ *  operator-visible even though the key itself durably resolves. */
 export async function recordPartialReject(storage: StorageLike, key: string, reason: string, nowMs = Date.now()): Promise<void> {
   await storage.put({ [rejectedEventStorageKey(nowMs, key)]: reason });
 }
@@ -506,27 +367,19 @@ export interface ReopenResult {
   reopened: number;
 }
 
-/** B-M9: the manual reopen window is capped to {@link KEY_RETENTION_MS} —
- *  nothing past it can possibly still exist (`done:`/`rejected:` entries
- *  past this age are pruned, and Loki's own `reject_old_samples_max_age` is
- *  7d too), so a wider request is refused up front rather than silently
- *  reopening nothing (or, before this fix, scanning unboundedly for
- *  nothing). */
+/** The manual reopen window is capped to {@link KEY_RETENTION_MS} —
+ *  nothing past it can still exist, so a wider request is refused up
+ *  front rather than silently reopening nothing. */
 export function reopenWindowExceedsRetention(fromMs: number, toMs: number): boolean {
   return toMs - fromMs > KEY_RETENTION_MS;
 }
 
 /**
  * Re-opens every key whose inbox-key hour bucket overlaps `[fromMs, toMs)`:
- * still-live `key:` entries (any state except `provisional:<activeWakeId>` —
- * reopening a key an in-flight drain is actively working is not a "manual
- * re-open," it is corruption of that drain's own bookkeeping) AND `done:`
- * entries (committed keys, F2 fix — these moved out of `key:` per this
- * file's header, so reopen must look in both places or a reopen of anything
- * already committed would silently find nothing). `activeWakeId` is the
- * current not-over wake, if any (`null` when the box is fully stopped). Both
- * scans are bounded by {@link KEY_RETENTION_MS} retention, never all-time
- * history (see `reopenWindowExceedsRetention`, enforced by the caller).
+ * live `key:` entries (except the active wake's own in-flight
+ * `provisional:` keys) AND `done:` entries (committed keys live there, not
+ * under `key:`). Both scans are bounded by {@link KEY_RETENTION_MS},
+ * enforced by the caller via `reopenWindowExceedsRetention`.
  */
 export async function reopenWindow(
   storage: StorageLike,
@@ -568,19 +421,16 @@ export async function reopenWindow(
   }
 
   const reopened = Object.keys(writes).length;
-  // Fix round (finding B-M5): one transient `reopenmark:` per key this call
-  // moves to `written`, in the SAME transaction as the `written` write
-  // itself — see this file's `REOPEN_MARK_PREFIX` doc comment.
+  // One transient `reopenmark:` per key this call moves to `written`, in
+  // the SAME transaction as the `written` write itself — see this file's
+  // `REOPEN_MARK_PREFIX` doc comment.
   const marks: Record<string, 1> = {};
   for (const storageKey of Object.keys(writes)) {
     marks[reopenMarkStorageKey(inboxKeyOf(storageKey))] = 1;
   }
-  // N2: both a large reopen window and the real DO 128-key limit mean this
-  // must chunk; wrapped in one transaction (rather than two independent
-  // top-level calls) so a crash mid-chunk never leaves a `done:` entry
-  // deleted without its `key:<key> = written` twin ever having been
-  // written (or the reverse) — the same atomicity-trap fix as
-  // `finalizeWakeResolution`, above.
+  // Wrapped in one transaction so a crash mid-chunk never leaves a `done:`
+  // entry deleted without its `key:<key> = written` twin written, or the
+  // reverse — same atomicity approach as `finalizeWakeResolution`.
   await storage.transaction(async (txn) => {
     if (reopened > 0) {
       await putChunked(txn, writes);
@@ -592,14 +442,9 @@ export async function reopenWindow(
 }
 
 /**
- * Consumes the reopen markers `reopenWindow` left for any of `inboxKeys`
- * (fix round B-M5) — reads which of them are marked reopened, deletes those
- * markers (one-shot: a marker is only meant to be observed once, by the
- * drain batch that actually replays the key), and reports whether ANY were
- * found. Called once per drain batch (`box.ts#drainStepBody`) so its
- * `o11y.drain` point can emit `reason: "reopen"` instead of the wake's own
- * `backlog`/`visit` reason when the batch it just pushed replayed reopened
- * keys.
+ * Consumes (reads AND clears) the reopen markers `reopenWindow` left for
+ * `inboxKeys`, one-shot, and reports whether ANY were found. Called once
+ * per drain batch so its `o11y.drain` point can emit `reason: "reopen"`.
  */
 export async function takeReopenedFlag(storage: StorageLike, inboxKeys: readonly string[]): Promise<boolean> {
   if (inboxKeys.length === 0) return false;
@@ -610,14 +455,8 @@ export async function takeReopenedFlag(storage: StorageLike, inboxKeys: readonly
   return true;
 }
 
-/** The current not-over wake's id, or `null` (fully stopped). Used by the
- *  reopen route to protect an in-flight drain (see {@link reopenWindow}) and
- *  by drain/wake orchestration to know "which wakeId am I." */
-/** F8: records a wake's wake-to-ready time on `wake:<wakeId>`, once. First
- *  call wins (a later, slower probe must not overwrite the real first-ready
- *  time), and a wake whose entry is already gone (fully resolved) is left
- *  alone rather than recreated. Does not touch `over` or anything else in
- *  the entry. */
+/** Records a wake's wake-to-ready time on `wake:<wakeId>`, once — first
+ *  call wins, and an already-resolved wake is left alone. */
 export async function recordWakeReady(storage: StorageLike, wakeId: string, readyMs: number): Promise<void> {
   await storage.transaction(async (txn) => {
     const key = wakeStorageKey(wakeId);
@@ -627,6 +466,9 @@ export async function recordWakeReady(storage: StorageLike, wakeId: string, read
   });
 }
 
+/** The current not-over wake's id, or `null` (fully stopped). Used by the
+ *  reopen route to protect an in-flight drain (see {@link reopenWindow}) and
+ *  by drain/wake orchestration to know "which wakeId am I." */
 export async function currentWakeId(storage: StorageLike): Promise<string | null> {
   const wakes = await storage.list<WakeState>({ prefix: WAKE_PREFIX });
   for (const [storageKey, wake] of wakes) {
@@ -635,30 +477,21 @@ export async function currentWakeId(storage: StorageLike): Promise<string | null
   return null;
 }
 
-// ---- Pruning (F2 fix, A-I1): bounded, retention-based housekeeping ------------
+// ---- Pruning: bounded, retention-based housekeeping ------------------------
 
 export interface PruneResult {
   doneDeleted: number;
-  /** Stale `key:<k> = rejected:<reason>` entries deleted this call
-   *  (B-C1/A-I1 remainder — see `pruneLedger`'s own doc comment). */
+  /** Stale `key:<k> = rejected:<reason>` entries deleted this call — see
+   *  `pruneLedger`'s own doc comment. */
   rejectedDeleted: number;
 }
 
-/** Deletes `done:<key>` entries whose embedded inbox-key date is older than
- *  {@link KEY_RETENTION_MS} (§8: inbox objects live 7 days — a `done:` entry
- *  for an object R2 has already deleted is worthless). Bounded per call
- *  (`PRUNE_BATCH_LIMIT` rows per tenant) via a `start`/`end` RANGE delete,
- *  never a full-prefix scan: `done:inbox/<tenant>/<date>/...` sorts
- *  chronologically within a tenant by construction (the same property
- *  `nextWrittenKeys` already relies on for `key:`), so `[start, end)` =
- *  `["done:inbox/<tenant>/", "done:inbox/<tenant>/<cutoffDate>/")` names
- *  exactly "every committed key for this tenant strictly older than the
- *  cutoff date," oldest first — the natural rows to delete when the batch
- *  limit means not everything stale fits in one call. Called from
- *  `writer.ts#backlog()` (the ten-minute cron path — see this file's header,
- *  point 5: NOT from the pack alarm, which only fires on ingest and would
- *  starve pruning during a quiet period), wrapped in `try/catch` there so a
- *  pruning failure can never fail the backlog read itself. */
+/** Deletes `done:<key>` entries older than {@link KEY_RETENTION_MS} — a
+ *  `done:` entry for an object R2 has already deleted is worthless.
+ *  Bounded per call via a `start`/`end` range delete: `done:inbox/<tenant>/`
+ *  sorts chronologically, so `[start, cutoffDate)` names exactly the
+ *  oldest stale rows. Called from `writer.ts#backlog()`, wrapped in
+ *  `try/catch` there so a pruning failure never fails the backlog read. */
 export async function pruneLedger(storage: StorageLike, nowMs: number): Promise<PruneResult> {
   const cutoff = new Date(nowMs - KEY_RETENTION_MS);
   const cutoffDate = cutoff.toISOString().slice(0, 10); // yyyy-mm-dd, UTC
@@ -672,24 +505,16 @@ export async function pruneLedger(storage: StorageLike, nowMs: number): Promise<
     });
     const toDelete = [...stale.keys()];
     if (toDelete.length > 0) {
-      await deleteChunked(storage, toDelete); // N2
+      await deleteChunked(storage, toDelete);
       doneDeleted += toDelete.length;
     }
   }
 
-  // B-C1/A-I1 remainder (rereview.md G1 section: "prune rejected: key
-  // entries after their inbox object's retention"): `rejected:<reason>`
-  // entries were never pruned at all (`rejectKey`'s own doc comment
-  // originally argued this — an operator diagnosing the alert needs to
-  // still find them — but nothing past the object's own 7-day retention is
-  // still diagnosable: the R2 object is already gone). `key:inbox/<tenant>/`
-  // mixes live `written`/`provisional:*` entries in with `rejected:*` ones
-  // chronologically, so — unlike `done:`, which is exclusively committed
-  // history — this range read must filter by VALUE, not just blind-delete
-  // the range. Accepted, documented trade-off: a batch whose oldest rows
-  // are all non-rejected makes no delete progress this tick (the read is
-  // still bounded; it just doesn't always convert to a deletion), and
-  // converges over later ticks once older rejected rows are reached.
+  // `rejected:<reason>` entries need pruning too, but `key:inbox/<tenant>/`
+  // mixes live and rejected entries chronologically, so this range read
+  // must filter by VALUE, not blind-delete. A batch whose oldest rows are
+  // all non-rejected makes no progress this tick; it converges over later
+  // ticks.
   let rejectedDeleted = 0;
   for (const tenant of ["browser", "worker"] satisfies Tenant[]) {
     const stale = await storage.list<InboxKeyState>({
@@ -707,11 +532,8 @@ export async function pruneLedger(storage: StorageLike, nowMs: number): Promise<
     }
   }
 
-  // C-I1/rereview row 13 (fire-once/resolve-when-none-recent): the
-  // `rejectedEvent:` audit log (`rejectKey`/`recordPartialReject`, see
-  // those functions' doc comments) is itself chronologically keyed, so a
-  // plain bounded range delete (no value filtering needed) prunes it past
-  // the same retention.
+  // The `rejectedEvent:` audit log is itself chronologically keyed, so a
+  // plain bounded range delete (no value filtering) prunes it too.
   const rejectedEventStale = await storage.list<unknown>({
     start: REJECTED_EVENT_PREFIX,
     end: rejectedEventStorageKey(nowMs - REJECTED_EVENT_RETENTION_MS, ""),
