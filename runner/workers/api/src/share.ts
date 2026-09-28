@@ -195,22 +195,39 @@ export class BuildFailure extends Error {
   }
 }
 
-/** The build command ran and rejected the demo's own code (a vite/rollup/esbuild error):
- *  client input, answered 422. An install failure, a command killed by a signal (exit
- *  code 128 and above, e.g. an OOM kill) or a result without an exit code is ours. */
+/** pnpm codes for a dependency the author named that does not resolve (contract §5). */
+const USER_INSTALL_CODES = new Set([
+  "ERR_PNPM_NO_MATCHING_VERSION",
+  "ERR_PNPM_FETCH_404",
+  "ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER",
+  "ERR_PNPM_BAD_PM_VERSION",
+]);
+
+/** Output that names our infrastructure (network, memory, a killed worker, Next's Google
+ *  Fonts fetch) whatever the exit code. A message-text rule: a tool that rewords these
+ *  lines moves its failure into the 422 class. */
+const INFRA_FAILURE_TEXT =
+  /ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|Failed to fetch|heap out of memory|signal SIGKILL|worker exited|`next\/font` error|fonts\.googleapis\.com/i;
+
+/** The demo's own input failed the build (contract §5): client input, answered 422. That
+ *  is a build command exiting 1–125, or an install refusing a dependency the author named.
+ *  Anything whose output names infrastructure, a signal kill (128+), 126/127 (not
+ *  executable, not found), a result without an exit code, and other install failures are ours. */
 export function isUserBuildError(err: unknown): boolean {
-  return err instanceof BuildFailure && err.phase === "build"
-    && err.exitCode !== null && err.exitCode > 0 && err.exitCode < 128;
+  if (!(err instanceof BuildFailure)) return false;
+  if (INFRA_FAILURE_TEXT.test(`${err.message}\n${err.log}`)) return false;
+  if (err.phase === "install") return USER_INSTALL_CODES.has(err.code);
+  return err.exitCode !== null && err.exitCode > 0 && err.exitCode <= 125;
 }
 
 /** Longest `detail` a 422 carries; the full output stays in the Sentry `buildLog`. */
 const USER_BUILD_DETAIL_MAX = 300;
 
-/** The one-line build error shown to the author: the cause without the `build failed:`
- *  prefix, completed from the log when the cause is only headings (`error during build:
+/** The one-line build error shown to the author: the cause without its `build failed:`
+ *  or `install failed:` prefix, completed from the log when the cause is only headings (`error during build:
  *  Build failed with 1 error:`), with container paths made relative and the length bounded. */
 export function userBuildErrorDetail(err: BuildFailure): string {
-  let detail = err.message.replace(/^build failed:\s*/, "");
+  let detail = err.message.replace(/^(build|install) failed:\s*/, "");
   const lines = err.log.split("\n").map((l) => l.trim()).filter(Boolean);
   let at = -1;
   for (let i = lines.length - 1; i >= 0; i -= 1) {

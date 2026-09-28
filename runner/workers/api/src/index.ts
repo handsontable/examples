@@ -2630,9 +2630,14 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // an `Error.message` is what invented DEMOS-1Y's culprit.
           ...(err.log ? { extra: { buildLog: err.log } } : {}),
         });
-        // The demo's own code failing to build is client input: a 4xx, so it stays out
-        // of `api-5xx-rate`; the stored demo is untouched because the build runs first.
-        if (isUserBuildError(err)) return json({ error: "build_failed", detail: userBuildErrorDetail(err) }, 422);
+        // The demo's own input failing the build is a 4xx, out of `api-5xx-rate` (the
+        // `snapshot-build-failed-rate` alert covers a systemic break); the stored demo is
+        // untouched because the build runs first. `error` keeps the diagnostic for MCP
+        // clients, which read only that field.
+        if (isUserBuildError(err)) {
+          const detail = userBuildErrorDetail(err);
+          return json({ error: `${err.phase} failed: ${detail}`, code: "build_failed", detail }, 422);
+        }
         return json({ error: err.message }, 500);
       }
       logErrorLine(env, "fetch-catch-all", err);

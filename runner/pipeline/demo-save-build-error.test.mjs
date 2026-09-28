@@ -1,9 +1,7 @@
-// A Save or create whose build rejects the demo's own code is client input: 422
-// `build_failed` with the build error as `detail`, an `api.request` 4xx (so
-// `api-5xx-rate` never sees it), a `snapshot.build failed` point, and the stored demo
-// untouched. Anything else that breaks a build is still a 5xx. Driven through the real
-// router with a scripted builder container.
-//
+// A Save or create whose build rejects the demo's own input is client input: 422 with
+// the build error, an `api.request` 4xx, a `snapshot.build failed` point, and the stored
+// demo untouched. A failure that is ours stays a 5xx. Driven through the real router
+// with a scripted builder container.
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/demo-save-build-error.test.mjs
 
@@ -111,7 +109,9 @@ for (const [name, makeRequest] of ROUTES) {
     const res = await worker.fetch(makeRequest(), env, ctx);
 
     assert.equal(res.status, 422);
-    assert.deepEqual(await res.json(), { error: "build_failed", detail: 'error during build: Build failed with 1 error: src/index.tsx:1:10: ERROR: Unexpected ";"' });
+    const detail = 'error during build: Build failed with 1 error: src/index.tsx:1:10: ERROR: Unexpected ";"';
+    // `error` carries the diagnostic too: MCP clients (hot-mcp) read only that field.
+    assert.deepEqual(await res.json(), { error: `build failed: ${detail}`, code: "build_failed", detail });
     assert.deepEqual(await requestOutcomes(pointsOf), ["4xx"], "one api.request point, and it is not a 5xx");
     const builds = await pointsOf("snapshot.build");
     assert.equal(builds.length, 1);
@@ -123,17 +123,73 @@ for (const [name, makeRequest] of ROUTES) {
   });
 }
 
-const INFRA_FAILURES = [
-  ["a build killed by a signal (OOM)", builder(() => ({ success: false, exitCode: 137, stdout: "", stderr: "Killed\n" }))],
-  ["a build result without an exit code", builder(() => ({ success: false, stdout: "", stderr: "error during build:\nsomething\n" }))],
-  ["an exec that throws (container lost)", builder(() => { throw new Error("container is not running"); })],
-  ["an install that fails", () => ({
+/** A builder whose install answers `install` (the frozen install and its retry alike). */
+function installer(install) {
+  return () => ({
     mkdir: async () => {},
     writeFile: async () => {},
     readFile: async () => "",
     destroy: async () => {},
-    exec: async () => ({ success: false, exitCode: 1, stdout: "", stderr: " ERR_PNPM_FETCH_503  GET https://registry.npmjs.org/vite: Service Unavailable - 503\n" }),
-  })],
+    exec: async () => install(),
+  });
+}
+
+const failedInstall = (stderr) => installer(() => ({ success: false, exitCode: 1, stdout: "", stderr }));
+
+const USER_INSTALL_FAILURES = [
+  ["ERR_PNPM_NO_MATCHING_VERSION", " ERR_PNPM_NO_MATCHING_VERSION  No matching version found for dayjs@^99\n"],
+  ["ERR_PNPM_FETCH_404", " ERR_PNPM_FETCH_404  GET https://registry.npmjs.org/dayjss: Not Found - 404\n"],
+  ["ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER", " ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER  dayjs@latest-ish isn't supported by any available resolver.\n"],
+  ["ERR_PNPM_BAD_PM_VERSION", " ERR_PNPM_BAD_PM_VERSION  This project is configured to use v8 of pnpm. Your current pnpm is v10.34.5\n"],
+];
+
+for (const [code, stderr] of USER_INSTALL_FAILURES) {
+  test(`an install refused with ${code} (the author's dependency) is a 422 build_failed with the pnpm error`, async () => {
+    setSandboxFactory(failedInstall(stderr));
+    const { env, ctx, pointsOf } = setup();
+    await seedCatalog(env);
+    const res = await worker.fetch(ROUTES[0][1](), env, ctx);
+    assert.equal(res.status, 422);
+    const body = await res.json();
+    assert.equal(body.code, "build_failed");
+    assert.ok(body.detail.includes(code), body.detail);
+    assert.equal(body.error, `install failed: ${body.detail}`);
+    assert.deepEqual(await requestOutcomes(pointsOf), ["4xx"]);
+  });
+}
+
+test("an MCP client reading only `error` gets the build diagnostic", async () => {
+  setSandboxFactory(rejectsCode);
+  const { env, ctx } = setup();
+  await seedCatalog(env);
+  for (const [, makeRequest] of ROUTES.filter(([name]) => name.includes("/api/mcp/"))) {
+    const res = await worker.fetch(makeRequest(), env, ctx);
+    assert.equal(res.status, 422);
+    assert.match((await res.json()).error, /src\/index\.tsx:1:10: ERROR: Unexpected ";"/);
+  }
+});
+
+const INFRA_FAILURES = [
+  ["a build killed by a signal (OOM)", builder(() => ({ success: false, exitCode: 137, stdout: "", stderr: "Killed\n" }))],
+  ["a build command that is not executable (126)", builder(() => ({ success: false, exitCode: 126, stdout: "", stderr: "sh: vite: Permission denied\n" }))],
+  ["a build command that is not found (127)", builder(() => ({ success: false, exitCode: 127, stdout: "", stderr: "sh: vite: not found\n" }))],
+  ["a build that exits 1 on a network failure", builder(() => ({
+    success: false,
+    exitCode: 1,
+    stdout: "",
+    stderr: "`next/font` error:\nFailed to fetch `Inter` from Google Fonts.\nTypeError: fetch failed\n",
+  }))],
+  ["a build that exits 1 after its worker ran out of memory", builder(() => ({
+    success: false,
+    exitCode: 1,
+    stdout: "",
+    stderr: "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\nerror during build:\nBuild failed\n",
+  }))],
+  ["an install that fails on a registry 5xx", failedInstall(" ERR_PNPM_FETCH_503  GET https://registry.npmjs.org/dayjs: Service Unavailable - 503\n")],
+  ["an install that fails on a reset connection", failedInstall(" ERR_PNPM_META_FETCH_FAIL  GET https://registry.npmjs.org/dayjs: request to https://registry.npmjs.org/dayjs failed, reason: read ECONNRESET\n")],
+  ["an install that times out", failedInstall(" ERR_PNPM_META_FETCH_FAIL  GET https://registry.npmjs.org/dayjs: request to https://registry.npmjs.org/dayjs failed, reason: connect ETIMEDOUT 104.16.0.35:443\n")],
+  ["a build result without an exit code", builder(() => ({ success: false, stdout: "", stderr: "error during build:\nsomething\n" }))],
+  ["an exec that throws (container lost)", builder(() => { throw new Error("container is not running"); })],
 ];
 
 for (const [name, factory] of INFRA_FAILURES) {

@@ -327,16 +327,30 @@ written). The editor emits the browser `example.saved` only when a response lack
 key, i.e. an API that does not count saves; that fallback can be removed once every
 deployed API sends the marker.
 
-A build that rejects the demo's own code is client input. That means the build command
-exited with a code from 1 to 127 (`isUserBuildError` in `workers/api/src/share.ts`), on
-any route that builds inline: `POST /api/demos`, `PATCH /api/demos/:id`, `POST
-/api/mcp/demos` and `PATCH /api/mcp/demos/:id`. It answers `422 {"error":"build_failed",
-"detail":<the build error, one line>}`, so `api.request` records it as `4xx`, and the
-`api-5xx-rate` alert (`workers/o11y/src/alerts/rules.ts`, which counts `5xx` outcomes)
-never sees it. `snapshot.build` still records `failed`. The stored demo is unchanged,
-because the build runs before anything is written. An install failure, a build killed by
-a signal (exit code 128 and above), a result without an exit code, and any other throw
-stay `5xx`.
+A build that fails on the demo's own input is client input (`isUserBuildError` in
+`workers/api/src/share.ts`), on any route that builds inline: `POST /api/demos`, `PATCH
+/api/demos/:id`, `POST /api/mcp/demos` and `PATCH /api/mcp/demos/:id`. That means one of:
+- the build command exited with a code from 1 to 125;
+- the install failed with `ERR_PNPM_NO_MATCHING_VERSION`, `ERR_PNPM_FETCH_404`,
+  `ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER` or `ERR_PNPM_BAD_PM_VERSION` (a
+  dependency the author named).
+
+It answers `422 {"error":"<phase> failed: <detail>","code":"build_failed","detail":<the
+build error, one line>}`. `error` carries the diagnostic because MCP clients read only
+that field; the editor keys on `code`. `api.request` records it as `4xx`, so `api-5xx-rate`
+does not count it. `snapshot.build` still records `failed`, and the
+`snapshot-build-failed-rate` alert is the backstop: it fires when one framework has more
+than 50 % failed builds over 30 min with at least 10 failed. The stored demo is
+unchanged, because the build runs before anything is written.
+
+Everything else stays `5xx`: exit code 126, 127 or 128 and above (not executable, not
+found, killed by a signal), a result without an exit code, any other install failure
+(`ERR_PNPM_FETCH_5xx`, a reset or timed-out connection), and any other throw. So does
+any failure whose output names infrastructure, whatever the exit code: `ENOTFOUND`,
+`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `fetch failed`, `Failed to fetch`, `heap out of
+memory`, `signal SIGKILL`, `worker exited`, and Next's `` `next/font` error `` or a
+`fonts.googleapis.com` fetch. This last rule is a match on message text: a tool that
+rewords these lines moves its failure into the 422 class.
 
 `serve.share` locally: under `vite dev` (what `pnpm dev:full` serves), React
 StrictMode runs the share page's load effect twice, so one `/share/<id>` view gives 2
