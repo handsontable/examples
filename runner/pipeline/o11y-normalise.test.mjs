@@ -709,9 +709,9 @@ test("OTLP: forbidden attributes and body text are scrubbed over the whole recor
 
 test("OTLP: a real Cloudflare invocation-log export — cf.ray survives the cloudflare.ray_id remap, service.version defaults to unknown, forbidden fields are dropped", async () => {
   // pipeline/fixtures/otlp/json/cloudflare-invocation-log.json is captured
-  // real output (scrubbed) from this task's sandbox-probe re-run against a
-  // throwaway Worker with `observability.logs.invocation_logs: true` — see
-  // Two real findings this fixture pins:
+  // real output (scrubbed) from a throwaway Worker with
+  // `observability.logs.invocation_logs: true`. Two real findings this
+  // fixture pins:
   //   - the ray id arrives as `cloudflare.ray_id`, not the contract's
   //     `cf.ray` (otlp.ts#CLOUDFLARE_KEY_REMAP);
   //   - Cloudflare's own automatic export never sends `service.version` at

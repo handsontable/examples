@@ -1,38 +1,17 @@
 // The lint gate for every provisioned dashboard under
 // containers/o11y/grafana/dashboards/. Local ClickHouse accepts far more
 // SQL than Workers Analytics Engine does — this is the one place that
-// difference is enforced, so a panel that only happens to work against the
-// local shim never reaches production silently broken.
-//
-// Four rules, each proven to fail on a real violation (see the `test()`s
-// under "the lint itself" below):
-//
-//   1. Every Analytics Engine (vertamedia-clickhouse-datasource) panel query
-//      uses only known contract columns (§4: index1, the assigned blob/double
-//      slots, `timestamp`/`_sample_interval` — the local-only columns §10
-//      adds) and only an allowlisted function set; any bare use of `double1`
-//      (the count slot) must sit inside the `SUM(_sample_interval * double1)`
-//      reading rule (§4), never `COUNT()`.
-//   2. Every Loki panel query and annotation query uses only the labels
-//      `otlp_config` promotes (§3 — `LOKI_LABELS`, read from the same
-//      telemetry module the contract test pins) and names its datasource by
-//      a real tenant uid (`loki-browser`/`loki-worker`), never an implicit
-//      default.
-//   3. No dashboard carries a legacy panel-level `alert` block or a
-//      dashboard-level `alerting` rule list (ADR-0041 §F.3: Grafana holds no
-//      alert rules, only the built-in "Annotations & Alerts" query, which is
-//      not a rule).
-//   4. Every `blobN` a query's WHERE clause filters on (`blobN = ...` /
-//      `blobN IN (...)`) must be one `index1`'s referenced metric(s)
-//      actually set (§5's own "Blobs used" cell, plus the three universal
-//      resource attrs every point carries) — a filter on a blob outside
-//      that set matches zero rows on every real point (empty panel, not a
-//      query error — the local shim accepts the column same as the real
-//      one, so this needed its own rule rather than falling out of rule 1's
-//      column-existence check).
-//
+// difference is enforced, so a panel that only works against the local
+// shim never reaches production silently broken. Four rules (proven to
+// fail on a real violation, see "the lint itself" below): (1) an AE panel
+// query uses only known contract columns (§4) and an allowlisted function
+// set; (2) a Loki panel/annotation query uses only the labels §3 promotes
+// and a real tenant uid, never an implicit default; (3) no dashboard
+// carries a legacy `alert` block (ADR-0041 §F.3: Grafana holds no alert
+// rules); (4) a `blobN` WHERE filter must be one the metric's §5 row
+// actually sets — the local shim accepts an out-of-set column the real
+// one would zero-row, so this needs its own rule.
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
-// Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
 import assert from "node:assert/strict";

@@ -1,21 +1,12 @@
 // The ingest scrub/normalise/fingerprint path must not carry a quadratic
 // ("ReDoS") regex reachable from an anonymous `POST /telemetry/collect`
-// request — an attacker-controlled string with no closing delimiter makes
-// a backtracking engine work O(n) at each of O(n) start positions, O(n²)
-// total. Measured on an unfixed pattern: `redactEmailInText` alone cost
-// 4.3s at 80k characters and projected ~36s at the 256 KB record cap, well
-// past the Worker's 120s `cpu_ms` budget for a handful of concurrent
-// requests.
-//
-// These tests assert a wall-clock budget on adversarial input for each
-// pattern, plus the full `processFaroBody` pipeline and a real
-// `worker.fetch` route call with a gzip body — the shape that reproduces
-// the CPU-exhaustion route. Every pattern here is linear-time, backed by
-// the pre-scrub truncation (`SCRUB_TEXT_MAX_CHARS`).
-//
-// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build` (this
-// file imports the runtime's dist, same as `telemetry-fingerprint.test.mjs`).
-// Run: node --experimental-strip-types --test pipeline/o11y-redos.test.mjs
+// request: an unclosed-delimiter string makes a backtracking engine cost
+// O(n²). Measured on an unfixed pattern: `redactEmailInText` alone cost
+// 4.3s at 80k characters, projected ~36s at the 256 KB record cap, well
+// past the Worker's 120s `cpu_ms` budget. These tests assert a wall-clock
+// budget on adversarial input for each pattern, plus the full
+// `processFaroBody` pipeline and a real `worker.fetch` gzip-body call.
+// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -54,17 +45,9 @@ async function assertUnderBudget(label, budgetMs, fn) {
 
 // ---- individual pattern budgets (a shared budget, comfortably under both bars)
 
-// `INDIVIDUAL_PATTERN_BUDGET_MS` must not be a tight, hard-coded 100ms: on
-// a real run at load average 50, four of these tests missed a 100ms budget
-// on the fixed (linear) code alone — redactEmailInText 297ms/268ms,
-// redactUserAgentInText 502ms, redactPreviewHosts 148ms — with no code
-// regression; the same file run alone passed 10/10. 3000ms sits far above
-// both:
-//  - at least 5x the worst fixed-code time observed under that load
-//    (~500ms), so ordinary scheduler contention can't trip it; and
-//  - at least 3x (in practice ~4-5x, measured below) under every quadratic
-//    pattern's time on its own adversarial input, so a reintroduced
-//    unbounded quantifier still fails loudly.
+// Not a tight 100ms: under real load, fixed (linear) code alone measured
+// up to 502ms with no regression. 3000ms stays well above that and still
+// well under a quadratic pattern's adversarial-input time.
 const INDIVIDUAL_PATTERN_BUDGET_MS = 3000;
 
 // Sized at 150k, not 100k: at 100k the pre-fix EMAIL_PATTERN only cost

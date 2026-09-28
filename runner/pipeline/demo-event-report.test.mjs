@@ -55,11 +55,9 @@ test("attrs carry surface=demo-runtime, the stringified tier, framework, and ht_
   assert.deepEqual(report.attrs, { surface: "demo-runtime", tier: "2", framework: "vue", ht_major: "17" });
 });
 
-// The `tier1-playground` dashboard's "preview.runtime_error rate by
-// reason" panel filters `blob7 IN (${ht_major:sqlstring})`. Without
-// `ht_major` on the attrs, every row lands with blob7 = '' and the panel
-// would be permanently empty. This proves the value survives, not just
-// the key.
+// The `tier1-playground` dashboard's "runtime_error rate by reason" panel
+// filters `blob7 IN (${ht_major:sqlstring})`; without `ht_major` on the
+// attrs every row lands blob7 = '' and the panel is permanently empty.
 test("ht_major carries the caller's actual value through to attrs (contract §5 / F10a)", () => {
   for (const htMajor of ["15", "16", "17", "18", "19", "next", "none"]) {
     const report = demoEventReport({ kind: "error", message: "m", tier: 1, framework: "react", htMajor });

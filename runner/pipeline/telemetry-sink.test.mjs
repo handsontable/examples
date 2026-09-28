@@ -1,22 +1,9 @@
 // `AeSink` (observability contract §4/§10) — `memorySink`, and
-// `clickhouseSink`'s wire format against the actual
-// `containers/o11y/local/clickhouse-init.sql` schema (confirmed
-// column-for-column: index1, blob1-20 String, double1-20 Float64,
-// timestamp DateTime64(3), _sample_interval). The `timestamp` shape (raw
-// epoch-millisecond integer) was cross-checked against a real, throwaway
-// `clickhouse/clickhouse-server:24.10-alpine` container running the exact
-// DDL — see `sink.ts`'s doc comment for the measured reasoning (a bare
-// Unix-seconds integer and a formatted string were both measured wrong).
-//
-// `clickhouseSink`'s credential headers and non-2xx rejection were
-// measured against the same real container, with no credentials sent:
-// `compose.yml` answers every insert with a real `403`, and a sink that
-// only checks whether `fetch` itself threw would resolve anyway —
-// `SELECT count()` on the table reads back `0`, a silent local-mode
-// metrics blackout.
-//
-// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
-// Run: node --experimental-strip-types --test pipeline/*.test.mjs
+// `clickhouseSink`'s wire format against the real clickhouse-init.sql
+// schema, cross-checked against a throwaway ClickHouse container (raw
+// epoch-millisecond `timestamp`, not seconds or a string — see `sink.ts`'s
+// doc comment). Credential headers and non-2xx rejection are asserted too,
+// since a sink that only checks whether `fetch` threw resolves on a `403`.
 
 import test from "node:test";
 import assert from "node:assert/strict";
