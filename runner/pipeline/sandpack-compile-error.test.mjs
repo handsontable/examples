@@ -340,8 +340,9 @@ for (const [line, thrown] of TYPED_THROWS) {
       runtime.writeFile("/index.js", BASE_SOURCE + doc + "\n");
       collapse.noteEdit(); // App.tsx#writeFile, right after the runtime write
       await settle();
-      // Each run relays before the next keystroke (the typist is slower than the compile).
+      // Each run starts and relays before the next keystroke (the typist is slower than the compile).
       if (pushes.length > before) {
+        runtime.onMessage({ type: "start" });
         const relayed = runPushed(pushes.at(-1));
         if (relayed) relayRuntimeError(relayed);
       }
@@ -356,6 +357,50 @@ for (const [line, thrown] of TYPED_THROWS) {
     assert.equal(points("sandpack.compile_error").length, 0, "the finished line compiles");
   });
 }
+
+/** What the preview relays for a pushed sandbox's `console.error` calls, joined as
+ *  the monitor joins its arguments. */
+function consoleErrorOf(setup) {
+  const logged = [];
+  const console = { log() {}, error: (...args) => logged.push(args.join(" ")) };
+  try {
+    vm.runInNewContext(setup.files["/index.js"].code, { console });
+  } catch {
+    return null;
+  }
+  return logged[0] ?? null;
+}
+
+test("a console.error line typed key by key counts once when each run relays only after the next edit is dispatched", async () => {
+  const { clock, collapse, runtime, pushes, relayRuntimeError, points } = ladderHarness();
+  const line = "console.error('typed err');";
+  // The bundler evaluates one compile at a time: a run's relay reaches the page after
+  // the next edit has been dispatched, and before the bundler's `start` for that edit.
+  let late = null;
+  for (const doc of typedDocuments(line)) {
+    const before = pushes.length;
+    runtime.writeFile("/index.js", BASE_SOURCE + doc + "\n");
+    collapse.noteEdit();
+    await settle();
+    if (late) relayRuntimeError(late);
+    late = null;
+    if (pushes.length > before) {
+      runtime.onMessage({ type: "start" });
+      late = consoleErrorOf(pushes.at(-1));
+    }
+  }
+  if (late) relayRuntimeError(late);
+  assert.equal(consoleErrorOf(pushes.at(-1)), "typed err", "guard: the last run is the finished line's");
+  assert.ok(pushes.length > 3, "guard: prefixes of the line ran");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+
+  const runtimeErrors = points("preview.runtime_error");
+  assert.deepEqual(
+    runtimeErrors.map((p) => p.attrs.fingerprint),
+    [fingerprint("demo-runtime", "typed err")],
+    "the finished line's message, once, and no earlier rung",
+  );
+});
 
 /** The bundler's frameless `show-error` for a pushed sandbox it cannot build. */
 function bundlerRejects(runtime, message) {
@@ -375,6 +420,7 @@ for (const mode of ["typed", "pasted"]) {
       collapse.noteEdit();
       await settle();
       if (pushes.length === before) continue;
+      runtime.onMessage({ type: "start" });
       const code = pushes.at(-1).files["/index.js"].code;
       const specifier = /import\s*"([^"]*)"/.exec(code)?.[1];
       if (specifier !== undefined) bundlerRejects(runtime, `ModuleNotFoundError: Could not find module in path: '${specifier}'`);
@@ -390,13 +436,15 @@ for (const mode of ["typed", "pasted"]) {
   });
 }
 
-test("an edit that transpiles to the running sandbox reports 'unchanged'; one that differs reports 'rerun'", async () => {
+test("an edit that transpiles to the running sandbox reports 'unchanged'; one that differs reports 'rerun' when the bundler starts it", async () => {
   const { runtime, pushes } = mountedParcel();
   const outcomes = [];
   runtime.onPushOutcome((o) => outcomes.push(o));
 
   runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n");
   await settle();
+  assert.deepEqual(outcomes, [], "dispatched, but the bundler has not started it yet");
+  runtime.onMessage({ type: "start" });
   runtime.writeFile("/index.js", BASE_SOURCE + "f(1);\n");
   await settle();
   runtime.writeFile("/index.js", BASE_SOURCE + "f(1, \n"); // does not parse: no outcome
@@ -404,6 +452,7 @@ test("an edit that transpiles to the running sandbox reports 'unchanged'; one th
   runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n"); // superseded before its transpile settles: no outcome
   runtime.writeFile("/index.js", BASE_SOURCE + "f(2)\n");
   await settle();
+  runtime.onMessage({ type: "start" });
 
   assert.deepEqual(outcomes, ["rerun", "unchanged", "rerun"]);
   assert.equal(pushes.length, 2);

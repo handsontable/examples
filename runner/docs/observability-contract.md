@@ -294,15 +294,19 @@ collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
   sandbox (a frameless `show-error`), its `sandpack.compile_error` is that result and
   replaces the run; a pre-transpile failure never ran, so it is not the running
   sandbox's;
+- on Tier 1, the bundler runs one compile at a time, so a run's reports can still arrive
+  after the next edit has been dispatched. A new run starts at the bundler's `start`
+  message (`onPushOutcome("rerun")`), not at dispatch, and what the burst held until
+  then came from the run it replaces and is dropped. A pre-transpile failure of the
+  newest edit is kept, because no run of that edit will start;
 - 2 s (`DEMO_EDIT_SETTLE_MS`) after the last edit the burst closes, and the last run's
   reports are emitted, one per §7 fingerprint;
 - outside a burst (first load, a user interaction, a Tier-2 rebuild that reports after
   the burst closed) a report is emitted at once;
 - a fingerprint counts once until the next edit or preview mount, and at most 50
   (`DEMO_COLLAPSE_CEILING`) points per page load.
-A report from a superseded run still in flight at the last keystroke can add one point
-to that burst. On Tier 2, where a rebuild outlasts the 2 s window, a superseded
-rebuild's report can land after the burst closed and count on its own. The Sentry side is not behind this collapse; its relay budgets are
+On Tier 2, where a rebuild outlasts the 2 s window, a superseded rebuild's report can
+land after the burst closed and count on its own. The Sentry side is not behind this collapse; its relay budgets are
 unchanged.
 
 `example.saved` is written by the API worker when an editor Save (`PATCH /api/demos/:id`

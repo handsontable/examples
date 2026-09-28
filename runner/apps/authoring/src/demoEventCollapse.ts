@@ -48,9 +48,10 @@ export interface DemoEventCollapse<T> {
    *  replaces everything held and suppresses the burst's later non-compile
    *  reports; outside a burst it is emitted at once like any other report. */
   report(key: string, item: T, opts?: ReportOptions): void;
-  /** The newest edit's push outcome (Tier 1 only). `rerun` starts a new
-   *  running sandbox; `unchanged` makes the burst's result the running
-   *  sandbox's not-yet-emitted reports, since no new run will replace them. */
+  /** The newest edit's push outcome (Tier 1 only). `rerun` (the bundler starts
+   *  a new sandbox) drops what the burst held from the run it replaces;
+   *  `unchanged` makes the burst's result the running sandbox's not-yet-emitted
+   *  reports, since no new run will replace them. */
   pushOutcome(outcome: PushOutcome): void;
   /** Close the open burst now (emit what the last run reported). */
   flush(): void;
@@ -73,6 +74,8 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
   /** The open burst's newest edit failed to compile: its reports are from
    *  code already typed past, until the next edit. */
   let runReplaced = false;
+  /** The open burst's newest edit failed the pre-transpile, so no run of it will start. */
+  let editFailed = false;
   /** Reports of the running sandbox (since the last `rerun` or `reset`),
    *  first one per key, with whether it has been emitted. */
   let running = new Map<string, { item: T; emitted: boolean }>();
@@ -99,6 +102,7 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
     const settled = pending;
     pending = new Map();
     runReplaced = false;
+    editFailed = false;
     for (const [key, item] of settled) emit(key, item);
   }
 
@@ -108,6 +112,7 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
       pending = new Map();
       counted.clear();
       runReplaced = false;
+      editFailed = false;
       if (timer !== null) opts.clearTimer(timer);
       timer = opts.setTimer(() => {
         timer = null;
@@ -129,6 +134,7 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
       if (reportOpts?.replacesRun) {
         pending = new Map([[key, item]]);
         runReplaced = true;
+        editFailed = !reportOpts.fromBundler;
         return;
       }
       if (runReplaced) return;
@@ -139,6 +145,11 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
       if (outcome === "rerun") {
         running = new Map();
         runningReplaced = false;
+        // What the burst held came from the run this one replaces.
+        if (!editFailed) {
+          pending = new Map();
+          runReplaced = false;
+        }
         return;
       }
       if (timer === null) return;
