@@ -200,34 +200,21 @@ function allowlistAttributes(attrs: Record<string, string> | undefined): Record<
 }
 
 /**
- * D-M7 fix round: the same query-stripping rule
- * `workers/o11y/src/normalise/text-scrub.ts#stripUrlQueriesInText` applies
- * server-side (a "T02-D" extra pass run on every stored record's free body
- * text, beyond what this module alone guarantees) — `stripQueryAndFragment`
- * above only strips a field that IS a URL end to end (`meta.page.url`, a
- * stack frame's `filename`); it never touches a URL merely *embedded* inside
- * a message/value string, which the server-side pass covers separately.
- * Applied here too, browser-side, as the matching defense-in-depth pass — no
- * known call site produces this today, same caveat the server module's own
- * doc comment gives, but a message/value string reaching here should not
- * carry a query string (a token, a cache-busting param) any more than a
- * discrete URL field would.
- *
- * Cannot import the server's own `stripUrlQueriesInText`: it lives in
- * `workers/o11y/src/normalise/`, a Cloudflare-Worker-only module that itself
- * imports FROM this package (`@handsontable/demo-runtime/telemetry`), never
- * the other way — this is the same regex rule, kept in sync by hand.
+ * §3: strips a query string/fragment off a URL merely *embedded* inside a
+ * message/value string — unlike `stripQueryAndFragment` above, which only
+ * strips a field that IS a URL end to end (`meta.page.url`, a stack frame's
+ * `filename`). Exported so `workers/o11y/src/normalise/text-scrub.ts` runs
+ * the same rule server-side, on every stored record's free body text, as
+ * its own extra pass beyond what this module alone guarantees.
  *
  * Matches after `redactPreviewHosts` has already replaced a preview host
  * with the literal `<preview>` placeholder (`scrubText` below runs this
  * last), so the pattern optionally consumes that placeholder before
- * continuing into the (ordinary, `<`/`>`-free) path and query — the same fix
- * the server module's own header comment documents for the identical
- * ordering problem (A-I3).
+ * continuing into the (ordinary, `<`/`>`-free) path and query.
  */
 const EMBEDDED_URL_PATTERN = /\bhttps?:\/\/(?:<preview>)?[^\s"'<>)]*/gi;
 
-function stripUrlQueriesInText(text: string): string {
+export function stripUrlQueriesInText(text: string): string {
   return text.replace(EMBEDDED_URL_PATTERN, (url) => {
     const cut = url.search(/[?#]/);
     return cut === -1 ? url : url.slice(0, cut);
@@ -235,17 +222,14 @@ function stripUrlQueriesInText(text: string): string {
 }
 
 /**
- * R3 F17c: contract §3's "never sent" list includes "an IP" — the matching
- * defense-in-depth duplicate of
- * `workers/o11y/src/normalise/text-scrub.ts#redactIpInText`, kept in sync by
- * hand for the same reason `stripUrlQueriesInText` above is: that module is
- * Cloudflare-Worker-only and itself imports FROM this package, never the
- * other way. Applied browser-side too so a stripped IP never leaves the
+ * Contract §3's "never sent" list includes "an IP". Exported so
+ * `workers/o11y/src/normalise/text-scrub.ts` runs the same rule
+ * server-side; applied browser-side too so a stripped IP never leaves the
  * client at all, not only at ingest.
  *
- * Bounded from the start, the same as every other pattern in this module —
- * no unbounded quantifier, so no separate ReDoS fix round was needed; see
- * `pipeline/o11y-redos.test.mjs` for the adversarial-input timing proof.
+ * Bounded from the start — no unbounded quantifier, so no ReDoS backtrack
+ * regardless of input shape; see `pipeline/o11y-redos.test.mjs` for the
+ * adversarial-input timing proof.
  *
  * IPv4: four dotted octets 0–255, boundary-guarded on both ends so a
  * version string never matches (`18.1.1` has too few dotted numbers to
@@ -291,11 +275,10 @@ const IPV6_PATTERN = new RegExp(
   "g",
 );
 
-// IPv4 first, then IPv6 — same reordering, and the same reason, as the
-// server-side `redactIpInText` (an IPv4-mapped IPv6 address's octets are
+// IPv4 first, then IPv6: an IPv4-mapped IPv6 address's octets are
 // hex-digit-shaped, so IPv6 alone can eat a leading fragment and leave a
-// real piece of the address behind).
-function redactIpInText(text: string): string {
+// real piece of the address behind.
+export function redactIpInText(text: string): string {
   return text
     .replace(IPV4_PATTERN, (_match, prefix: string) => `${prefix}<ip>`)
     .replace(IPV6_PATTERN, (_match, prefix: string) => `${prefix}<ip>`);
