@@ -1,15 +1,10 @@
 #!/usr/bin/env node
-// One-command local dev for the runner (`pnpm dev` / `dev:live` / `dev:full`
-// in runner/package.json, all three calling this one script with a
-// different `--tier`). See docs/run-and-deploy.md's "Run locally" section
-// for the user-facing walkthrough. Design rationale: wrangler's
-// `.dev.vars` always wins over a `--var` of the same name, which is why
-// `dev-lib.mjs`'s bootstrap/patch design writes non-secret defaults into
-// `.dev.vars` up front rather than relying on `--var` to reach them.
-//
-// `pnpm o11y:dev` is a separate, standalone entry point (scripts/o11y-dev.mjs)
-// for someone who only wants the o11y worker — it shares this file's
-// dev-lib.mjs helpers rather than duplicating them.
+// One-command local dev for the runner (`pnpm dev`/`dev:live`/`dev:full`).
+// See docs/run-and-deploy.md's "Run locally" section for the walkthrough.
+// wrangler's `.dev.vars` always wins over `--var`, which is why
+// `dev-lib.mjs`'s bootstrap/patch writes non-secret defaults into
+// `.dev.vars` up front. `pnpm o11y:dev` (scripts/o11y-dev.mjs) shares this
+// file's dev-lib.mjs helpers for the o11y-only entry point.
 
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
@@ -79,12 +74,9 @@ function log(name, line) {
   console.log(prefixed(name)(line));
 }
 
-// `onLine`: dev-stack note ("stale dependencies after a pull") — lets the
-// caller watch each raw line (before this line's own `[name]` log prefix is
-// added) for a wrangler build-error marker, so a `wrangler dev` that fails
-// its own esbuild step can be reported immediately instead of only after the
-// full readiness timeout. Optional — the plain two-arg call every other
-// child uses behaves exactly as before.
+// `onLine`: lets the caller watch each raw line (before the `[name]`
+// prefix) for a wrangler build-error marker, reported immediately instead
+// of waiting out the full readiness timeout. Optional.
 function pipeLines(stream, name, sink = console.log, onLine = () => {}) {
   let buf = "";
   stream.on("data", (chunk) => {
@@ -136,14 +128,9 @@ async function main() {
     process.exit(1);
   }
 
-  // A pull that adds a dependency (e.g. @jridgewell/trace-mapping) with
-  // node_modules never reinstalled would otherwise run all the way to the
-  // 120s readiness timeout below before failing with a generic "worker
-  // never came up" — the real `Could not resolve "..."` wrangler error only
-  // ever visible buried in the piped [api]/[o11y] log output above it. This
-  // cheap, file-mtime-only check runs before anything else (Docker check,
-  // migrations, spawning any child) and fails fast with the one command that
-  // fixes it.
+  // A pull that adds a dependency with node_modules never reinstalled
+  // would otherwise run to the full 120s readiness timeout before a
+  // generic "worker never came up", burying the real wrangler error.
   if (isPnpmInstallNeeded()) {
     console.error(`error: ${PNPM_INSTALL_NEEDED_MESSAGE}`);
     process.exit(1);
@@ -157,16 +144,10 @@ async function main() {
     process.exit(1);
   }
 
-  // Checked BEFORE --reset-local-db: reversed, `dev.mjs --tier=2
-  // --reset-local-db` with Docker not running would delete workers/api's
-  // local D1 state (`.wrangler/state/v3/d1` + the applied-migrations
-  // record) and then immediately exit on the Docker-not-running error — a
-  // surprising side effect for a run that otherwise did nothing.
-  // `--reset-local-db` is only ever valid alongside
-  // `--tier=2`/`--tier=full` (parseArgs above already enforces this), the
-  // same tiers that need Docker, so checking Docker first and resetting
-  // only after it is confirmed available costs nothing and removes that
-  // surprise.
+  // Checked BEFORE --reset-local-db: reversed, a run with Docker not
+  // running would delete workers/api's local D1 state and then
+  // immediately exit on the Docker error — a surprising side effect for a
+  // run that otherwise did nothing.
   let containersBefore = new Set();
   if (tier === "2" || tier === "full") {
     if (!isDockerAvailable((cmd, args) => execFileSync(cmd, args, { stdio: "ignore" }))) {
@@ -180,15 +161,9 @@ async function main() {
   }
 
   if (tier === "2" || tier === "full") {
-    // Pre-pull gate (dev-prepull task): every container base image this
-    // tier's Dockerfiles declare must be present BEFORE any worker starts.
-    // Without this, `wrangler dev`'s own local container build can fail
-    // silently on a missing base image (e.g. a Docker Hub timeout pulling
-    // `cloudflare/sandbox:0.12.3`) while `wrangler dev` itself keeps
-    // running — the failure only surfaces later, opaquely, at Tier-2
-    // session-start time. Runs before `containersBefore` below (nothing
-    // has been spawned yet at this point), so a pull failure here leaves
-    // nothing running to clean up.
+    // Pre-pull gate: every base image this tier's Dockerfiles need must be
+    // present BEFORE any worker starts, or `wrangler dev`'s container build
+    // fails silently and only surfaces later, opaquely, at session start.
     if (shouldCheckContainerImages(tier, skipImageCheck)) {
       const refs = collectTierBaseImages(tier, RUNNER_ROOT);
       if (refs.length > 0) {
@@ -235,14 +210,9 @@ async function main() {
     const { created } = bootstrapDevVars({ examplePath, devVarsPath });
     if (created) log("api", `created ${path.relative(RUNNER_ROOT, devVarsPath)} from .dev.vars.example`);
 
-    // PREVIEW_HOST port adoption: `.dev.vars` always wins over `--var` for a
-    // key it declares, so when API_DEV_PORT was NOT explicitly set for this
-    // run, a pre-existing `.dev.vars` pinning a different port is the port
-    // that will actually be reached — adopt it (for the worker's own
-    // `--port` and the vite proxy target) instead of starting pointed at a
-    // port `.dev.vars` will silently override anyway. An EXPLICIT
-    // API_DEV_PORT that conflicts still only warns (see
-    // resolveDevVarsPortAdoption's doc comment).
+    // PREVIEW_HOST port adoption: `.dev.vars` always wins over `--var`, so
+    // adopt a pre-existing file's declared port instead of starting
+    // pointed at a port `.dev.vars` will silently override anyway.
     const apiPortExplicit = process.env.API_DEV_PORT !== undefined && process.env.API_DEV_PORT !== "";
     const apiPortAdoption = resolveDevVarsPortAdoption({
       devVarsPath,
@@ -274,9 +244,7 @@ async function main() {
       });
     } catch (err) {
       // Clean, single-line failure — never a raw execFileSync stack trace.
-      // Nothing has been spawned yet at this point in main() (this runs
-      // before the long-running processes below, and before docker compose
-      // for --tier=full), so exiting here leaves nothing running to clean up.
+      // Nothing has been spawned yet, so exiting here leaves nothing to clean up.
       console.error(formatMigrationError(err));
       process.exit(1);
     }
@@ -320,13 +288,9 @@ async function main() {
       if (patched.length) log("o11y", `filled in local-dev defaults for: ${patched.join(", ")}`);
       if (stripped.length) log("o11y", `left ${stripped.join(", ")} undeclared so this run's own ephemeral --var takes effect`);
     }
-    // Runs on EVERY invocation, not only a fresh bootstrap (`created`) — a
-    // pre-existing `.dev.vars` needs these two filled as well, or
-    // worker-tenant/Sentry panels can't fill locally because both
-    // fixture-replay gates 401. Only the key NAME is logged,
-    // never the generated value — the same rule `O11Y_SESSION_SECRET`'s own
-    // `--var` gets from `redactArgsForLog`, here trivially satisfied because
-    // the value is never in `dev.mjs`'s own argv/log line at all.
+    // Runs on EVERY invocation, not only a fresh bootstrap — a
+    // pre-existing `.dev.vars` needs these two filled too. Only the key
+    // NAME is logged, never the generated value.
     const { filled } = fillEmptyDevVarsSecrets({ devVarsPath, keys: O11Y_DEVVARS_AUTOFILL_SECRET_KEYS });
     if (filled.length) {
       log("o11y", `filled in ephemeral local-dev values for: ${filled.join(", ")} (values never logged)`);
@@ -336,11 +300,8 @@ async function main() {
       console.error(`error: ${devVarsPath} must set O11Y_ENV=local — refusing to start against a non-local config`);
       process.exit(1);
     }
-    // Same PREVIEW_HOST-style port adoption, for the one other port
-    // `.dev.vars` pins here: workers/o11y/.dev.vars's SLACK_WEBHOOK_URL. It's
-    // only ever out of sync on a PRE-EXISTING file (a fresh bootstrap above
-    // already bakes in the current O11Y_SLACK_CAPTURE_PORT), e.g. a
-    // developer changed the port env var after their file was bootstrapped.
+    // Same PREVIEW_HOST-style port adoption, for SLACK_WEBHOOK_URL — only
+    // out of sync on a pre-existing file with a since-changed port env var.
     const slackPortExplicit = process.env.O11Y_SLACK_CAPTURE_PORT !== undefined && process.env.O11Y_SLACK_CAPTURE_PORT !== "";
     const slackAdoption = resolveDevVarsPortAdoption({
       devVarsPath,
@@ -378,10 +339,8 @@ async function main() {
       AE_SQL_TOKEN: "local-dev-token",
     };
 
-    // execFileSync wrapper for `resetO11yLocalState`'s injectable — always
-    // runs from RUNNER_ROOT with the compose stack's own env, stdio
-    // inherited (live `docker compose down -v` output), and lets a caller's
-    // own `{ env }` win for the compose call specifically.
+    // execFileSync wrapper for `resetO11yLocalState`'s injectable — runs
+    // from RUNNER_ROOT with the compose stack's own env, stdio inherited.
     const runDocker = (cmd, args, opts = {}) => execFileSync(cmd, args, { cwd: RUNNER_ROOT, stdio: "inherit", ...opts });
 
     if (fresh) {
@@ -406,21 +365,13 @@ async function main() {
     log("dev", o11yDevDataModeLine(fresh));
 
     log("compose", `starting minio + clickhouse (project ${composeProjectName})`);
-    // `minio-init` (a one-shot `mc mb` container) is not used — its image
-    // (quay.io/minio/mc) is not pullable. compose.yml's `minio` service
-    // creates its own bucket via MINIO_DEFAULT_BUCKETS before its
-    // healthcheck goes green, so `--wait` (block until every named service
-    // is healthy/running) is sufficient.
+    // `minio-init` is not used — quay.io/minio/mc is not pullable.
+    // compose.yml's `minio` creates its bucket via MINIO_DEFAULT_BUCKETS
+    // before its healthcheck goes green, so `--wait` is sufficient.
     //
-    // Brings the stack up and, if `up` itself throws (a real possibility
-    // with `--wait`: a healthcheck that never goes green), tears the SAME
-    // project back down (no `-v`, data kept) before rethrowing — see
-    // `bringUpO11yCompose`'s own doc comment in dev-lib.mjs for why this
-    // needed to be pulled out of `main()` (a throw here happens BEFORE this
-    // stack's own teardown step, further down, is ever pushed onto
-    // `teardownSteps`, and propagates straight past the readiness-wait
-    // try/catch to `main().catch`, which only logs and `process.exit(1)`s —
-    // no cleanup at all).
+    // If `up` itself throws, tears the SAME project back down (no `-v`,
+    // data kept) before rethrowing — see `bringUpO11yCompose`'s own doc
+    // comment in dev-lib.mjs for why this had to be pulled out of `main()`.
     bringUpO11yCompose({
       composeFile,
       composeEnv,
@@ -430,10 +381,8 @@ async function main() {
     teardownSteps.push(() => {
       log("compose", "tearing down minio + clickhouse (data kept — named volumes; use --fresh next run to wipe)");
       try {
-        // Never `-v` here: Ctrl-C is the KEEP path — see composeDownArgs's
-        // own doc comment and o11yDevDataModeLine above. --fresh's own wipe
-        // (resetO11yLocalState) already ran, if at all, before this run's
-        // compose stack was even started.
+        // Never `-v` here: Ctrl-C is the KEEP path. --fresh's own wipe
+        // already ran, if at all, before this compose stack even started.
         execFileSync("docker", composeDownArgs(composeFile), {
           cwd: RUNNER_ROOT,
           env: composeEnv,
@@ -450,21 +399,17 @@ async function main() {
   const plan = buildPlan(tier, ports, { sessionSecret });
   const wranglerRegistryPath = process.env.WRANGLER_REGISTRY_PATH;
   const children = [];
-  // Dev-stack note ("stale dependencies after a pull"): the first
-  // wrangler-own build-error line (`wranglerBuildErrorLine`) seen from each
-  // of the two `wrangler dev` children, keyed by proc name ("api"/"o11y") —
-  // fed to that worker's own readiness wait below so a build failure is
-  // reported immediately instead of only after the full readiness timeout.
+  // The first wrangler build-error line seen from each `wrangler dev`
+  // child, fed to that worker's readiness wait so a build failure is
+  // reported immediately instead of after the full timeout.
   const buildErrorLines = new Map();
 
   function killAll(signal) {
     for (const child of children) {
       if (child.exited) continue;
       try {
-        // `detached: true` (below) put each child in its own process
-        // group — signal the whole group so wrangler's own child
-        // (workerd, a container CLI invocation) is reached too, not just
-        // the direct `node_modules/.bin/wrangler` process.
+        // `detached: true` puts each child in its own process group —
+        // signal the whole group so wrangler's own child processes are reached too.
         process.kill(-child.pid, signal);
       } catch {
         // already gone
@@ -472,17 +417,11 @@ async function main() {
     }
   }
 
-  // `cleanup()` (kill children + run teardown steps) is split from
-  // `shutdown()` (cleanup, then `process.exit(0)`) so a STARTUP failure
-  // (the readiness-wait `await` below throwing) can also run cleanup
-  // without lying about the exit code — `shutdown()` always exits 0, which
-  // is correct for an intentional SIGINT/SIGTERM/SIGHUP but wrong for
-  // "we're crashing". Without this split, a readiness timeout would throw
-  // straight past every teardown step (`main().catch` at the bottom never
-  // calls `shutdown`/`cleanup`), leaving live `wrangler dev`/`vite`
-  // children and any compose stack running — the next `pnpm dev` would
-  // then fail on `--strictPort`, or silently fight the orphaned session
-  // for the same ports.
+  // `cleanup()` (kill children + teardown) is split from `shutdown()`
+  // (cleanup, then exit 0) so a STARTUP failure can also run cleanup
+  // without lying about the exit code. Without this split, a readiness
+  // timeout would throw straight past every teardown step, leaving live
+  // children and any compose stack running.
   let shuttingDown = false;
   async function cleanup(reason) {
     if (shuttingDown) return;
@@ -490,13 +429,9 @@ async function main() {
     log("dev", `${reason} — shutting down`);
     killAll("SIGINT");
     const deadline = Date.now() + 8000;
-    // NOTE: `child.killed` (ChildProcess's own flag) only reflects whether
-    // `.kill()` was CALLED, not whether the process actually exited — and
-    // we signal the process GROUP via the top-level `process.kill(-pid,
-    // ...)` above, which never touches that flag at all. Track real exits
-    // ourselves (`child.exited`, set from the `exit` listener below)
-    // instead, so this loop returns as soon as everything is actually
-    // gone rather than always waiting out the full grace period.
+    // `child.killed` only reflects whether `.kill()` was called, not
+    // whether the process exited, and we signal the process GROUP, which
+    // never touches that flag. Track real exits via `child.exited` instead.
     while (children.some((c) => !c.exited) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 200));
     }
@@ -517,11 +452,8 @@ async function main() {
     await cleanup(`${signal} received`);
     process.exit(0);
   }
-  // SIGHUP: every child is spawned `detached: true` (its own process
-  // group/session), so closing the terminal a `dev.mjs` run is attached to
-  // sends SIGHUP to `dev.mjs` itself but NOT to the detached children —
-  // without a handler here, the default SIGHUP action (no cleanup at all)
-  // would leave every child running.
+  // SIGHUP: every child is `detached: true`, so closing the terminal
+  // sends SIGHUP to dev.mjs but not the children — handle it or they'd leak.
   for (const sig of SHUTDOWN_SIGNALS) {
     process.on(sig, () => shutdown(sig));
   }
@@ -567,10 +499,8 @@ async function main() {
   }
 
   // ---- readiness ------------------------------------------------------
-  // Wrapped so a readiness TIMEOUT (`waitForServer` throwing) also runs
-  // `cleanup()` before this rejection reaches
-  // `main().catch` at the bottom — see `cleanup`/`shutdown`'s own doc
-  // comment above for the bug this closes.
+  // Wrapped so a readiness TIMEOUT also runs `cleanup()` before reaching
+  // `main().catch` — see `cleanup`/`shutdown`'s own doc comment above.
   try {
     if (tier === "full") {
       log("dev", `waiting for o11y on http://localhost:${ports.O11Y_DEV_PORT} ...`);
