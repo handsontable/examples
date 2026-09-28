@@ -349,8 +349,9 @@ test("a compile failure undone back to the running sandbox counts that sandbox's
   relay(FINAL); // the running sandbox, still throwing: suppressed while the newest edit is broken
   collapse.noteEdit(); // deleted again: identical to what runs
   collapse.pushOutcome("unchanged");
+  relay("the running sandbox's next fault"); // no longer suppressed: the newest edit compiles
   clock.advance(DEMO_EDIT_SETTLE_MS);
-  assert.deepEqual(emitted, [FINAL]);
+  assert.deepEqual(emitted, [FINAL, "the running sandbox's next fault"]);
 });
 
 test("an edit that re-runs nothing does not count the running sandbox's already-counted error again", () => {

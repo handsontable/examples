@@ -142,7 +142,6 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
       if (timer === null) return;
       pending = new Map();
       for (const [key, { item, emitted }] of running) if (!emitted) pending.set(key, item);
-      runReplaced = false;
     },
     flush,
     reset() {
