@@ -8,7 +8,7 @@ import { bindingSink, clickhouseSink, type AeSink, type CommonResourceAttrs } fr
 import type { Env } from "../env.js";
 
 /** `demos-api` (contract §3 `service.name`). */
-export const SERVICE_NAME = "demos-api" as const;
+const SERVICE_NAME = "demos-api" as const;
 
 /**
  * The one production host (`sentry-gate.ts#PRODUCTION_HOST`, copied rather

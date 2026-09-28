@@ -99,7 +99,7 @@ const COOKIE_PATH = "/";
  *  somehow verified under the wrong key) — the actual key separation is now
  *  the HKDF `info` string below (fix round I1), not this claim alone. */
 export const SESSION_TYP = "o11y_session";
-export const LOGIN_TYP = "o11y_login";
+const LOGIN_TYP = "o11y_login";
 
 /** I3 (controller ruling, security review): the session is capped at
  *  `min(now + 12h, brokerTokenExp)` — never a flat 12h regardless of the

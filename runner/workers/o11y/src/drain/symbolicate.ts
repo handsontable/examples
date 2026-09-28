@@ -216,7 +216,7 @@ const MAX_SKIP_DETAIL_CHARS = 200;
 /** The default {@link SymbolicateDeps.onSkip}: one structured
  *  `o11y.symbolicate.skip` line per key, the same JSON-line shape as the
  *  worker's other `o11y.*` events, plus one line for the suppressed count. */
-export function logSymbolicateSkips(skips: SymbolicateSkip[], suppressed: number): void {
+function logSymbolicateSkips(skips: SymbolicateSkip[], suppressed: number): void {
   for (const skip of skips) console.warn(JSON.stringify({ event: "o11y.symbolicate.skip", ...skip }));
   if (suppressed > 0) console.warn(JSON.stringify({ event: "o11y.symbolicate.skip", reason: "suppressed", keys: suppressed }));
 }
