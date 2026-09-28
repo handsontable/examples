@@ -5,7 +5,7 @@
 // Erasable TS only: `pipeline/browser-metrics.test.mjs` imports this file
 // directly under `node --experimental-strip-types`.
 
-import type { DemoRuntime, SandpackCompileErrorEvent } from "@handsontable/demo-runtime";
+import type { DemoRuntime, SandpackCompileErrorEvent, SandpackCompileTimingEvent } from "@handsontable/demo-runtime";
 import { isNextPrereleaseVersion, selectedReleaseMajor } from "@handsontable/demo-runtime";
 import { fingerprint } from "@handsontable/demo-runtime/telemetry";
 import { HT_MAJORS, type HotAttrs, type HtMajor, type Surface, type Telemetry } from "@handsontable/demo-runtime/telemetry";
@@ -123,10 +123,43 @@ export function trackPreviewReady(
 
 // ---- sandpack.compile_ms/compile_error/bundler_unreachable, session.start_ms, hmr.roundtrip_ms --
 
+/** Quiet time after a compile before its held `sandpack.compile_ms` is sent;
+ *  the same settle window as the edit-burst collapse (`DEMO_EDIT_SETTLE_MS`). */
+export const COMPILE_TIMING_SETTLE_MS = 2000;
+
+/** Senders of every runtime's held point, for the page-hide flush. */
+const heldCompileTimings = new Set<() => void>();
+
+/** Sends every held `sandpack.compile_ms` now. */
+export function flushCompileTimings(): void {
+  for (const send of [...heldCompileTimings]) send();
+}
+
+if (typeof window !== "undefined") {
+  // Capture phase at `window` runs before Faro's own hidden-flush listener on `document`.
+  window.addEventListener(
+    "visibilitychange",
+    () => {
+      if (document.visibilityState === "hidden") flushCompileTimings();
+    },
+    true,
+  );
+}
+
+export interface WireRuntimeMetricsOptions {
+  collapseCompileError?: (emit: () => void, origin: SandpackCompileErrorEvent["origin"]) => void;
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
+}
+
 /**
  * Wires whichever §5 timing hooks `runtime` implements to their contract
  * points, through optional chains (`runtime.onX?.(cb)`) so no engine
  * branch is needed at the call site.
+ *
+ * `sandpack.compile_ms`: the first compile (the mount) is sent at once; after
+ * it, each compile replaces the held one and the last of a burst is sent once
+ * no compile follows for `COMPILE_TIMING_SETTLE_MS` (contract §5).
  *
  * A compile error is deduped by fingerprint for the life of `runtime`,
  * unless `opts.collapseCompileError` (the edit-burst collapse) is given,
@@ -138,17 +171,39 @@ export function wireRuntimeMetrics(
   runtime: DemoRuntime,
   ctx: { framework: string; versionRef: string },
   telemetry: Telemetry,
-  opts: { collapseCompileError?: (emit: () => void, origin: SandpackCompileErrorEvent["origin"]) => void } = {},
+  opts: WireRuntimeMetricsOptions = {},
 ): void {
   const htMajor = htMajorOf(ctx.versionRef);
   const seenFingerprints = new Set<string>();
+  const setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
+  const clearTimer = opts.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
 
-  runtime.onCompileTiming?.((event) => {
+  const sendCompileTiming = (event: SandpackCompileTimingEvent) =>
     telemetry.metric(
       "sandpack.compile_ms",
       { duration_ms: event.durationMs },
       { tier: "1", framework: ctx.framework, ht_major: htMajor, outcome: event.outcome },
     );
+  let mountCompileSent = false;
+  let held: { event: SandpackCompileTimingEvent; timer: unknown } | null = null;
+  const sendHeld = () => {
+    heldCompileTimings.delete(sendHeld);
+    if (!held) return;
+    clearTimer(held.timer);
+    const { event } = held;
+    held = null;
+    sendCompileTiming(event);
+  };
+
+  runtime.onCompileTiming?.((event) => {
+    if (!mountCompileSent) {
+      mountCompileSent = true;
+      sendCompileTiming(event);
+      return;
+    }
+    if (held) clearTimer(held.timer);
+    held = { event, timer: setTimer(sendHeld, COMPILE_TIMING_SETTLE_MS) };
+    heldCompileTimings.add(sendHeld);
   });
 
   runtime.onCompileError?.((event) => {

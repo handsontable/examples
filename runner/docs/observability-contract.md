@@ -214,7 +214,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | Metric | Emitted by | Blobs used | Doubles | Outcomes / reason |
 |---|---|---|---|---|
 | `preview.ready_ms` | browser | surface, tier, framework, ht_major, outcome, bucket | duration_ms | `ready`, `error`, `timeout`, `abandoned` |
-| `sandpack.compile_ms` | browser | tier, framework, ht_major, outcome | duration_ms | `ok`, `error` |
+| `sandpack.compile_ms` | browser; one per mount, then the last compile of each edit burst (2 s quiet) | tier, framework, ht_major, outcome | duration_ms | `ok`, `error` |
 | `sandpack.compile_error` | browser | framework, ht_major, fingerprint | count | — |
 | `sandpack.bundler_unreachable` | browser | ht_major | count, duration_ms | — |
 | `preview.runtime_error` | browser | surface=`demo-runtime`, tier, framework, ht_major, fingerprint, reason | count | reason: `uncaught`, `console`, `network`, `stderr` |

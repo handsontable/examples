@@ -10,8 +10,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { recordingTelemetry, toAePoint } from "../packages/runtime/dist/telemetry/index.js";
 import {
+  COMPILE_TIMING_SETTLE_MS,
   emitBucketResolve,
   emitVersionSwitch,
+  flushCompileTimings,
   htMajorOf,
   startClock,
   trackPreviewReady,
@@ -225,6 +227,74 @@ test("sandpack.compile_ms: reports the hook's own duration and outcome, tier fix
   assert.equal(call.attrs.outcome, "ok");
   assert.equal(call.attrs.ht_major, "17");
   assertValidAgainstRegistry(telemetry);
+});
+
+/** A manual clock for the held compile point: `advance(ms)` fires what is due. */
+function manualTimers() {
+  let now = 0;
+  const timers = new Map();
+  let nextId = 1;
+  return {
+    setTimer(fn, ms) {
+      const id = nextId++;
+      timers.set(id, { fn, at: now + ms });
+      return id;
+    },
+    clearTimer(id) {
+      timers.delete(id);
+    },
+    advance(ms) {
+      now += ms;
+      for (const [id, t] of [...timers]) {
+        if (t.at <= now) {
+          timers.delete(id);
+          t.fn();
+        }
+      }
+    },
+  };
+}
+
+const compileTimes = (telemetry) =>
+  telemetry.metrics.filter((m) => m.name === "sandpack.compile_ms").map((m) => [m.values.duration_ms, m.attrs.outcome]);
+
+test("sandpack.compile_ms: the compiles of one edit burst send one point, the burst's last", () => {
+  const telemetry = recordingTelemetry();
+  const runtime = fakeSandpackRuntime();
+  const clock = manualTimers();
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry, clock);
+
+  runtime.fireCompileTiming({ durationMs: 900, outcome: "ok" }); // the mount
+  for (let i = 1; i <= 20; i += 1) {
+    runtime.fireCompileTiming({ durationMs: 100 + i, outcome: i === 7 ? "error" : "ok" });
+    clock.advance(200); // one keystroke's compile every 200 ms
+  }
+  assert.deepEqual(compileTimes(telemetry), [[900, "ok"]], "the burst is held while compiles keep coming");
+
+  clock.advance(COMPILE_TIMING_SETTLE_MS);
+  assert.deepEqual(compileTimes(telemetry), [[900, "ok"], [120, "ok"]]);
+  assertValidAgainstRegistry(telemetry);
+
+  runtime.fireCompileTiming({ durationMs: 77, outcome: "error" });
+  clock.advance(COMPILE_TIMING_SETTLE_MS);
+  assert.deepEqual(compileTimes(telemetry).at(-1), [77, "error"], "a later burst gets its own point");
+  assert.equal(compileTimes(telemetry).length, 3);
+});
+
+test("sandpack.compile_ms: a held point is sent at once when the page is hidden, and only once", () => {
+  const telemetry = recordingTelemetry();
+  const runtime = fakeSandpackRuntime();
+  const clock = manualTimers();
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry, clock);
+
+  runtime.fireCompileTiming({ durationMs: 900, outcome: "ok" });
+  runtime.fireCompileTiming({ durationMs: 55, outcome: "ok" });
+  flushCompileTimings();
+  assert.deepEqual(compileTimes(telemetry), [[900, "ok"], [55, "ok"]]);
+
+  clock.advance(COMPILE_TIMING_SETTLE_MS);
+  flushCompileTimings();
+  assert.equal(compileTimes(telemetry).length, 2);
 });
 
 test("sandpack.compile_error: fingerprinted, no authored text in the recorded attrs", () => {
