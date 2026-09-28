@@ -67,20 +67,11 @@ const reporting = resolveReporting({
 
 export const reportingEnabled = reporting.enabled;
 
-/**
- * The same two build-time+host conditions as
- * Faro's own local path (contract §10 / `telemetry/gate.ts`'s local leg),
- * inlined here rather than imported — same reasoning `main.tsx`'s
- * `CrashProbe` doc comment gives for its own inlining: this stays a pure
- * function of `import.meta.env.VITE_TELEMETRY_LOCAL` (a build-time constant
- * Vite replaces literally), so a plain production build folds the whole
- * caller branch to dead code — the `check:telemetry-leak` script
- * (`scripts/check-telemetry-leak.mjs`) greps for that flag's literal name and
- * for `CrashProbe`'s own strings as the durable proof, every build, that this
- * never survives one that lacks the flag. Declared before `diagnosticsGoToSentry`
- * (which calls it) even though it is a hoisted function declaration — kept in
- * reading order with the value that depends on it.
- */
+/** The same two build-time+host conditions as Faro's local path (contract
+ *  §10) — a pure function of `VITE_TELEMETRY_LOCAL`, so a production build
+ *  folds this branch to dead code (`check:telemetry-leak` greps for the
+ *  flag's name as proof). Declared before `diagnosticsGoToSentry`, which
+ *  calls it. */
 function localTestSentryEnabled(): boolean {
   return (
     (import.meta.env.VITE_TELEMETRY_LOCAL as string | undefined) === "1" &&
@@ -89,75 +80,35 @@ function localTestSentryEnabled(): boolean {
   );
 }
 
-/** Whether SOME Sentry client is initialised at all — production
- *  (`reportingEnabled`) or the local test-capture path
- *  (`localTestSentryEnabled`). Distinct from `reportingEnabled` on purpose:
- *  `monitorDemos` below must stay production-only (it gates whether real
- *  preview-instrumentation JS is injected for actual visitors, DEV-2540 — a
- *  much bigger footprint than "does a captureException call go anywhere"),
- *  but a diagnostic report's Sentry-reaching decision only cares whether
- *  SOME client would receive it. */
+/** Whether SOME Sentry client is initialised — production or the local
+ *  test-capture path. Distinct from `reportingEnabled`: `monitorDemos`
+ *  gates real preview instrumentation and must stay production-only. */
 const sentryActive = reportingEnabled || localTestSentryEnabled();
 
-/** Contract §11 / ADR §E.3. `sentryScope.ts` resolves the raw env string and
- *  decides whether an explicit diagnostic report (as opposed to an uncaught
- *  one, which always stays in Sentry — ADR §E.1) also reaches Sentry, beside
- *  the facade, which receives it either way. Gated on `sentryActive`, not
- *  `reportingEnabled` directly — see its own doc comment. */
+/** Contract §11 / ADR §E.3: whether an explicit diagnostic report also
+ *  reaches Sentry, besides the facade (which always receives it). Gated
+ *  on `sentryActive`, not `reportingEnabled` directly. */
 const SENTRY_SCOPE = resolveSentryScope(import.meta.env.VITE_SENTRY_SCOPE as string | undefined);
 export const diagnosticsGoToSentry = reportsDiagnosticToSentry(sentryActive, SENTRY_SCOPE);
 
-/**
- * Demo-runtime monitoring (DEV-2527). Temporary and deliberately build-time: off is
- * a one-line commit plus a deploy, which is why the in-page caps in
- * `packages/runtime/src/monitor.ts` are the brake that acts immediately. Removal
- * path in docs/run-and-deploy.md.
- *
- * No second host gate: `reportingEnabled` already pins reporting to production, so
- * local runs and PR CI stay silent whatever this is set to. It inherits the
- * automation gate through the same flag, also deliberately (DEV-2540) — an
- * e2e-driven page load is not real demo usage, so the ~36-minute `e2e:matrix` run
- * against production no longer relays preview events either.
- */
+/** Demo-runtime monitoring (DEV-2527), deliberately build-time: off is a
+ *  one-line commit + deploy. Inherits the production/automation gate
+ *  through `reportingEnabled`, so local runs and PR CI stay silent. */
 export const monitorDemos =
   reportingEnabled && (import.meta.env.VITE_MONITOR_DEMOS as string | undefined) === "1";
 
-/**
- * Preview-error monitoring under `dev:full`, Faro only, never Sentry.
- * `monitorDemos` stays production-only (see its own doc comment); this widens
- * the same "is the preview reporter injected at all" gate with the
- * local leg (`localTestSentryEnabled` — build-time `VITE_TELEMETRY_LOCAL` flag
- * AND a localhost/127.0.0.1 host, same two-gate shape as Faro's own local path),
- * so the AE metric and Faro report reach the local stack even though
- * `monitorDemos` is false there. `reportDemoEvent`/`reportDemoEventUnguarded`
- * below use `opts.sentry` (always `monitorDemos`, never this local leg) to keep
- * every Sentry call exactly as gated as it is today — `previewMonitoring` only
- * ever ADDS the Faro/facade path, never a Sentry one. In production
- * `previewMonitoring === monitorDemos` (`localTestSentryEnabled()` is
- * constant-false there — see `check:telemetry-leak`), so this is a no-op on the
- * host that matters.
- */
+/** Widens `monitorDemos`' "preview reporter injected" gate with the local
+ *  leg, so Faro/facade reach the local stack under `dev:full`; Sentry
+ *  calls stay gated on the real `monitorDemos` (see call sites below). */
 export const previewMonitoring = monitorDemos || localTestSentryEnabled();
 
-/** The `environment` (and tag) demo-side events are filed under, so a flood of them
- *  can be rate-limited or muted in the Sentry UI without touching the app — the only
- *  brake that works without a build. ADR §E.3 is binding here:
- *  `reportDemoEvent` keeps
- *  today's Sentry behaviour, this re-homing included, under `full` scope — it is
- *  reachable again only because `reportDemoEvent` conditionally restores its
- *  pre-T06 `Sentry.captureException`/`captureMessage` calls under that scope (see
- *  `reportDemoEvent` below). Under `uncaught` scope nothing tagged `DEMO_SURFACE`
- *  ever reaches `beforeSend` in the first place, so the branch is simply never
- *  hit — the re-homing "disappears once the scope flips" (ADR Consequences)
- *  without needing its own scope check. */
+/** The `environment`/tag demo-side events are filed under, so they can be
+ *  rate-limited in the Sentry UI without a build. Under `full` scope,
+ *  `reportDemoEvent` re-homes into it (see `beforeSend` below). */
 const DEMO_SURFACE = "demo-runtime";
 
-/**
- * Everything a `Sentry.init()` call needs beyond `dsn`/`transport` — shared by
- * the real production init and the local test-capture init below,
- * so the two paths cannot drift apart (the e2e proof exercises the SAME
- * scope/beforeSend logic production uses).
- */
+/** Everything `Sentry.init()` needs beyond `dsn`/`transport` — shared by
+ *  the production and local test-capture inits so they can't drift. */
 function sharedSentryOptions(environment: string): Sentry.BrowserOptions {
   return {
     environment,
@@ -167,19 +118,13 @@ function sharedSentryOptions(environment: string): Sentry.BrowserOptions {
     release: (import.meta.env.VITE_SENTRY_RELEASE as string | undefined) || undefined,
     // Errors only. Spans would triple the event volume for signal we don't act on.
     tracesSampleRate: 0,
-    // Stated rather than inherited, because `reportDemoEvent` now writes into this
-    // buffer (DEV-2539). The SDK default is 100 and it keeps the *most recent* N, so
-    // with the default a demo spending its whole `MONITOR_BREADCRUMB_CEILING` (50)
-    // would evict half the authoring app's own trail — a save failure would file an
-    // issue whose breadcrumbs are demo warnings instead of the user's clicks and
-    // fetches. At 200 the demo's ceiling can never take more than a quarter. Raise
-    // this alongside that ceiling, never one without the other.
+    // Stated, not inherited: `reportDemoEvent` writes into this buffer too
+    // (DEV-2539), and the SDK's default of 100 would evict half the app's
+    // own breadcrumb trail. Raise alongside MONITOR_BREADCRUMB_CEILING.
     maxBreadcrumbs: 200,
-    // Contract §11 / ADR §E.3. `"uncaught"` narrows Sentry to exactly the global
-    // handlers plus dedupe — `Sentry.ErrorBoundary`'s own `componentDidCatch` call
-    // is unaffected by this list either way, it never goes through an
-    // integration. `"full"` (default) keeps every integration the SDK ships with
-    // today (browser tracing off already, via `tracesSampleRate: 0`).
+    // Contract §11 / ADR §E.3. `"uncaught"` narrows Sentry to exactly the
+    // global handlers + dedupe; `"full"` (default) keeps every SDK
+    // integration (tracing already off via `tracesSampleRate: 0`).
     ...(SENTRY_SCOPE === "uncaught"
       ? {
           defaultIntegrations: false,
@@ -188,31 +133,20 @@ function sharedSentryOptions(environment: string): Sentry.BrowserOptions {
       : {}),
     beforeSend(event) {
       if (isUnhandledNoise(event)) return null;
-      // DEMOS-5F, Office/Outlook safelink scanner (DEV-2858). Sits ahead of the
-      // DEMO_SURFACE branch, unlike isForeignUnhandled below: it requires
-      // `mechanism.handled === false`, and every relay arrives via
-      // `captureException`, which sets `handled: true` — so it cannot fire on a
-      // relayed event and needs no re-homing protection.
+      // DEMOS-5F, Office/Outlook safelink scanner (DEV-2858): requires
+      // `mechanism.handled === false`, which no relayed event carries.
       if (isOfficeScannerRejection(event)) return null;
-      // DEMOS-9, edgeless-foreign session-start facet (DEV-2858). Also sits ahead
-      // of the DEMO_SURFACE branch: it requires the `tier2-session-start` /
-      // `session_response_origin` tags that only `App.tsx`'s own
-      // `Sentry.captureException` call sets — `reportDemoEvent` never sets them,
-      // so this gate cannot fire on a relayed event either.
+      // DEMOS-9, edgeless-foreign session-start facet (DEV-2858): requires
+      // tags only App.tsx's own capture call sets, never a relay.
       if (isEdgelessForeignSessionStart(event)) return null;
-      // A client carries one `environment` from init, so a relayed demo event is
-      // re-homed per event here — see `DEMO_SURFACE`'s
-      // own doc comment. ADR §E.2's tee below still applies to a re-homed event
-      // too, so the ordering here (re-home, then return before the tee runs) would
-      // skip the tee for demo-runtime events — re-home and return immediately instead.
+      // A client carries one `environment` from init, so a relayed demo
+      // event is re-homed per event here; return before the tee below.
       if (event.tags?.surface === DEMO_SURFACE) {
         event.environment = DEMO_SURFACE;
         return event;
       }
       if (isForeignUnhandled(event, window.location.origin)) return null;
-      // ADR §E.2 tee — see `eventGate.ts#applyFaroTee`'s own doc comment
-      // (guarded against a throw from either call, so
-      // the tee's own failure can never cost the underlying event).
+      // ADR §E.2 tee — best-effort, wrapped so its own failure never costs the event.
       return applyFaroTee(event, telemetry);
     },
   };
@@ -221,20 +155,12 @@ function sharedSentryOptions(environment: string): Sentry.BrowserOptions {
 if (reportingEnabled) {
   Sentry.init({ dsn: DSN, ...sharedSentryOptions(reporting.environment) });
 } else if (localTestSentryEnabled()) {
-  // Acceptance says "an uncaught error reaches Sentry (transport
-  // spy)" — untestable against the real production gate (`reportingEnabled`
-  // requires the production host, which a local/e2e run can never be). This is
-  // an e2e-only hook: a SECOND
-  // `Sentry.init()`, gated on the exact same build-time+host conditions as
-  // Faro's own local path (`localTestSentryEnabled`, own doc comment below) and
-  // mutually exclusive with the real one (`reportingEnabled` is production-only,
-  // so the two branches never both fire). Same `sharedSentryOptions` as
-  // production — same scope/beforeSend behaviour under test — only `dsn` and
-  // `transport` differ: a syntactically valid but non-routable DSN (Sentry
-  // validates the DSN's *shape* at init even though `transport` below replaces
-  // the real network call entirely) and a transport that appends every envelope
-  // to `window.__t06SentryCapture` instead of sending it, so
-  // `e2e/telemetry-faro.spec.ts` can read it back with `page.evaluate`.
+  // e2e-only hook: acceptance requires "an uncaught error reaches Sentry",
+  // untestable against the real production gate. A SECOND `Sentry.init()`,
+  // gated the same as Faro's local path, mutually exclusive with the real
+  // one. Same `sharedSentryOptions` as production; only `dsn`/`transport`
+  // differ — envelopes are captured to `window.__t06SentryCapture` instead
+  // of sent, for `e2e/telemetry-faro.spec.ts` to read back.
   Sentry.init({
     dsn: "https://t06e2e@o0.ingest.sentry.io/0",
     ...sharedSentryOptions("local-test"),
@@ -250,23 +176,14 @@ if (reportingEnabled) {
 }
 
 /**
- * Report a caught error that would otherwise be swallowed.
- *
- * Always reaches the facade (a no-op when telemetry is off); reaches Sentry
- * only when `diagnosticsGoToSentry` (contract §11 / ADR §E.3) — so a local run
- * with `VITE_TELEMETRY_LOCAL=1` still exercises the facade even off-host,
- * where Sentry itself never initialises (`reportingGate.ts`'s production-only
- * gate, unchanged).
+ * Report a caught error that would otherwise be swallowed. Always reaches
+ * the facade; reaches Sentry only when `diagnosticsGoToSentry` (contract
+ * §11 / ADR §E.3).
  */
 export function reportError(error: unknown, context: string): void {
-  // A described failure the user is already being told about, and that says
-  // nothing about this app's health, stops here (DEV-2534). One gate, rather
-  // than an `if` at each of the callsites, is what retires the expired-session
-  // half of DEMOS-3/-6/-7/-B/-W without touching a single `catch`. Note this is
-  // deliberately narrow: an ownership 403 is still `reportable`, because the UI
-  // only offers Save and Delete on a demo it believes is the user's. Applies to
-  // both destinations equally — a described failure says nothing about health
-  // for the facade either.
+  // A described failure the user is already told about says nothing about
+  // app health (DEV-2534): skip it for both destinations. Narrow — an
+  // ownership 403 is still `reportable` (Save/Delete only offered on own demos).
   if (error instanceof ApiError && !error.reportable) return;
   telemetry.error(error, context);
   if (diagnosticsGoToSentry) {
@@ -274,23 +191,12 @@ export function reportError(error: unknown, context: string): void {
   }
 }
 
-/**
- * The relay's budget, module-scoped so it lasts the page load rather than the mount —
- * switching examples must not hand out a fresh allowance. The reporter's in-page copy
- * of this cap is advisory: the demo it lives beside can bypass it by posting straight
- * at this window (see `createMonitorBudget`). This is the enforceable one.
- */
+/** The relay's budget, module-scoped so it lasts the page load, not the
+ *  mount. The in-page copy is advisory; this is the enforceable one. */
 const demoRelayBudget = createMonitorBudget(MONITOR_EVENT_CEILING);
 
-/**
- * A second, separate budget for the warnings that become breadcrumbs (DEV-2539).
- *
- * Separate in both directions. A breadcrumb files no issue, so it can be looser than
- * the relay ceiling; and a demo that warns on every render must not be able to spend
- * the relay budget before the `console.error` explaining the breakage arrives. Its
- * `admit` also dedupes, so the repeated "Theme is already registered" notice occupies
- * one breadcrumb rather than the whole buffer.
- */
+/** A second, looser budget for warnings-as-breadcrumbs (DEV-2539) — a
+ *  chatty demo must not spend the relay budget on warnings alone. */
 const demoBreadcrumbBudget = createMonitorBudget(MONITOR_BREADCRUMB_CEILING);
 
 /** One collapsed demo-runtime report, ready for the facade. */
@@ -303,14 +209,10 @@ interface CollapsedDemoEvent {
 }
 
 /**
- * What survives the edit-burst collapse becomes exactly two
- * facade calls — the `preview.runtime_error` count (§5) and one handled Faro
- * exception (ADR §E.1: "Faro reports … with an `error.handled` point"), whose
- * Loki line is what the "Recent demo-runtime errors" panels read. The
- * record's message is the §7 fingerprint shape, never the relayed text
- * (contract §3); its stack is emptied so Faro does not attach the authoring
- * app's own frames (the relay site) to a demo's fault. A console warning gets
- * the count only (`demoEventReport.ts#RECORD_NAME_BY_KIND`).
+ * What survives the edit-burst collapse becomes two facade calls: the
+ * `preview.runtime_error` count (§5) and one handled Faro exception (the
+ * Loki line), whose message is the §7 fingerprint shape, never the relayed
+ * text. A console warning gets the count only.
  */
 function emitCollapsedDemoEvent(event: CollapsedDemoEvent): void {
   telemetry.metric(
@@ -325,54 +227,33 @@ function emitCollapsedDemoEvent(event: CollapsedDemoEvent): void {
   telemetry.error(record, DEMO_SURFACE, event.attrs);
 }
 
-/**
- * The facade's demo-runtime reports go through the edit-burst collapse
- * (`demoEventCollapse.ts`) — one report per fingerprint per edit burst, from
- * the last run before the editor went quiet. Page-load scoped like the two
- * budgets above. Sentry is not behind it: the relay budgets and captures
- * below are unchanged.
- *
- * Tier-1 compile errors (`sandpack.compile_error`) share the same
- * instance, because the two interact — a burst whose newest edit does not
- * compile has no run of its own, so what the preview relays during it is
- * from code already typed past (`replacesRun`, see `collapseCompileError`).
- * An item is therefore the emission itself, a thunk, not a payload.
- */
+/** Facade demo-runtime reports go through the edit-burst collapse — one
+ *  report per fingerprint per burst. Tier-1 compile errors share this
+ *  instance since a non-compiling burst has no run of its own. */
 const demoEventCollapse = createDemoEventCollapse<() => void>({
   emit: (emitItem) => emitItem(),
   setTimer: (fn, ms) => setTimeout(fn, ms),
   clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
 });
 
-/** The collapse key of every compile error — by kind, not by message. A
- *  burst ends in one final state, so it holds at most one compile error; the
- *  prefix `compile:` cannot collide with a §7 fingerprint (`context:hash`,
- *  whose context never starts with `compile`). */
+/** Collapse key for a compile error — by kind, not message; prefix
+ *  `compile:` cannot collide with a §7 `context:hash` fingerprint. */
 const COMPILE_ERROR_KEY = "compile:sandpack.compile_error";
 
 /**
- * Route one Tier-1 compile error — the parcel
- * pre-transpile's babel failure or a bundler diagnostic — through the
- * edit-burst collapse. `emit` records the `sandpack.compile_error` point
- * (`telemetry/metrics.ts#wireRuntimeMetrics` builds it). During a burst it is
- * held until the editor settles, replaces an earlier compile error of the same
- * burst, and drops what the preview relayed from code already typed past, so a
- * typed syntax error is one compile error and no `preview.runtime_error`.
- * Outside a burst (a demo that fails to parse at mount, a refresh) it counts at
- * once. Not behind `previewMonitoring`: this is a §5 metric, wired for every
- * preview like `sandpack.compile_ms`, not demo monitoring.
+ * Routes one Tier-1 compile error through the edit-burst collapse with
+ * `replacesRun`: it replaces whatever the burst holds and suppresses later
+ * non-compile reports, so a typed syntax error counts as one
+ * `sandpack.compile_error` and no `preview.runtime_error`. Not behind
+ * `previewMonitoring` — wired for every preview like `sandpack.compile_ms`.
  */
 export function collapseCompileError(emit: () => void): void {
   demoEventCollapse.report(COMPILE_ERROR_KEY, emit, { replacesRun: true });
 }
 
-/** An edit that re-runs the preview — see `DemoEventCollapse.noteEdit`.
- *  Called by `App.tsx` on every non-quiet workspace write.
- *
- *  Not behind `previewMonitoring`. The burst also collapses
- *  `sandpack.compile_error` (`collapseCompileError`), which is emitted with the
- *  monitoring flag off too. With monitoring off nothing else ever enters the
- *  collapse (`reportDemoEvent` keeps its own gate), so this only arms a timer. */
+/** An edit that re-runs the preview — opens/extends the burst. Not behind
+ *  `previewMonitoring`: with monitoring off nothing else enters the
+ *  collapse, so this only arms a timer. */
 export function noteDemoEdit(): void {
   demoEventCollapse.noteEdit();
 }
@@ -399,31 +280,14 @@ export interface DemoEventContext {
 }
 
 /**
- * File an event the preview reported through the monitor bridge (DEV-2527).
+ * Files an event the preview reported through the monitor bridge
+ * (DEV-2527). Nothing in the payload is trusted — the message is
+ * re-truncated and only declared fields are read.
  *
- * Everything here crossed an origin boundary, so nothing in the payload is trusted:
- * the message is re-truncated (the reporter's own cap could have been bypassed by
- * anything else on the page posting the same shape) and only the fields the payload
- * type declares are read.
- *
- * ADR §E.3's scope switch is binding for this function specifically:
- *
- * - **Always**: into the edit-burst collapse (`demoEventCollapse.ts`), which
- *   emits one `preview.runtime_error` count plus one handled Faro exception (the
- *   Loki line) per fingerprint per edit burst, from the last run before the editor
- *   went quiet — not one per keystroke. Not behind the Sentry budgets below.
- * - **`full` scope (default)**: ALSO today's Sentry behaviour, byte-for-byte
- *   — `captureException`/`captureMessage`/`addBreadcrumb`, the `tier2Report.ts`
- *   TS-diagnostic/build-envelope classification, the `DEMO_SURFACE` tags that the
- *   `beforeSend` re-homing above keys on.
- * - **`uncaught` scope**: facade only — no Sentry capture, so the re-homing branch
- *   above is simply never reached for these events (ADR Consequences: "the re-homing
- *   disappears once the scope flips").
- *
- * The kind→budget split (`demoEventReport.ts`) governs the Sentry side's admission
- * check: `console-warn` still spends the looser `MONITOR_BREADCRUMB_CEILING`
- * (and, under `full`, becomes a breadcrumb rather than an issue — DEV-2539), everything
- * else the tighter `MONITOR_EVENT_CEILING`.
+ * Always enters the edit-burst collapse (one report per fingerprint per
+ * burst). Under `full` scope (default) ALSO reaches Sentry, byte-for-byte
+ * as before; under `uncaught` scope, facade only — the `beforeSend`
+ * re-homing branch above is then never reached for these events.
  */
 export function reportDemoEvent(payload: MonitorPayload, context: DemoEventContext): void {
   if (!previewMonitoring) return;
@@ -431,34 +295,21 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
 }
 
 /**
- * The body of `reportDemoEvent`, without the `previewMonitoring` gate — split
- * out so the e2e-only test hook (below) can drive it directly. A
- * real preview mount (the only way `reportDemoEvent` is called for real)
- * needs `E2E_LIVE` and an external bundler, out of reach for this
- * deterministic spec; this hook exercises the exact same reporting logic
- * (budget, facade, Sentry gate — everything past this point) without needing
- * one, and does NOT touch `previewMonitoring`/`monitorDemos` themselves, so
- * `App.tsx`'s real preview instrumentation gate is completely unaffected.
+ * Body of `reportDemoEvent` without the `previewMonitoring` gate, split out
+ * so the e2e-only hook below can drive it directly without a real preview
+ * mount. Never touches `previewMonitoring`/`monitorDemos` themselves.
  *
- * `opts.sentry` (default `true`, matching every pre-existing caller —
- * the `__t06ReportDemoEvent` hook included) decides whether this relay's
- * Sentry calls (breadcrumb / `captureException` / `captureMessage`) run at
- * all, independently of `diagnosticsGoToSentry`. `reportDemoEvent` passes
- * `monitorDemos` explicitly, so the local leg (`previewMonitoring`
- * true, `monitorDemos` false) reaches the facade/Faro below but never Sentry
- * — "never Sentry locally" stays true even though `diagnosticsGoToSentry` is
- * independently true locally (`sentryActive` includes the local test-capture
- * leg).
+ * `opts.sentry` (default `true`) gates this relay's Sentry calls
+ * independently of `diagnosticsGoToSentry`; `reportDemoEvent` passes
+ * `monitorDemos`, so the local leg reaches facade/Faro but never Sentry.
  */
 function reportDemoEventUnguarded(
   payload: MonitorPayload,
   context: DemoEventContext,
   opts: { sentry: boolean } = { sentry: true },
 ): void {
-  // Bound and redacted before anything else touches it — including the dedupe key
-  // below, which hashes the stack. An unbounded `stack` from a crafted postMessage is
-  // free client-side resource pressure, and a Tier-2 preview host inside it is a live
-  // session token.
+  // Bound and redacted before anything touches it (including the dedupe
+  // key below) — an unbounded stack could leak a live session token.
   const clean = sanitizeMonitorPayload(payload);
   const message = clean.message;
   const report = demoEventReport({
@@ -470,12 +321,9 @@ function reportDemoEventUnguarded(
     demoId: context.demoId,
   });
 
-  // Into the edit-burst collapse, not straight to the facade, and
-  // BEFORE either Sentry budget below: those budgets are Sentry's brake and
-  // stay exactly as they were, but a keystroke ladder spends the relay one in
-  // a single typed line, and gating the collapsed count on it would drop
-  // every later real error of the page load from the metric. The collapse
-  // has its own ceiling for a demo that floods with crafted payloads.
+  // Into the edit-burst collapse, not straight to the facade, and before
+  // either Sentry budget — a keystroke ladder must not drain the relay
+  // budget before a later real error of the page load.
   const fp = contractFingerprint(report.fingerprintContext, report.fingerprintMessage);
   const collapsed: CollapsedDemoEvent = {
     attrs: report.attrs,
@@ -486,21 +334,14 @@ function reportDemoEventUnguarded(
   };
   demoEventCollapse.report(fp, () => emitCollapsedDemoEvent(collapsed));
 
-  // A warning is context, not a fault (DEV-2539). Handsontable's own "Theme is already
-  // registered" notice is emitted by normal re-renders, and every warning used to open
-  // a Sentry issue — a message event at `warning` level is still an issue. Filed as a
-  // breadcrumb instead, so it survives as the context attached to the next real error
-  // from the preview without being one itself.
-  //
-  // Before `demoBreadcrumbBudget.admit`, so a warning never consumes a relay slot, and
-  // after `sanitizeMonitorPayload`, so the breadcrumb is bounded and host-redacted like
-  // everything else that crossed the origin boundary.
+  // A warning is context, not a fault (DEV-2539): filed as a breadcrumb,
+  // not an issue, before the breadcrumb budget so it never spends a relay
+  // slot.
   if (clean.kind === "console-warn") {
     if (!demoBreadcrumbBudget.admit(clean.kind, message)) return;
     if (opts.sentry && diagnosticsGoToSentry) {
-      // Breadcrumbs live on the Sentry scope, which outlives a preview: one recorded
-      // while example A was mounted can still be attached to an error from example B.
-      // `data` carries the tier, framework and demo id so a stale one is identifiable.
+      // Breadcrumbs live on the Sentry scope, which outlives a preview.
+      // `data` carries the tier/framework/demo id so a stale one is identifiable.
       Sentry.addBreadcrumb({
         category: `${DEMO_SURFACE}.console`,
         level: "warning",
@@ -517,13 +358,9 @@ function reportDemoEventUnguarded(
   if (!demoRelayBudget.admit(clean.kind, message, clean.stack)) return;
   if (!(opts.sentry && diagnosticsGoToSentry)) return;
 
-  // DEV-2854 / DEV-2876: a recognised Tier-2 compiler diagnostic, or a recognised Tier-2
-  // build-failure envelope, collapses into its own flat, constant-titled bucket instead of
-  // the per-message fingerprint below. Never fed into `demoRelayBudget.admit` above — that
-  // stays keyed on the raw message, so 20 distinct diagnostics in one bad editing session
-  // still consume 20 of `MONITOR_EVENT_CEILING` rather than collapsing and losing their
-  // `extra` after the first. See `tier2Report.ts` for why, and for why the two shapes get
-  // two fingerprints rather than one.
+  // DEV-2854/DEV-2876: a recognised Tier-2 diagnostic/build-failure
+  // envelope collapses into its own bucket instead of the per-message
+  // fingerprint below; see `tier2Report.ts`.
   const tier2 = tier2StderrReport(clean.kind, message);
   const tags: Record<string, string> = {
     surface: DEMO_SURFACE,
@@ -551,9 +388,8 @@ function reportDemoEventUnguarded(
       : {}),
   };
 
-  // An exception (with the preview's own stack) for a throw; a message for the
-  // kinds that never had one. A synthesised Error is how the relayed stack reaches
-  // Sentry's parser at all — captureMessage would drop it.
+  // An exception (with the preview's own stack) for a throw; a message for
+  // the kinds that never had one — captureMessage would drop the stack.
   if (clean.kind === "error" || clean.kind === "rejection") {
     const error = new Error(message);
     error.name = clean.kind === "rejection" ? "DemoUnhandledRejection" : "DemoError";
@@ -561,12 +397,9 @@ function reportDemoEventUnguarded(
     Sentry.captureException(error, captureContext);
     return;
   }
-  // Display only, and only for network events (DEV-2539/DEMOS-12). "resource failed to
-  // load" as an issue title says nothing; the URL is the whole diagnosis, and `extra`
-  // is not visible from the issue list. Deliberately NOT used for
-  // `demoRelayBudget.admit` or the fingerprint above, both of which stay on the bare
-  // `message` — so a demo with a dozen broken assets still collapses into one issue and
-  // still costs one relay slot, while the title becomes actionable.
+  // Display only, for network events (DEV-2539/DEMOS-12): the URL is the
+  // whole diagnosis. Kept off the fingerprint/budget key so a dozen broken
+  // assets still collapse into one issue.
   const display = tier2
     ? tier2.display
     : clean.kind === "network" && clean.url
@@ -575,37 +408,25 @@ function reportDemoEventUnguarded(
   Sentry.captureMessage(display, captureContext);
 }
 
-// Second half of the e2e-only hook: expose `reportDemoEventUnguarded`
-// (defined above, so this can run after it) on `window` under the same local
-// test gate as the Sentry local-test init — `e2e/telemetry-faro.spec.ts` calls
-// it directly to prove "demo-runtime → Sentry only with full" without needing
-// a real (E2E_LIVE-gated) preview mount. Never touches the exported
-// `monitorDemos`, so `App.tsx`'s real preview-instrumentation gate is
-// unaffected either way.
+// Second half of the e2e-only hook: exposes `reportDemoEventUnguarded` on
+// `window` under the same local test gate, for
+// `e2e/telemetry-faro.spec.ts` to call directly.
 if (localTestSentryEnabled()) {
   (
     window as unknown as {
       __t06ReportDemoEvent?: (payload: MonitorPayload, context: DemoEventContext) => void;
     }
   ).__t06ReportDemoEvent = reportDemoEventUnguarded;
-  // A second hook exposing the GUARDED entry point (`reportDemoEvent`
-  // itself, not the Unguarded bypass above) — the only way an e2e spec can
-  // prove the two-gate behaviour without a real (E2E_LIVE-gated) preview
-  // mount posting a `message` `onPreviewMessage` would accept. Without this
-  // hook, `reportDemoEvent` is a no-op in every build this repo's e2e
-  // specs run (`monitorDemos` is always false off the production host); this
-  // hook is what lets a spec built with `VITE_TELEMETRY_LOCAL=1` show it is
-  // not, and that it still never reaches Sentry.
+  // A second hook exposing the GUARDED entry point, so a spec can prove
+  // the two-gate behaviour without a real preview mount — `reportDemoEvent`
+  // is otherwise a no-op off the production host.
   (
     window as unknown as {
       __t06ReportDemoEventGuarded?: (payload: MonitorPayload, context: DemoEventContext) => void;
     }
   ).__t06ReportDemoEventGuarded = reportDemoEvent;
-  // The edit signal `App.tsx` sends on every non-quiet write, so a spec
-  // can drive a keystroke ladder through `__t06ReportDemoEventGuarded` without
-  // a real (E2E_LIVE-gated) preview. Named under the `__t06ReportDemoEvent`
-  // prefix on purpose: `check:telemetry-leak`'s existing sentinel for that
-  // prefix already proves it never survives a build without the local flag.
+  // The edit signal for a keystroke-ladder spec, under the same
+  // `__t06ReportDemoEvent` prefix `check:telemetry-leak` already covers.
   (
     window as unknown as { __t06ReportDemoEventNoteEdit?: () => void }
   ).__t06ReportDemoEventNoteEdit = noteDemoEdit;

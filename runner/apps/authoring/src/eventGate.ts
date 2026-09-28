@@ -14,11 +14,8 @@
 
 /** The `exception` shape every gate below reads — declared locally, not
  *  imported, so this file stays resolvable by a bare `node --test`.
- *  `Sentry.ErrorEvent` satisfies this structurally already; a Faro
- *  `ExceptionEvent` (always exactly one error, no `values`
- *  array of its own) is adapted into this same one-entry-array shape at its
- *  call site (`telemetry/faro.ts`) so both surfaces share these predicates
- *  instead of drifting apart. */
+ *  A Faro `ExceptionEvent` is adapted into this same shape at its call
+ *  site (`telemetry/faro.ts`) so both surfaces share these predicates. */
 interface ExceptionShape {
   exception?: {
     values?: {
@@ -38,19 +35,11 @@ interface TaggedEvent {
 
 // ── Gate 0: browser noise that is never actionable ───────────────────────────────
 //
-// A benign layout-loop warning browsers surface as an error, plus the shapes an
-// in-flight request takes when the user navigates away mid-fetch (`Failed to
-// fetch` in Chrome, `Load failed` in Safari). Shared here (rather than living only
-// in `sentry.ts`) so `telemetry/faro.ts`'s Faro `beforeSend`
-// can apply the exact same rule Sentry's `beforeSend` already does — contract §6
-// requires "the shared noise gates" for both: without this, every one of these
-// shapes would reach Faro/Loki AND, worse,
-// could mint a fresh `fp:` entry and fire the §F.3 new-fingerprint alert.
-//
-// These must not go in a Sentry `ignoreErrors`-style pre-filter that runs before
-// `handled` is known: that would silently discard the offline broker and
-// `/api/versions` failures that `reportError`/`buildFacade().error` exist to
-// surface on purpose.
+// A benign layout-loop warning, plus the shapes an in-flight request takes
+// when the user navigates away mid-fetch. Shared here (not just `sentry.ts`)
+// so Faro's `beforeSend` applies the same rule (contract §6). Never in a
+// Sentry `ignoreErrors`-style pre-filter, which runs before `handled` is
+// known and would silently discard on-purpose reports too.
 const UNHANDLED_NOISE = [
   /^ResizeObserver loop/i,
   /^AbortError/i,
@@ -76,17 +65,12 @@ export function isUnhandledNoise(event: ExceptionShape): boolean {
 
 // ── Gate 0b: cross-origin frames — the preview iframe / an injected script ──────
 //
-// The preview iframe runs arbitrary authored and imported example code, so a typo
-// there is product output, not an application fault. Being cross-origin, the
-// iframe cannot reach this window's error handlers at all; this is the backstop
-// for whatever does arrive that way (the Sandpack bundler, a container preview
-// host, an injected extension script). Shared here, same reasoning as Gate 0 above.
-//
-// Scoped to `mechanism.handled === false`, same discriminator as every gate here
-// — applied to every event, it would silently discard explicit `reportError`/
-// ErrorBoundary reports whose stack merely *passed through* a foreign frame.
-// `originOrigin` is passed in rather than read from `window.location.origin`
-// directly, so this stays resolvable by a bare `node --test`.
+// The preview iframe runs arbitrary example code — a typo there is product
+// output, not an app fault — and is cross-origin, so this is the backstop
+// for whatever error still arrives that way. Scoped to `handled === false`;
+// applied to every event it would discard on-purpose reports whose stack
+// merely passed through a foreign frame. `originOrigin` is passed in so
+// this stays resolvable by a bare `node --test`.
 export function isForeignUnhandled(event: ExceptionShape, originOrigin: string): boolean {
   const values = event.exception?.values ?? [];
   return values.some(
@@ -100,22 +84,11 @@ export function isForeignUnhandled(event: ExceptionShape, originOrigin: string):
 
 // ── Strip Faro's message-echo pseudo-frames before Gate 0b runs ─────────────────
 //
-// Faro 2.12.1's `getStackFramesFromError` runs every line of `error.stack` through
-// a webkit regex, then a gecko-regex fallback. When the FIRST line of the stack
-// (the `Error: <message>` line, not a real `at …` frame) fails the webkit regex but
-// matches the gecko one, it becomes a fake frame: `{filename: <a URL quoted in the
-// message>, function: "Error: <message text>"}`, with NO `lineno`. If the message
-// happens to quote a foreign absolute URL — `Failed to load https://cdn…`, or an
-// error someone threw with a URL in its text — `isForeignUnhandled` above then
-// reads that fake frame's filename as "this error's stack lives outside our
-// origin" and drops the whole event. The message text was never a stack frame.
-//
-// A real frame always carries a `lineno` (even a minified/anonymous one); only
-// this message-echo artifact does not. So: drop a frame with no `lineno` whose
-// `filename` is a substring of the error's own message — that is the artifact,
-// not evidence of foreignness. Keep everything else, including a genuinely
-// foreign real frame (extension, third-party script), which still has a
-// `lineno` and is untouched.
+// Faro's stack parser can turn the `Error: <message>` line itself into a
+// fake frame with no `lineno` when the message quotes a URL — which
+// `isForeignUnhandled` would then misread as a foreign frame. A real frame
+// always has a `lineno`; drop only a frame with none whose `filename` is a
+// substring of the message.
 export function withoutMessageEchoFrames<F extends { filename?: string; lineno?: number }>(
   value: string | undefined,
   frames: F[] | undefined,
@@ -212,11 +185,8 @@ export function isEdgelessForeignSessionStart(event: TaggedEvent): boolean {
 
 // ── ADR §E.2 tee ──────────────────────────────────────────────────────────────
 //
-// Split out of `sentry.ts#sharedSentryOptions`'s `beforeSend`, same import-free
-// reason as this file's own header: the concrete `telemetry` facade needs no
-// `./telemetry/index.js` import here — its `pageLoadId`/`event` methods are
-// accepted structurally, so a plain object stub exercises this in
-// `pipeline/sentry-gating.test.mjs` with no Faro/`@sentry/react` import required.
+// Split out of `sentry.ts`, same import-free reason as this file's header:
+// `telemetry`'s shape is accepted structurally, so a stub can test this.
 
 /** The `telemetry` facade shape this tee needs — structurally typed against
  *  `Telemetry` (contract §6), not imported, for the reason above. */
@@ -226,19 +196,13 @@ interface TelemetryTeeTarget {
 }
 
 /**
- * ADR §E.2: the Faro page-load id becomes a Sentry tag, and the Sentry event
- * id is pushed as a Faro event — both directions of the cross-reference, on
- * every event that actually ships. No-ops safely when telemetry never
- * initialised (`noopTelemetry.pageLoadId()` still mints and returns a real,
- * stable id; `.event()` is a no-op).
+ * ADR §E.2: the Faro page-load id becomes a Sentry tag, and the Sentry
+ * event id is pushed as a Faro event — both directions, on every event
+ * that ships. No-ops safely when telemetry never initialised.
  *
- * Wrapped in try/catch: a throw from EITHER call — Faro's
- * own client, once constructed, is outside this file's control — would
- * otherwise propagate straight out of `beforeSend` itself, and the SDK treats a
- * throwing `beforeSend` as "drop this event." The tee is a best-effort
- * enrichment; its own failure must never cost the underlying error report it
- * was only ever supposed to enrich. Always returns the (possibly
- * tag-mutated) event, never throws.
+ * Wrapped in try/catch: a throw from either call would otherwise propagate
+ * out of `beforeSend`, which the SDK treats as "drop this event." Always
+ * returns the (possibly mutated) event, never throws.
  */
 export function applyFaroTee<E extends TaggedEvent & { event_id?: string }>(event: E, telemetry: TelemetryTeeTarget): E {
   try {

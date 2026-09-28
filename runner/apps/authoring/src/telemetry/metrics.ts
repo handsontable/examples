@@ -1,33 +1,9 @@
-// Observability contract §5 browser metric catalogue (ADR-0041 §F.2, docs/observability-contract.md).
+// Observability contract §5 browser metric catalogue (ADR-0041 §F.2).
 //
-// Every emission function here takes an INJECTED `Telemetry` (the contract §6
-// interface) as a parameter, rather than importing
-// `apps/authoring/src/telemetry/index.ts` (T06's facade) itself — the caller
-// (`App.tsx`) passes its own live `telemetry` binding at each call site. That
-// binding is a reassignable `let` (T06's `initTelemetry()` swaps `noopTelemetry`
-// for the real facade after init), so a caller must read `telemetry` at the call
-// site, never capture it once into a constant.
-//
-// The runtime engines (`packages/runtime/src/sandpack.ts`, `container.ts`) expose
-// timing through hooks declared as OPTIONAL members on the shared `DemoRuntime`
-// interface (`packages/runtime/src/types.ts`) —
-// `onCompileTiming`/`onCompileError`/`onBundlerUnreachable` (`SandpackRuntime`
-// only), `onSessionStart`/`onHmr` (`ContainerRuntime` only). `wireRuntimeMetrics`
-// below calls every one of them through `runtime.onX?.(cb)`, so a caller holding
-// a bare `DemoRuntime` never casts to the concrete engine type. Neither runtime
-// file imports `@handsontable/demo-runtime/telemetry`; this module is where the
-// hook payloads become `toAePoint`-shaped metric calls.
-//
-// Erasable TS only (interfaces, type aliases, plain functions/classes — no enums,
-// no parameter properties): `pipeline/browser-metrics.test.mjs` imports this file
-// directly under `node --experimental-strip-types`, the same way
-// `pipeline/drop-files.test.mjs` imports `packages/editor-shell/src/dropFiles.ts`.
-// Every value-level import must be real ESM the Node loader can resolve at test
-// time too — `@handsontable/demo-runtime/telemetry`'s `fingerprint` resolves
-// through the workspace symlink to `packages/runtime/dist/telemetry/index.js`
-// (built by `pnpm test`'s own build step), same as every other package import
-// here. `DemoRuntime` and the hook event types are imported `type`-only, so they
-// are erased entirely and never need runtime resolution.
+// Every emission function takes an INJECTED `Telemetry` parameter (not
+// imported directly) so `App.tsx` can pass its live, reassignable binding.
+// Erasable TS only: `pipeline/browser-metrics.test.mjs` imports this file
+// directly under `node --experimental-strip-types`.
 
 import type { DemoRuntime } from "@handsontable/demo-runtime";
 import { isNextPrereleaseVersion, selectedReleaseMajor } from "@handsontable/demo-runtime";
@@ -58,14 +34,9 @@ export function htMajorOf(ref: string | null | undefined): HtMajor {
 
 export interface PreviewResolveContext {
   surface: Surface;
-  /** Derive from `entry.engine === "container" ? 2 : 1` — the SAME derivation
-   *  `App.tsx`'s own `demoContext()`/`reportRuntimeError` already use — never
-   *  from the catalog's `entry.tier`. The two disagree for the five
-   *  UI-library starters (`react-js` and siblings): catalog tier 1, but
-   *  `engine: "container"` (`engine-smoke.spec.ts` pins this). Using the
-   *  catalog tier there would give a live container boot the 30s Tier-1
-   *  timeout instead of the 180s Tier-2 one, latching `timeout` on an
-   *  in-progress cold boot. */
+  /** Derived from `entry.engine === "container" ? 2 : 1` (App.tsx), never
+   *  from catalog `entry.tier` — the two disagree for UI-library starters,
+   *  which would otherwise get the wrong ready-timeout bucket. */
   tier: 1 | 2;
   framework: string;
   /** The version ref the preview is being resolved against — converted to the
@@ -79,16 +50,11 @@ export type PreviewReadyOutcome = "ready" | "error" | "timeout" | "abandoned";
 
 export interface PreviewReadyTracker {
   /**
-   * Observe the SAME promise the caller already awaits from `runtime.mount(...)`
-   * — never call `mount()` a second time. Required because both engines can
-   * reject `mount()` without ever calling `onError`: `ContainerRuntime.mount`'s
-   * catch calls `this.dispose()` (which clears `errorCbs`) before rethrowing, and
-   * `SandpackRuntime.mount`'s `buildSetup`/`loadSandpackClient` rejections
-   * (DEV-2130 "Setup failed") go straight to the caller's `.catch()` with no
-   * `onError` call at all. A tracker that only listened to the ready/error
-   * callbacks would record exactly these — the most common Tier-2 failures
-   * (`at_capacity`, budget refusals, an edge 403) — as `abandoned` once the
-   * caller's effect cleanup ran, instead of `error`.
+   * Observe the SAME promise the caller already awaits from `mount()` —
+   * never call `mount()` again. Required because both engines can reject
+   * `mount()` without ever calling `onError` (DEV-2130); a tracker that
+   * only listened to ready/error would record those as `abandoned`
+   * instead of `error`.
    */
   observe(mountPromise: Promise<unknown>): void;
   /** The caller is switching away before this preview settled (a version switch,
@@ -97,29 +63,21 @@ export interface PreviewReadyTracker {
 }
 
 /** Generous, tier-specific defaults: Tier-2 cold boots can take minutes
- *  (the create POST alone can sit near Cloudflare's ~100s edge ceiling, and the
- *  dev server still has to install and start after that), so a short timeout here
- *  would latch `timeout` and then silently drop the real `ready` that follows.
- *  Tier-1's hosted bundler has no comparable install step. Neither number is
- *  measured against production traffic yet — both are a ceiling picked to never
- *  fire before a real failure would already have reported through `onError`, not
- *  a target latency. Revisit once real `preview.ready_ms` data exists per tier. */
+ *  (install + start after the create POST); Tier-1's hosted bundler has no
+ *  such step. Neither number is measured against production traffic yet. */
 const DEFAULT_PREVIEW_TIMEOUT_MS: Record<1 | 2, number> = {
   1: 30_000,
   2: 180_000,
 };
 
 /**
- * §5 `preview.ready_ms` — "from the moment an example is resolved to
- * `data-preview-status = ready`". Call this at the moment of resolve (immediately
- * after constructing the runtime, before `mount()`), pass `mountPromise` to
- * `observe()`, and call `abandon()` from the same effect's cleanup.
+ * §5 `preview.ready_ms`, from resolve to `data-preview-status = ready`.
+ * Call at resolve time (before `mount()`), pass `mountPromise` to
+ * `observe()`, call `abandon()` from the effect's cleanup.
  *
- * Emits exactly once per tracker instance: the first of `onReady`, an observed
- * rejection, the timeout, or `abandon()` wins, and every later signal is a no-op —
- * including a SECOND `onReady` call, which `SandpackRuntime` fires on every clean
- * recompile, not just the first (so an edit made after the preview is already
- * ready must never re-emit `preview.ready_ms`).
+ * Emits exactly once: the first of `onReady`, an observed rejection, the
+ * timeout, or `abandon()` wins; every later signal (including a second
+ * `onReady` on a clean Sandpack recompile) is a no-op.
  */
 export function trackPreviewReady(
   runtime: DemoRuntime,
@@ -166,40 +124,15 @@ export function trackPreviewReady(
 // ---- sandpack.compile_ms/compile_error/bundler_unreachable, session.start_ms, hmr.roundtrip_ms --
 
 /**
- * Wire whichever of the §5 timing hooks `runtime` actually implements — the
- * Tier-1 compile metrics (`SandpackRuntime`) or the Tier-2 session/HMR metrics
- * (`ContainerRuntime`) — to their contract points. One function for both
- * engines, called unconditionally from the mount effect: every hook is read
- * through an optional chain (`runtime.onX?.(cb)`), so wiring a `ContainerRuntime`
- * simply registers nothing for the three Sandpack-only hooks, and vice versa —
- * no engine branch, no cast to a concrete class needed at the call site.
+ * Wires whichever §5 timing hooks `runtime` implements to their contract
+ * points, through optional chains (`runtime.onX?.(cb)`) so no engine
+ * branch is needed at the call site.
  *
- * `sandpack.compile_error` fires for a bundler diagnostic and
- * for the parcel pre-transpile's own babel failure, which never
- * reaches the bundler — on mount, and for the newest push on the edit path.
- * Typing one broken line walks through several distinct diagnostics
- * (`Unexpected token`, `Missing initializer…`, `Unterminated JSX…`), so a
- * fingerprint dedupe alone would still count several points per typed line.
- * With `opts.collapseCompileError` (what `App.tsx` passes: `sentry.ts`'s
- * edit-burst collapse, shared with `preview.runtime_error`) a compile error
- * counts once per edit burst, from the burst's final state, and suppresses the
- * burst's runtime relays from code already typed past. Without it (a bare
- * caller) the point is deduped by fingerprint for
- * the life of `runtime`.
- *
- * `session.start_ms`'s `reason` (cold/warm) is intentionally never set.
- * `toAePoint` accepts the metric with `reason` omitted (every `HotAttrs` field is
- * optional; the closed-set check in `metrics.ts#toAePoint` only fires when a value
- * IS supplied), so this is a valid point, just without that breakdown. No
- * client-observable cold/warm signal exists anywhere in the codebase today
- * (`sessionDiagnostics.ts` only classifies elapsed time and response origin) —
- * the create response
- * (`{ previewUrl, port }`) carries nothing about pool state, and each mount mints a
- * fresh session id, so there is no "was this container already warm" fact
- * available client-side to attach. Following through on a latency-threshold guess
- * would put a fabricated split on a dashboard as if it were measured. Follow-up:
- * the API worker should add a `cold`/`warm` field to the create response
- * (it already knows this — the pool it drew from is server state).
+ * A compile error is deduped by fingerprint for the life of `runtime`,
+ * unless `opts.collapseCompileError` (the edit-burst collapse) is given,
+ * in which case it counts once per burst instead. `session.start_ms`'s
+ * `reason` (cold/warm) is intentionally never set — no client-observable
+ * signal exists to attach it from.
  */
 export function wireRuntimeMetrics(
   runtime: DemoRuntime,
@@ -262,13 +195,9 @@ export function wireRuntimeMetrics(
 
 // ---- version.switch / bucket.resolve_ms ------------------------------------------
 
-/** §5 `version.switch` — call from the version-picker change handler, before the
- *  remount effect tears down the old preview. `reason` carries the FROM version's
- *  `ht_major` — the same closed conversion as the TO version (`htMajorOf`), not
- *  the raw ref: `fromRef` traces back to the user-controlled `?v=` URL parameter,
- *  and a raw pkg.pr.new URL or an arbitrary string landing in an Analytics Engine
- *  blob unbounded is exactly what the closed set exists to prevent. `null`/absent
- *  reads as `"none"`, matching `ht_major`'s own "no version attached" value. */
+/** §5 `version.switch` — call before the remount effect tears down the old
+ *  preview. `reason` carries the FROM version's `ht_major`, not the raw ref
+ *  (which traces back to the user-controlled `?v=` param). */
 export function emitVersionSwitch(
   telemetry: Telemetry,
   params: { framework: string; toRef: string; fromRef?: string | null; bucket?: string },
