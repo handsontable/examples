@@ -222,8 +222,8 @@ export function faroItemToRecord(item: ScrubbableFaroItem, options: ConvertOptio
   attributes[ATTR_HOT_KIND] = item.type;
   // Only a measurement carries a metric outcome, and it becomes an AE point, never
   // a stored record. A stored record's `hot.outcome` is always the `none`
-  // default: that keeps the browser tenant's label tuples (surface × tier ×
-  // framework × ht_major) under Loki's 5000-stream limit.
+  // default, which keeps the browser tenant's label tuples under the box's Loki
+  // stream limit (contract §3).
   if (item.type !== "measurement") delete resourceAttributes[ATTR_HOT_OUTCOME];
   const metric = item.type === "measurement" ? item.payload.type : undefined;
 

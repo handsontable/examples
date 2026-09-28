@@ -9,9 +9,7 @@ export const BOT_RE =
 export const isBot = (userAgent: string): boolean => BOT_RE.test(userAgent);
 
 /** Coarse device class (§4 blob15). Deliberately three buckets — anything finer
- *  starts to look like a fingerprint. No `android.*mobile` branch: `mobi` matches
- *  everything it would, and it is O(n²) on a run of `android` in a client-sent
- *  Faro `userAgent` (112k characters: 1.8 s). */
+ *  starts to look like a fingerprint. */
 export function deviceOf(ua: string): string {
   if (/ipad|tablet|playbook|silk/i.test(ua)) return "tablet";
   if (/mobi|iphone|ipod|windows phone/i.test(ua)) return "mobile";

@@ -36,10 +36,9 @@ export type Tier = (typeof TIERS)[number];
 export const HT_MAJORS = ["15", "16", "17", "18", "19", "next", "none"] as const;
 export type HtMajor = (typeof HT_MAJORS)[number];
 
-/** `hot.framework` on a stored record: the `config/frameworks.json` keys (the
- *  docs-example frameworks are among them) plus `none`. Ingest replaces any
- *  other value with {@link OTHER_ATTR_VALUE}; `pipeline/telemetry-contract.test.mjs`
- *  fails when this list and `frameworks.json` disagree. */
+/** `hot.framework` on a stored record: the `config/frameworks.json` keys plus
+ *  `none`; ingest stores anything else as {@link OTHER_ATTR_VALUE}. Kept in step
+ *  with `frameworks.json` by `pipeline/telemetry-contract.test.mjs`. */
 export const KNOWN_FRAMEWORKS = [
   "blank",
   "blank-ts",
@@ -72,8 +71,8 @@ export const RECORD_OUTCOMES = ["none"] as const;
 export type Outcome = string;
 
 /** What ingest stores for a `hot.framework`/`hot.outcome` outside its known set:
- *  both are Loki labels, and each distinct value is a stream (Loki's default
- *  limit is 5000 per tenant). */
+ *  both are Loki labels, so every distinct value multiplies the stream count
+ *  (contract §3). */
 export const OTHER_ATTR_VALUE = "other";
 
 /** Bounds a client-sent `fw` before it reaches the known-set mapping, so a
