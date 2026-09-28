@@ -487,6 +487,37 @@ test("compose.yml: minio image is pinned by digest, and no minio-init/quay.io/mi
   assert.doesNotMatch(code, /^\s*minio-init:/m, "no minio-init service block (T1: replaced by MINIO_DEFAULT_BUCKETS)");
 });
 
+// F36 (dev-stack note): minio/clickhouse hold the local Loki/AE data; a
+// Docker OOM-kill (observed for real under Docker Desktop's 8 GB default
+// during a real 10-container Tier-2 load test) silently drops every
+// metric/log written after that point until the container is restarted by
+// hand. `box` (Grafana) deliberately gets no restart policy — it manages its
+// own lifecycle through the wake/stop protocol (compose.yml's own header
+// comment), and a competing restart policy could fight that.
+test("compose.yml: minio and clickhouse (data services) restart unless-stopped; box does not", () => {
+  const raw = readText("compose.yml");
+  const code = stripYamlComments(raw);
+
+  const minioBlock = extractComposeServiceBlock(code, "minio");
+  const clickhouseBlock = extractComposeServiceBlock(code, "clickhouse");
+  const boxBlock = extractComposeServiceBlock(code, "box");
+  assert.ok(minioBlock, "compose.yml has a `minio` service block");
+  assert.ok(clickhouseBlock, "compose.yml has a `clickhouse` service block");
+  assert.ok(boxBlock, "compose.yml has a `box` service block");
+
+  assert.match(minioBlock, /^\s*restart:\s*unless-stopped\s*$/m, "minio holds data across an OOM-kill; restart it");
+  assert.match(
+    clickhouseBlock,
+    /^\s*restart:\s*unless-stopped\s*$/m,
+    "clickhouse holds data across an OOM-kill; restart it",
+  );
+  assert.doesNotMatch(
+    boxBlock,
+    /^\s*restart:/m,
+    "box manages its own lifecycle via the wake/stop protocol; no competing restart policy",
+  );
+});
+
 test("stop-roundtrip.mjs, dev.mjs and the e2e-o11y-local workflow never use quay.io/minio or minio-init as a live value", () => {
   const files = [
     ["stop-roundtrip.mjs", join(O11Y_DIR, "local", "stop-roundtrip.mjs"), stripJsLineComments],

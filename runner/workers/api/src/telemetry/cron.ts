@@ -13,8 +13,12 @@ import { emitPoint } from "./points.js";
  *  pool (`Sandbox`, currently 10 — DEV-2909). Kept here rather than re-read
  *  from config at runtime (wrangler does not expose it to `env`); the two
  *  numbers must move together, same as `budget.ts`'s own `SESSION_INSTANCE_TYPE`
- *  comment already notes for the container shape. */
-const LIVE_POOL_MAX_INSTANCES = 10;
+ *  comment already notes for the container shape. Exported (not just used
+ *  locally) so `pipeline/api-telemetry-pool-gauge.test.mjs`'s drift test can
+ *  import this exact value and assert it against the real `max_instances` in
+ *  `wrangler.jsonc` — the gauge itself has no way to fail loudly the day
+ *  someone changes one number and not the other (F34). */
+export const LIVE_POOL_MAX_INSTANCES = 10;
 
 /**
  * `pool.gauge` (reason `live`): how many Tier-2 sessions are actually AWAKE

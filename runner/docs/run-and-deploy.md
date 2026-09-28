@@ -433,6 +433,18 @@ request, destroying the preview subdomain before `proxyToSandbox()` can
 route on it. That's why the production routes live in the `deploy` script
 instead — don't move them back into `wrangler.jsonc`.
 
+**Docker memory.** A Tier-2 load test that fills the real pool (up to 10 containers) plus
+ClickHouse needs more than Docker Desktop's default 8 GB — ClickHouse itself was OOM-killed
+at 8 GB during one such test (F36). Raise Docker's memory limit before running one.
+
+**Host sleep.** Restart `dev:full` if the laptop has been asleep for a while — `workerd`'s
+own alarms fire late once the host wakes, and the o11y worker can stop answering (every
+route times out, no error) until the stack is restarted (F31).
+
+**`at_capacity`.** Local `wrangler dev` does not enforce `containers[].max_instances`, so
+`at_capacity` and its alert can only be produced and checked on the sandbox/production
+account (F36) — never expect them to fire locally, however many sessions you open.
+
 ## Deploy (main Handsontable account)
 
 ```bash
@@ -1071,16 +1083,24 @@ this task could not test at all (calendar time, real Cloudflare Analytics Engine
 credentials). None of it blocks the deploy — it confirms the deploy did what the local
 walkthrough already showed.
 
-1. **A malformed `PATCH /api/demos/:id` for a demo you own**, with your own login's bearer
-   token and a body that isn't valid JSON — expect the fetch catch-all's structured error
-   line + a real Sentry event (exit criterion 11's Worker leg, local-only until now).
-   Not `POST /api/session` any more: that route is public and unauthenticated, so a
-   malformed body there used to reach this same catch-all as an uncaught 500 on ordinary
-   client garbage — polluting the `api.request` 5xx rate and the `api-5xx-rate` alert. It
-   is now a 400 by design (fix round: malformed-JSON handling on the session routes).
-   `PATCH /api/demos/:id` is the replacement probe: authentication and the ownership check
-   both run before the body is ever parsed, so a malformed body throws past them with
-   nothing written — touching nothing real, same as the old probe's intent.
+1. **Retired (F33) — needs a new probe.** This item used to send a malformed
+   `PATCH /api/demos/:id` (your own login's bearer token, a body that isn't valid JSON) and
+   expect the fetch catch-all's structured error line + a real Sentry event (exit criterion
+   11's Worker leg). That was already the *second* probe here: `POST /api/session` was the
+   original, retired when the session routes got the same 400-by-design fix (that route is
+   public/unauthenticated, so a malformed body there used to reach the catch-all as an
+   uncaught 500, polluting `api.request`'s 5xx rate and the `api-5xx-rate` alert).
+   `PATCH /api/demos/:id` was the replacement because authentication and the ownership check
+   both ran before the body was ever parsed, so a malformed body threw past them with
+   nothing written. F33 closed that same gap on `POST /api/demos` and `PATCH /api/demos/:id`
+   too (both now answer 400 by design, same helper/shape as the session fix) — so this probe
+   no longer reaches the catch-all either, and exit criterion 11's Worker leg has no
+   post-deploy probe left. The only `request.json()` call sites in `index.ts` that still
+   throw on a malformed body sit behind `authenticateService()` (the MCP routes,
+   `POST /api/mcp/demos` / `PATCH /api/mcp/demos/:id`) — usable only with the MCP's shared
+   service secret, not an operator's own bearer token, so they are not a drop-in replacement
+   for "with your own login". Needs a new Worker-tenant probe (or a change to this smoke
+   check's own expectation) before exit criterion 11 can be re-verified this way again.
 2. **Exit criterion 15, worker tenant, against a real Cloudflare export** — T02's own probe
    already did this once (sandbox account); repeat once against the production o11y worker's
    real Workers Logs export destination and confirm the same 7 labels + `cloudflare.ray_id`
@@ -1126,8 +1146,8 @@ walkthrough already showed.
    resolves to `src/…` file and line using at most 500 ms CPU and 64 MB of isolate
    memory; Babel-chunk frames are skipped, not parsed." This is a **Faro/browser**
    exception specifically (§C.3: "a Faro exception's stack trace reaches the drain as
-   V8-shaped text") — item 1's malformed `PATCH /api/demos/:id` probe is a worker-tenant
-   line and never goes through symbolication, so it does not exercise this criterion.
+   V8-shaped text") — item 1's (now-retired) probe was a worker-tenant line and never went
+   through symbolication anyway, so it never exercised this criterion.
    A Playwright `page.evaluate` against the production host does not either:
    `reportingEnabled`/Faro's own `productionReportingEnabled` both gate on
    `navigator.webdriver !== true` (`reportingGate.ts`), which every automation harness
@@ -1176,6 +1196,12 @@ walkthrough already showed.
    `rollupExampleDaily` only writes rows for groups with at least one event, so a quiet day can
    legitimately add none — expect rows, not necessarily one per calendar day, once at least one
    nightly cron (04:17 UTC) has run since deploy.
+9. **`at_capacity` and its alert.** Local `wrangler dev` does not enforce
+   `containers[].max_instances` (F36) — every session request succeeds locally regardless of
+   how many are already "awake", so `at_capacity`/`AT_CAPACITY_CODE` and the capacity-related
+   alert can only be produced and confirmed against the real sandbox/production account.
+   Fill the live pool (real Tier-2 sessions, one per framework, up to `max_instances`) and
+   confirm the next session gets a 503 `at_capacity` refusal and the alert fires.
 
 ### Flipping `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` to `uncaught`
 

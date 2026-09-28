@@ -1412,6 +1412,120 @@ export function isRuntimeDistStale(runtimeDir, fs = defaultFsWithReaddir) {
 }
 
 // ---------------------------------------------------------------------------
+// pnpm install staleness ("stale dependencies after a pull" dev-stack note)
+// ---------------------------------------------------------------------------
+
+/**
+ * True when `pnpm-lock.yaml` is newer than `node_modules/.modules.yaml` — the
+ * file `pnpm install` itself rewrites on EVERY run (verified empirically
+ * against this repo's pinned pnpm version: touching only the lockfile's own
+ * mtime and re-running `pnpm install --frozen-lockfile` — a genuine no-op,
+ * "Already up to date" — still rewrites `.modules.yaml`'s mtime too), so
+ * this self-heals the moment someone runs the exact command it recommends,
+ * rather than staying a permanent false positive. A real `git pull`/checkout
+ * only touches a tracked file's mtime when its CONTENT changed, so an
+ * ordinary pull that never touches the lockfile never trips this either —
+ * only a real dependency change does, which is exactly the gap this closes:
+ * `pnpm dev:full` waiting 120s and then failing with a generic "o11y worker
+ * never came up" after a pull added `@jridgewell/trace-mapping` (the F30
+ * fix) and `node_modules` was never reinstalled. `node_modules` (or
+ * `.modules.yaml`) missing outright also counts as needing an install —
+ * never installed at all. No lockfile to compare against is never a false
+ * positive — nothing to detect drift against. Injectable fs/runnerRoot so
+ * tests exercise a temp directory, never this worktree's own real
+ * `node_modules`.
+ */
+export function isPnpmInstallNeeded(runnerRoot = RUNNER_ROOT, fs = defaultFsWithReaddir) {
+  const lockfilePath = path.join(runnerRoot, "pnpm-lock.yaml");
+  const modulesYamlPath = path.join(runnerRoot, "node_modules", ".modules.yaml");
+  if (!fs.existsSync(lockfilePath)) return false;
+  if (!fs.existsSync(modulesYamlPath)) return true;
+  return fs.statSync(lockfilePath).mtimeMs > fs.statSync(modulesYamlPath).mtimeMs;
+}
+
+/** The one clean, actionable message `dev.mjs` prints (never a silent 120s
+ *  timeout followed by a buried wrangler build error) when
+ *  {@link isPnpmInstallNeeded} is true. */
+export const PNPM_INSTALL_NEEDED_MESSAGE =
+  "pnpm-lock.yaml is newer than node_modules/.modules.yaml — dependencies look out of date for this checkout.\n" +
+  "  Run: pnpm install --frozen-lockfile";
+
+// ---------------------------------------------------------------------------
+// Surfacing a wrangler build failure instead of waiting out the full
+// readiness timeout ("stale dependencies after a pull" dev-stack note)
+// ---------------------------------------------------------------------------
+
+/**
+ * True when `line` is wrangler/esbuild's own build-failure marker
+ * (`✘ [ERROR] <message>`, ANSI codes stripped first — the same shape this
+ * file's own `extractSqliteMessage` already handles for a migration failure,
+ * confirmed against wrangler 4.108's real output) — EXCLUDING wrangler's own
+ * runtime uncaught-exception logging, which reuses the identical
+ * `✘ [ERROR]` prefix for a request handler throwing at RUNTIME (the worker
+ * came up fine and is already serving traffic) rather than esbuild failing
+ * to bundle it (the worker never came up at all). Two real examples from
+ * this repo's own history that must NOT match: `✘ [ERROR] Uncaught Error: No
+ * such image available named cloudflare-dev/sandbox:...` (S1-report.md) and
+ * `✘ [ERROR] Uncaught Error: ReadableStream received over RPC disconnected
+ * prematurely.` (progress.md) — both start with "Uncaught " right after the
+ * bracket; no real esbuild bundling failure does (its own vocabulary is
+ * "Could not resolve", "Transform failed with N errors", "Unexpected
+ * token", never "Uncaught"). Returns the matched message (trimmed), or
+ * `null`.
+ */
+export function wranglerBuildErrorLine(line) {
+  const clean = line.replace(/\x1b\[[0-9;]*m/g, "");
+  const m = /✘\s*\[ERROR\]\s*(.+)/.exec(clean);
+  if (!m) return null;
+  const message = m[1].trim();
+  if (/^Uncaught\b/.test(message)) return null;
+  return message;
+}
+
+/**
+ * Polls `fetchImpl(url)` every `pollMs` until it resolves, throwing once
+ * `timeoutMs` elapses. On every failed attempt — before ever sleeping again,
+ * however large `timeoutMs` is — also calls `getEarlyFailure()`; a truthy
+ * return (a {@link wranglerBuildErrorLine}) throws IMMEDIATELY with that
+ * line instead of waiting out the rest of `timeoutMs`. Built for `dev.mjs`'s
+ * two `wrangler dev` readiness waits: a
+ * build failure means wrangler either exits or hangs without ever binding
+ * its port, so without this the generic "never came up within 120000ms"
+ * timeout used to be the only signal for the full 2 minutes, burying
+ * wrangler's own much more specific error (the "stale dependencies after a
+ * pull" dev-stack note). Injectable fetch/sleep so a test never waits out a
+ * real network timeout or a real `setTimeout`.
+ */
+export async function waitForServer(
+  url,
+  timeoutMs,
+  label,
+  {
+    fetchImpl = fetch,
+    getEarlyFailure = () => undefined,
+    pollMs = 250,
+    sleepImpl = (ms) => new Promise((r) => setTimeout(r, ms)),
+  } = {},
+) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      await fetchImpl(url);
+      return;
+    } catch (err) {
+      const earlyFailure = getEarlyFailure();
+      if (earlyFailure) {
+        throw new Error(`${label} on ${url} failed to build: ${earlyFailure}`);
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`${label} on ${url} never came up within ${timeoutMs}ms: ${err}`);
+      }
+      await sleepImpl(pollMs);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Spawn plan
 // ---------------------------------------------------------------------------
 

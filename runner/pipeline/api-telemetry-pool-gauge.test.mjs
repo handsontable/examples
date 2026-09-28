@@ -15,11 +15,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { fakeKV } from "./fixtures/worker-harness.mjs";
 
 register("./fixtures/worker-hooks.mjs", import.meta.url);
 
-const { countLiveSessionMeters } = await import("../workers/api/src/telemetry/cron.ts");
+const { countLiveSessionMeters, LIVE_POOL_MAX_INSTANCES } = await import("../workers/api/src/telemetry/cron.ts");
 const { AWAKE_WINDOW_SECONDS } = await import("../workers/api/src/session-listing.ts");
 
 const now = 1_800_000_000_000;
@@ -62,4 +64,61 @@ test("countLiveSessionMeters: the idle-window boundary is inclusive, same rule a
   await seedMeter(cache, "astro-pastwindow", now - sec(900), now - sec(AWAKE_WINDOW_SECONDS + 1));
   const env = { CACHE: cache };
   assert.equal(await countLiveSessionMeters(env, now), 1);
+});
+
+// ---------------------------------------------------------------------------
+// F34 — `pool.gauge`'s `cap` (`LIVE_POOL_MAX_INSTANCES`) is a hard-coded
+// constant, not read from config at runtime (wrangler does not expose
+// `containers[].max_instances` to `env`). It drifts silently the moment
+// someone changes `Sandbox.max_instances` in wrangler.jsonc without also
+// updating this constant — the "Pool gauge vs cap" panel would then compare
+// live sessions against the WRONG ceiling with no error anywhere. This test
+// parses the real wrangler.jsonc and pins the two together, so CI fails
+// instead of drifting: change either number alone and this goes red.
+//
+// No JSON5 dependency added (T00 owns new dependencies; runner/pnpm-lock.yaml
+// has none) — same zero-dependency `//`-comment stripper
+// `api-telemetry-config.test.mjs` already uses for this exact file (line
+// comments only, no trailing commas — this repo's actual .jsonc style).
+// ---------------------------------------------------------------------------
+
+function stripLineComments(text) {
+  let out = "";
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (inString) {
+      out += c;
+      if (escape) escape = false;
+      else if (c === "\\") escape = true;
+      else if (c === "\"") inString = false;
+      continue;
+    }
+    if (c === "\"") {
+      inString = true;
+      out += c;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i += 1;
+      out += "\n";
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+test("drift: LIVE_POOL_MAX_INSTANCES equals workers/api/wrangler.jsonc's Sandbox max_instances", () => {
+  const workersApiDir = fileURLToPath(new URL("../workers/api/", import.meta.url));
+  const wranglerJsonc = fs.readFileSync(`${workersApiDir}wrangler.jsonc`, "utf8");
+  const wrangler = JSON.parse(stripLineComments(wranglerJsonc));
+  const sandbox = wrangler.containers.find((c) => c.class_name === "Sandbox");
+  assert.ok(sandbox, "wrangler.jsonc must declare a Sandbox container");
+  assert.equal(
+    LIVE_POOL_MAX_INSTANCES,
+    sandbox.max_instances,
+    "cron.ts's LIVE_POOL_MAX_INSTANCES must be updated in the same commit as wrangler.jsonc's Sandbox max_instances",
+  );
 });

@@ -1542,7 +1542,15 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "demos" && parts.length === 2) {
         const id = await authenticate(request, env);
         if (!id) return json({ error: "unauthorized" }, 401);
-        const body = (await request.json()) as {
+        // Malformed JSON, or a JSON array where an object is expected, used
+        // to fall through to the fetch catch-all's generic 500 (F33) — same
+        // class the session routes' fix already closed, and the same fix:
+        // `.catch(() => null)` reaches the existing `isPlainRecord` check
+        // instead of throwing (unparseable body) or a bare property read on
+        // a non-record throwing past this handler (an array body).
+        const rawBody = await request.json().catch(() => null);
+        if (!isPlainRecord(rawBody)) return json({ error: "request body must be a plain record" }, 400);
+        const body = rawBody as {
           framework: string;
           files: Record<string, string>;
           title?: string;
@@ -1839,7 +1847,11 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         const row = await getDemo(env, demoId);
         if (!row) return json({ error: "not found" }, 404);
         if (!sameOwner(row.created_by, id.email)) return json({ error: "forbidden" }, 403);
-        const patch = (await request.json()) as {
+        // Same fix as the create route above (F33): malformed JSON or an
+        // array body must not throw past this handler.
+        const rawPatch = await request.json().catch(() => null);
+        if (!isPlainRecord(rawPatch)) return json({ error: "request body must be a plain record" }, 400);
+        const patch = rawPatch as {
           title?: string; description?: string | null; visibility?: string;
           files?: Record<string, string>; htVersion?: string;
         };

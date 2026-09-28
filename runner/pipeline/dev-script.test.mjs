@@ -15,7 +15,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,6 +50,10 @@ import {
   isDockerAvailable,
   DOCKER_NOT_RUNNING_MESSAGE,
   isRuntimeDistStale,
+  isPnpmInstallNeeded,
+  PNPM_INSTALL_NEEDED_MESSAGE,
+  wranglerBuildErrorLine,
+  waitForServer,
   buildPlan,
   planNames,
   ephemeralSecret,
@@ -1422,6 +1426,157 @@ test("isRuntimeDistStale: true when a src file was edited after the last dist bu
     writeFileSync(path.join(dir, "src", "index.ts"), "export {}\n");
     assert.equal(isRuntimeDistStale(dir), true);
   });
+});
+
+// ---------------------------------------------------------------------------
+// pnpm install staleness ("stale dependencies after a pull" dev-stack note)
+// ---------------------------------------------------------------------------
+
+/** Sets an exact, controllable mtime — successive `writeFileSync` calls can
+ *  land on the same filesystem-clock tick, which would make a real ordering
+ *  bug read as a pass here just as easily as a real fix. */
+function touch(filePath, mtimeMs) {
+  const seconds = mtimeMs / 1000;
+  utimesSync(filePath, seconds, seconds);
+}
+
+test("isPnpmInstallNeeded: false when there is no lockfile at all (nothing to detect drift against)", () => {
+  withTmpDir((dir) => {
+    assert.equal(isPnpmInstallNeeded(dir), false);
+  });
+});
+
+test("isPnpmInstallNeeded: true when node_modules/.modules.yaml is missing outright (never installed)", () => {
+  withTmpDir((dir) => {
+    writeFileSync(path.join(dir, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    assert.equal(isPnpmInstallNeeded(dir), true);
+  });
+});
+
+test("isPnpmInstallNeeded: false when node_modules/.modules.yaml is newer than the lockfile (installed after the last lockfile change)", () => {
+  withTmpDir((dir) => {
+    const lockfilePath = path.join(dir, "pnpm-lock.yaml");
+    writeFileSync(lockfilePath, "lockfileVersion: '9.0'\n");
+    mkdirSync(path.join(dir, "node_modules"));
+    const modulesYamlPath = path.join(dir, "node_modules", ".modules.yaml");
+    writeFileSync(modulesYamlPath, "hoistedDependencies: {}\n");
+    touch(lockfilePath, 1_000_000);
+    touch(modulesYamlPath, 2_000_000);
+    assert.equal(isPnpmInstallNeeded(dir), false);
+  });
+});
+
+// This is the exact "stale dependencies after a pull" shape: a pull changed
+// the lockfile (new dependency), and node_modules was never reinstalled
+// against it — the one case this check exists to catch.
+test("isPnpmInstallNeeded: true when the lockfile is newer than node_modules/.modules.yaml (a pull changed dependencies, never reinstalled)", () => {
+  withTmpDir((dir) => {
+    const lockfilePath = path.join(dir, "pnpm-lock.yaml");
+    writeFileSync(lockfilePath, "lockfileVersion: '9.0'\n");
+    mkdirSync(path.join(dir, "node_modules"));
+    const modulesYamlPath = path.join(dir, "node_modules", ".modules.yaml");
+    writeFileSync(modulesYamlPath, "hoistedDependencies: {}\n");
+    touch(modulesYamlPath, 1_000_000);
+    touch(lockfilePath, 2_000_000);
+    assert.equal(isPnpmInstallNeeded(dir), true);
+  });
+});
+
+test("PNPM_INSTALL_NEEDED_MESSAGE names the exact fix command", () => {
+  assert.match(PNPM_INSTALL_NEEDED_MESSAGE, /pnpm install --frozen-lockfile/);
+});
+
+// ---------------------------------------------------------------------------
+// Surfacing a wrangler build failure instead of waiting out the full
+// readiness timeout ("stale dependencies after a pull" dev-stack note)
+// ---------------------------------------------------------------------------
+
+test("wranglerBuildErrorLine: matches a real esbuild-shaped build failure", () => {
+  assert.equal(
+    wranglerBuildErrorLine('✘ [ERROR] Could not resolve "@jridgewell/trace-mapping"'),
+    'Could not resolve "@jridgewell/trace-mapping"',
+  );
+});
+
+test("wranglerBuildErrorLine: strips ANSI color codes before matching (wrangler 4.108's real output shape)", () => {
+  assert.equal(
+    wranglerBuildErrorLine("\x1b[31m✘ [ERROR]\x1b[0m Could not resolve \"@jridgewell/trace-mapping\""),
+    'Could not resolve "@jridgewell/trace-mapping"',
+  );
+});
+
+test("wranglerBuildErrorLine: null for an ordinary log line", () => {
+  assert.equal(wranglerBuildErrorLine("[o11y] Ready on http://localhost:4200"), null);
+});
+
+// Two real examples from this repo's own history (progress.md, S1-report.md)
+// that must NOT be treated as a build failure: wrangler's runtime
+// uncaught-exception logging reuses the identical `✘ [ERROR]` prefix for a
+// request handler throwing at RUNTIME — the worker came up fine and is
+// already serving traffic — which is the opposite of "never came up".
+// Reverting the `Uncaught` exclusion in wranglerBuildErrorLine makes both of
+// these match and fails this test.
+test("wranglerBuildErrorLine: null for wrangler's own runtime uncaught-exception logging, not a build failure", () => {
+  assert.equal(
+    wranglerBuildErrorLine("✘ [ERROR] Uncaught Error: No such image available named cloudflare-dev/sandbox:f01d8965"),
+    null,
+  );
+  assert.equal(
+    wranglerBuildErrorLine("✘ [ERROR] Uncaught Error: ReadableStream received over RPC disconnected prematurely."),
+    null,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// waitForServer
+// ---------------------------------------------------------------------------
+
+test("waitForServer: resolves once fetchImpl stops rejecting", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    if (calls < 3) throw new Error("connection refused");
+  };
+  await waitForServer("http://localhost:1", 10_000, "test worker", {
+    fetchImpl,
+    sleepImpl: async () => {}, // instant — this test proves the retry, not real timing
+  });
+  assert.equal(calls, 3);
+});
+
+test("waitForServer: times out with the generic message when nothing signals an early failure", async () => {
+  await assert.rejects(
+    waitForServer("http://localhost:1", 20, "test worker", {
+      fetchImpl: async () => {
+        throw new Error("connection refused");
+      },
+      sleepImpl: async () => {}, // instant — the deadline is real time (Date.now()), not sleep count
+    }),
+    /test worker on http:\/\/localhost:1 never came up within 20ms/,
+  );
+});
+
+// Proves the actual race dev.mjs depends on: an early failure must win EVEN
+// WHEN timeoutMs is huge and no time has elapsed yet — this is what makes it
+// "immediately" rather than "eventually, once the timeout would have fired
+// anyway". `sleepImpl` throws if called at all: a `waitForServer` that only
+// checked `getEarlyFailure` AFTER sleeping (instead of on every failed
+// attempt, before sleeping again) would call `sleepImpl` at least once
+// before ever reporting the build error, and this assertion would catch
+// that revert.
+test("waitForServer: an early failure throws immediately, without ever sleeping, however large timeoutMs is", async () => {
+  await assert.rejects(
+    waitForServer("http://localhost:1", 120_000, "o11y worker", {
+      fetchImpl: async () => {
+        throw new Error("connection refused");
+      },
+      getEarlyFailure: () => 'Could not resolve "@jridgewell/trace-mapping"',
+      sleepImpl: () => {
+        throw new Error("must not sleep once an early failure is reported");
+      },
+    }),
+    /o11y worker on http:\/\/localhost:1 failed to build: Could not resolve "@jridgewell\/trace-mapping"/,
+  );
 });
 
 // ---------------------------------------------------------------------------

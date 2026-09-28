@@ -143,6 +143,16 @@ services:
   # denied PUT), which made it the smallest-diff, most-compatible choice.
   minio:
     image: bitnamilegacy/minio@sha256:81cd091fb9f14b2e9e9bfa6dbc2bf2d46fdd5eafa6c5e7c9213baf4256ff13d6 # 2024.11.7, verified linux/amd64+arm64 (`docker buildx imagetools inspect`)
+    # A data service (unlike `box`, which the wake/stop protocol above manages
+    # itself, so it never gets a restart policy here): if Docker OOM-kills
+    # minio or clickhouse mid-run, every metric/log write after that point is
+    # silently dropped until someone notices and restarts it by hand (F36 —
+    # observed for real, ClickHouse OOM-killed under Docker Desktop's 8 GB
+    # default while a real 10-container Tier-2 load test ran alongside it).
+    # `docker compose ... down` (never `-v` — see this file's own header
+    # comment) and `--fresh`'s `down -v` both stop containers explicitly
+    # (compose's own API, not a crash), which this policy does not intercept.
+    restart: unless-stopped
     environment:
       MINIO_ROOT_USER: ${O11Y_MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${O11Y_MINIO_ROOT_PASSWORD:-minioadmin}
@@ -183,6 +193,11 @@ services:
   # through the same allowlisting helper the o11y worker uses in production.
   clickhouse:
     image: clickhouse/clickhouse-server:24.10-alpine
+    # Data service — see minio's own comment above (F36: this is the exact
+    # container that was observed OOM-killed under Docker Desktop's default
+    # memory limit, silently dropping every metric written after that until
+    # restarted by hand).
+    restart: unless-stopped
     environment:
       CLICKHOUSE_DB: default
       # The Grafana datasource always sends a password (jsonData mirrors the
