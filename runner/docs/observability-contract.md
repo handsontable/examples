@@ -259,13 +259,26 @@ the actual wake by an hour or more; in production it lags by at most one `*/10` 
 period. Two wakes resolved in the same `resolveWakes()` call get timestamps identical to
 the millisecond even though their wakes started at different times — expected, not a bug.
 
-`sandpack.compile_error` (F10b, W-triage) counts bundler-reported compile diagnostics
-only. On a parcel Tier-1 example (every starter except `vue-cli`), a syntax error typed
-on the edit path is caught client-side by the pre-transpile step and dropped **by
-design** — it never reaches the bundler, so it is intentionally not counted. One gap
-stays open: a demo that fails to parse at *mount* (a saved/shared/`?payload=` demo, not
-a live edit) is never counted as `sandpack.compile_error` either — only
-`preview.ready_ms outcome=error` records it.
+`sandpack.compile_error` (R9C, superseding F10b) counts Tier-1 compile failures from
+both places they occur:
+- a bundler diagnostic (`show-error` with no frames — the module never evaluated);
+- the parcel pre-transpile's own babel parse failure (every starter except `vue-cli`).
+  That source never reaches the bundler and the last good render stays on screen, so
+  `SandpackRuntime` reports it from the transpile catch itself (`isTranspileFailure`):
+  at mount (a saved/shared/`?payload=` demo that does not parse — counted at once), and
+  on the edit path for the newest push only.
+
+The signal is the transpile catch, never the message shape: a runtime `SyntaxError`
+(`JSON.parse`, `new Function`) is relayed by the preview like any other throw and stays
+`preview.runtime_error`. Compile errors go through the same edit-burst collapse as
+`preview.runtime_error` (below), keyed by kind, so a burst counts at most one — from its
+final state. A compile failure of the burst's newest edit also **replaces the run**: the
+preview never ran that code, so what it relays for the rest of the burst (a
+keystroke-prefix rung still in flight, a re-render warning) is from code already typed
+past and is dropped. One typed broken line = one `sandpack.compile_error`, no
+`preview.runtime_error`. The next edit re-arms runtime reports. No error card and no
+Sentry capture is added for the edit-path failure; the mount-path Sentry capture
+(`Tier1CompileError`) is unchanged.
 
 `preview.runtime_error` (F26) counts broken preview states, not relays. The preview
 re-runs on every keystroke, so one typed line relays a whole keystroke-prefix ladder
