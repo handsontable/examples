@@ -36,6 +36,10 @@ import {
   DOCKER_NOT_RUNNING_MESSAGE,
   isDockerAvailable,
   isRuntimeDistStale,
+  isPnpmInstallNeeded,
+  PNPM_INSTALL_NEEDED_MESSAGE,
+  wranglerBuildErrorLine,
+  waitForServer,
   buildPlan,
   listRunningContainers,
   reportLeftoverContainers,
@@ -80,32 +84,29 @@ function log(name, line) {
   console.log(prefixed(name)(line));
 }
 
-function pipeLines(stream, name, sink = console.log) {
+// `onLine`: dev-stack note ("stale dependencies after a pull") — lets the
+// caller watch each raw line (before this line's own `[name]` log prefix is
+// added) for a wrangler build-error marker, so a `wrangler dev` that fails
+// its own esbuild step can be reported immediately instead of only after the
+// full readiness timeout. Optional — the plain two-arg call every other
+// child uses behaves exactly as before.
+function pipeLines(stream, name, sink = console.log, onLine = () => {}) {
   let buf = "";
   stream.on("data", (chunk) => {
     buf += chunk.toString();
     const lines = buf.split("\n");
     buf = lines.pop() ?? "";
-    for (const line of lines) sink(prefixed(name)(line));
+    for (const line of lines) {
+      sink(prefixed(name)(line));
+      onLine(line);
+    }
   });
   stream.on("end", () => {
-    if (buf) sink(prefixed(name)(buf));
-  });
-}
-
-async function waitForServer(url, timeoutMs, label) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      await fetch(url);
-      return;
-    } catch (err) {
-      if (Date.now() > deadline) {
-        throw new Error(`${label} on ${url} never came up within ${timeoutMs}ms: ${err}`);
-      }
-      await new Promise((r) => setTimeout(r, 250));
+    if (buf) {
+      sink(prefixed(name)(buf));
+      onLine(buf);
     }
-  }
+  });
 }
 
 function runWrangler(cwd, args) {
@@ -137,6 +138,20 @@ async function main() {
     console.error(errors.map((e) => `error: ${e}`).join("\n"));
     console.error("");
     console.error(HELP_TEXT);
+    process.exit(1);
+  }
+
+  // Dev-stack note ("stale dependencies after a pull"): a pull that adds a
+  // dependency (e.g. the F30 fix's @jridgewell/trace-mapping) with
+  // node_modules never reinstalled used to run all the way to the 120s
+  // readiness timeout below before failing with a generic "worker never
+  // came up" — the real `Could not resolve "..."` wrangler error was only
+  // ever visible buried in the piped [api]/[o11y] log output above it. This
+  // cheap, file-mtime-only check runs before anything else (Docker check,
+  // migrations, spawning any child) and fails fast with the one command that
+  // fixes it.
+  if (isPnpmInstallNeeded()) {
+    console.error(`error: ${PNPM_INSTALL_NEEDED_MESSAGE}`);
     process.exit(1);
   }
 
@@ -451,6 +466,12 @@ async function main() {
   const plan = buildPlan(tier, ports, { sessionSecret });
   const wranglerRegistryPath = process.env.WRANGLER_REGISTRY_PATH;
   const children = [];
+  // Dev-stack note ("stale dependencies after a pull"): the first
+  // wrangler-own build-error line (`wranglerBuildErrorLine`) seen from each
+  // of the two `wrangler dev` children, keyed by proc name ("api"/"o11y") —
+  // fed to that worker's own readiness wait below so a build failure is
+  // reported immediately instead of only after the full readiness timeout.
+  const buildErrorLines = new Map();
 
   function killAll(signal) {
     for (const child of children) {
@@ -538,8 +559,19 @@ async function main() {
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
-    pipeLines(child.stdout, proc.name);
-    pipeLines(child.stderr, proc.name);
+    // Only the two `wrangler dev` children ever get a `waitForServer` call
+    // below — no need to scan vite's or the Slack capture server's own
+    // output for a marker nothing ever reads.
+    const onLine =
+      proc.name === "api" || proc.name === "o11y"
+        ? (line) => {
+            if (buildErrorLines.has(proc.name)) return; // first one wins
+            const errLine = wranglerBuildErrorLine(line);
+            if (errLine) buildErrorLines.set(proc.name, errLine);
+          }
+        : undefined;
+    pipeLines(child.stdout, proc.name, console.log, onLine);
+    pipeLines(child.stderr, proc.name, console.log, onLine);
     child.exited = false;
     child.on("exit", (code, signal) => {
       child.exited = true;
@@ -559,12 +591,16 @@ async function main() {
   try {
     if (tier === "full") {
       log("dev", `waiting for o11y on http://localhost:${ports.O11Y_DEV_PORT} ...`);
-      await waitForServer(`http://localhost:${ports.O11Y_DEV_PORT}`, 120_000, "o11y worker");
+      await waitForServer(`http://localhost:${ports.O11Y_DEV_PORT}`, 120_000, "o11y worker", {
+        getEarlyFailure: () => buildErrorLines.get("o11y"),
+      });
       log("dev", "o11y is up");
     }
     if (tier === "2" || tier === "full") {
       log("dev", `waiting for api on http://localhost:${ports.API_DEV_PORT} ...`);
-      await waitForServer(`http://localhost:${ports.API_DEV_PORT}`, 120_000, "api worker");
+      await waitForServer(`http://localhost:${ports.API_DEV_PORT}`, 120_000, "api worker", {
+        getEarlyFailure: () => buildErrorLines.get("api"),
+      });
       log("dev", "api is up");
     }
   } catch (err) {
