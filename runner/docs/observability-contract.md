@@ -217,7 +217,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `sandpack.compile_ms` | browser | tier, framework, ht_major, outcome | duration_ms | `ok`, `error` |
 | `sandpack.compile_error` | browser | framework, ht_major, fingerprint | count | — |
 | `sandpack.bundler_unreachable` | browser | ht_major | count, duration_ms | — |
-| `preview.runtime_error` | browser | surface=`demo-runtime`, tier, framework, ht_major, fingerprint, reason | count | reason: `uncaught`, `console` (`console.error` only), `network`, `stderr` |
+| `preview.runtime_error` | browser | surface=`demo-runtime`, tier, framework, ht_major, fingerprint, reason | count | reason: `uncaught`, `console`, `network`, `stderr` |
 | `version.switch` | browser | framework, ht_major (to), reason (from), bucket | count | — |
 | `bucket.resolve_ms` | browser | bucket, outcome | duration_ms | `ok`, `error` |
 | `session.start_ms` | browser | framework, ht_major, outcome, reason | duration_ms | outcomes as `session.start`; reason `cold`, `warm` |
@@ -280,7 +280,8 @@ past and is dropped. One typed broken line = one `sandpack.compile_error`, no
 Sentry capture is added for the edit-path failure; the mount-path Sentry capture
 (`Tier1CompileError`) is unchanged.
 
-`preview.runtime_error` counts broken preview states, not relays. The preview
+`preview.runtime_error` counts broken preview states, not relays. Reason `console` is a
+`console.error`; a console warning is not counted (§6). The preview
 re-runs on every keystroke, so one typed line relays a whole keystroke-prefix ladder
 (`s is not defined`, `se is not defined`, …, then the line's real error). The browser
 collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
