@@ -235,8 +235,8 @@ const COMPILE_ERROR_KEY = "compile:sandpack.compile_error";
  *  so a typed syntax error counts as one `sandpack.compile_error` and no
  *  `preview.runtime_error`. Not behind `previewMonitoring` — wired for every
  *  preview like `sandpack.compile_ms`. */
-export function collapseCompileError(emit: () => void): void {
-  demoEventCollapse.report(COMPILE_ERROR_KEY, emit, { replacesRun: true });
+export function collapseCompileError(emit: () => void, origin: "transpile" | "bundler"): void {
+  demoEventCollapse.report(COMPILE_ERROR_KEY, emit, { replacesRun: true, fromBundler: origin === "bundler" });
 }
 
 /** An edit that re-runs the preview — opens/extends the burst. Not behind

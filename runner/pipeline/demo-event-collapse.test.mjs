@@ -422,3 +422,32 @@ test("a report already counted before a rerun is not brought back by a later unc
   clock.advance(DEMO_EDIT_SETTLE_MS);
   assert.deepEqual(emitted, [FINAL]);
 });
+
+test("a bundler compile error of the running sandbox survives an unchanged edit and still replaces its run", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  const bundlerError = (d) => collapse.report(COMPILE_KEY, `compile: ${d}`, { replacesRun: true, fromBundler: true });
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  relay("imp is not defined"); // a stale rung that lands after the dispatch
+  bundlerError("Could not find module './missing.css'");
+  relay("im is not defined"); // an older rung, later still
+  collapse.noteEdit(); // the closing `;`
+  collapse.pushOutcome("unchanged");
+  relay("imp is not defined"); // still stale: the rejected sandbox never evaluated
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, ["compile: Could not find module './missing.css'"]);
+});
+
+test("a rerun forgets the previous sandbox's bundler compile error, and records the new run's reports", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun");
+  collapse.report(COMPILE_KEY, "compile: bundler", { replacesRun: true, fromBundler: true });
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun"); // the fixed import builds, runs and throws
+  relay(FINAL);
+  collapse.noteEdit();
+  collapse.pushOutcome("unchanged");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [FINAL]);
+});

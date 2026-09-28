@@ -142,6 +142,9 @@ export interface SandpackCompileTimingEvent {
  *  authored code. */
 export interface SandpackCompileErrorEvent {
   readonly message: string;
+  /** `transpile`: the client-side pre-transpile failed, nothing was dispatched.
+   *  `bundler`: the bundler rejected a dispatched sandbox (frameless `show-error`). */
+  readonly origin: "transpile" | "bundler";
 }
 
 /** `loadSandpackClient` itself rejected — the hosted bundler's connection

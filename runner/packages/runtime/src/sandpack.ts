@@ -688,7 +688,7 @@ export class SandpackRuntime implements DemoRuntime {
           // and threw afterwards, a runtime fault, not a compile error.
           if (!evaluated) {
             this.resolveCompileTiming("error");
-            for (const cb of this.compileErrorCbs) cb({ message });
+            for (const cb of this.compileErrorCbs) cb({ message, origin: "bundler" });
           }
           this.emitError(
             evaluated ? new SandpackEvaluationError(message) : new SandpackCompileError(message),
@@ -910,7 +910,7 @@ export class SandpackRuntime implements DemoRuntime {
    *  dispatched, so `sandpack.compile_ms` has nothing to time). */
   private reportTranspileFailure(cause: unknown): void {
     const message = boundCompileMessage((cause as Error).message);
-    for (const cb of this.compileErrorCbs) cb({ message });
+    for (const cb of this.compileErrorCbs) cb({ message, origin: "transpile" });
   }
 
   dispose(): void {

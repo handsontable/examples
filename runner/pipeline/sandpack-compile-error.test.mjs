@@ -108,6 +108,7 @@ test("edit path: a syntax error reports one compile error, pushes nothing, and r
   assert.equal(pushes.length, 0, "the broken source never reaches the bundler (last good render stays)");
   assert.equal(compileErrors.length, 1, "but it is the preview's compile error");
   assert.match(compileErrors[0].message, /Failed to transpile \/index\.js for the parcel sandbox/);
+  assert.equal(compileErrors[0].origin, "transpile", "nothing was dispatched");
   assert.equal(errors.length, 0, "no onError: the card and the Sentry capture are unchanged");
 });
 
@@ -198,8 +199,8 @@ function ladderHarness() {
     clearTimer: clock.clearTimer,
   });
   // Mirrors `sentry.ts#collapseCompileError`.
-  const collapseCompileError = (emit) =>
-    collapse.report("compile:sandpack.compile_error", emit, { replacesRun: true });
+  const collapseCompileError = (emit, origin) =>
+    collapse.report("compile:sandpack.compile_error", emit, { replacesRun: true, fromBundler: origin === "bundler" });
   // Mirrors `sentry.ts#reportDemoEventUnguarded` → `emitCollapsedDemoEvent`.
   const relayRuntimeError = (message) => {
     const fp = fingerprint("demo-runtime", message);
@@ -353,6 +354,39 @@ for (const [line, thrown] of TYPED_THROWS) {
     assert.equal(runtimeErrors.length, 1, "the error the finished line throws, once");
     assert.equal(runtimeErrors[0].attrs.fingerprint, fingerprint("demo-runtime", thrown));
     assert.equal(points("sandpack.compile_error").length, 0, "the finished line compiles");
+  });
+}
+
+/** The bundler's frameless `show-error` for a pushed sandbox it cannot build. */
+function bundlerRejects(runtime, message) {
+  runtime.onMessage({ type: "action", action: "show-error", message, payload: {} });
+}
+
+for (const mode of ["typed", "pasted"]) {
+  test(`a bundler compile error of the running sandbox counts once when ${mode}, though the closing ';' re-runs nothing`, async () => {
+    const { clock, collapse, runtime, pushes, relayRuntimeError, points } = ladderHarness();
+    runtime.onError(() => {}); // the card; not what is measured here
+    const line = 'import "./missing.css";';
+    const docs = mode === "typed" ? typedDocuments(line) : [line];
+
+    for (const doc of docs) {
+      const before = pushes.length;
+      runtime.writeFile("/index.js", BASE_SOURCE + doc + "\n");
+      collapse.noteEdit();
+      await settle();
+      if (pushes.length === before) continue;
+      const code = pushes.at(-1).files["/index.js"].code;
+      const specifier = /import\s*"([^"]*)"/.exec(code)?.[1];
+      if (specifier !== undefined) bundlerRejects(runtime, `ModuleNotFoundError: Could not find module in path: '${specifier}'`);
+      else {
+        const relayed = runPushed(pushes.at(-1));
+        if (relayed) relayRuntimeError(relayed);
+      }
+    }
+    clock.advance(DEMO_EDIT_SETTLE_MS);
+
+    assert.equal(points("sandpack.compile_error").length, 1, "the bundler's diagnostic for the finished line, once");
+    assert.equal(points("preview.runtime_error").length, 0, "no rung of the line counts");
   });
 }
 

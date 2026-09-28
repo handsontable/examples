@@ -1,16 +1,9 @@
-// The edit-burst collapse in front of the facade's demo-runtime reports.
-//
-// The Tier-1 preview re-runs on every keystroke, so one throwing line would
-// otherwise relay a whole keystroke-prefix ladder; only the last run before
-// the editor goes quiet counts. An edit (`noteEdit`) opens/extends a burst,
-// holding one report per key (§7 fingerprint) until `settleMs` after the
-// last edit, when the final run's reports emit once each. A compile failure
-// (`replacesRun`) drops the held reports and suppresses later non-compile
-// ones, so a syntax error counts as one `sandpack.compile_error`. An edit
-// that leaves the running sandbox unchanged (`pushOutcome("unchanged")`)
-// re-runs nothing, so the burst ends with the running sandbox's reports.
-//
-// Import-free, clock/timer injected, so `node --test` can pin this logic.
+// The edit-burst collapse in front of the facade's demo-runtime reports: the
+// Tier-1 preview re-runs on every keystroke, so only the last run before the
+// editor goes quiet counts, one report per key (§7 fingerprint) per burst. A
+// compile failure (`replacesRun`) replaces the run's reports; an unchanged
+// push keeps the running sandbox's (contract §5). Import-free, timers
+// injected, so `node --test` can pin this logic.
 
 /** How long the editor must stay quiet before a burst closes. Longer than a
  *  mid-line pause while typing, short enough that the point still lands in
@@ -37,6 +30,9 @@ export interface DemoEventCollapseOptions<T> {
 
 export interface ReportOptions {
   replacesRun?: boolean;
+  /** With `replacesRun`: the bundler rejected the dispatched sandbox, so the
+   *  error is that sandbox's result (a pre-transpile failure never ran). */
+  fromBundler?: boolean;
 }
 
 /** What the newest edit's push did: dispatched a new sandbox (`rerun`), or
@@ -80,6 +76,8 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
   /** Reports of the running sandbox (since the last `rerun` or `reset`),
    *  first one per key, with whether it has been emitted. */
   let running = new Map<string, { item: T; emitted: boolean }>();
+  /** The running sandbox was rejected by the bundler: it never evaluated. */
+  let runningReplaced = false;
 
   // No `counted` check here: `report` does it for the direct path, and a held
   // key cannot already be counted — `counted` is cleared when the burst opens
@@ -117,7 +115,10 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
       }, settleMs);
     },
     report(key, item, reportOpts) {
-      if (!reportOpts?.replacesRun && !running.has(key) && running.size < pendingMax) {
+      if (reportOpts?.replacesRun && reportOpts.fromBundler) {
+        running = new Map([[key, { item, emitted: counted.has(key) }]]);
+        runningReplaced = true;
+      } else if (!reportOpts?.replacesRun && !runningReplaced && !running.has(key) && running.size < pendingMax) {
         running.set(key, { item, emitted: counted.has(key) });
       }
       if (counted.has(key)) return;
@@ -137,17 +138,20 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
     pushOutcome(outcome) {
       if (outcome === "rerun") {
         running = new Map();
+        runningReplaced = false;
         return;
       }
       if (timer === null) return;
       pending = new Map();
       for (const [key, { item, emitted }] of running) if (!emitted) pending.set(key, item);
+      runReplaced = runningReplaced;
     },
     flush,
     reset() {
       flush();
       counted.clear();
       running = new Map();
+      runningReplaced = false;
     },
   };
 }
