@@ -281,13 +281,8 @@ export interface DemoEventContext {
 
 /**
  * Files an event the preview reported through the monitor bridge
- * (DEV-2527). Nothing in the payload is trusted — the message is
- * re-truncated and only declared fields are read.
- *
- * Always enters the edit-burst collapse (one report per fingerprint per
- * burst). Under `full` scope (default) ALSO reaches Sentry, byte-for-byte
- * as before; under `uncaught` scope, facade only — the `beforeSend`
- * re-homing branch above is then never reached for these events.
+ * (DEV-2527). Always enters the edit-burst collapse; under `full` scope
+ * (default) ALSO reaches Sentry; under `uncaught` scope, facade only.
  */
 export function reportDemoEvent(payload: MonitorPayload, context: DemoEventContext): void {
   if (!previewMonitoring) return;
@@ -295,13 +290,10 @@ export function reportDemoEvent(payload: MonitorPayload, context: DemoEventConte
 }
 
 /**
- * Body of `reportDemoEvent` without the `previewMonitoring` gate, split out
- * so the e2e-only hook below can drive it directly without a real preview
- * mount. Never touches `previewMonitoring`/`monitorDemos` themselves.
- *
- * `opts.sentry` (default `true`) gates this relay's Sentry calls
- * independently of `diagnosticsGoToSentry`; `reportDemoEvent` passes
- * `monitorDemos`, so the local leg reaches facade/Faro but never Sentry.
+ * Body of `reportDemoEvent` without the `previewMonitoring` gate, split
+ * out so the e2e-only hook below can drive it directly. `opts.sentry`
+ * (default `true`) gates this relay's Sentry calls independently of
+ * `diagnosticsGoToSentry`.
  */
 function reportDemoEventUnguarded(
   payload: MonitorPayload,
