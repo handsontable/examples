@@ -1,18 +1,18 @@
-// W-triage, the note adjacent to F14: `session.end` was always emitted with
-// `framework: ""` (`index.ts:503, 508, 722` at the triage's pinned commit) —
+// `session.end` must not be emitted with `framework: ""`:
 // `teardownLiveSession` and `sessionSubrouteGuard` only ever have a
-// `sessionId`, never the framework a session was created with. The
+// `sessionId`, never the framework a session was created with, so the
 // `tier2-sessions` dashboard panel ("session.end awake seconds, p95 by
-// reason") filters `blob6 IN (${framework:sqlstring})`, so it was
-// permanently empty, the same failure shape as F14's `container.boot_ms`.
+// reason") — which filters `blob6 IN (${framework:sqlstring})` — would stay
+// permanently empty, the same failure shape as `container.boot_ms`'s.
 //
 // The fix carries the framework on the per-session KV meter
 // (`workers/api/src/budget.ts#SessionMeter.framework`, set by
-// `startSessionMeter` at create) and reads it back through `meterSession`'s
-// return value at teardown, before the `final: true` flush deletes the KV
-// entry it lives in. This file pins that round trip through the real
-// `POST /api/session` -> `DELETE /api/session/:id` route pair, using the same
-// harness `pipeline/session-create-container-starting.test.mjs` and
+// `startSessionMeter` at create) and reads it back through
+// `meterSession`'s return value at teardown, before the `final: true`
+// flush deletes the KV entry it lives in. This file pins that round trip
+// through the real `POST /api/session` -> `DELETE /api/session/:id` route
+// pair, using the same harness
+// `pipeline/session-create-container-starting.test.mjs` and
 // `pipeline/container-boot-ms.test.mjs` use.
 
 import test from "node:test";

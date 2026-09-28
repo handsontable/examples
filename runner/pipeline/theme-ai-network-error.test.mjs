@@ -1,17 +1,14 @@
-// A network-level throw from the LiteLLM fetch in `/api/theme` used to vanish
-// entirely: `requestTheme` (theme-ai.ts) never wraps its own `fetch()` call, so
+// A network-level throw from the LiteLLM fetch in `/api/theme` must not
+// vanish: `requestTheme` (theme-ai.ts) must wrap its own `fetch()` call, or
 // a connection failure (DNS, refused, reset — a real `TypeError`, not a
-// `ChatUnavailableError`) propagated straight past `index.ts`'s
-// `if (err instanceof ChatUnavailableError)` guard to `throw err`, reaching the
-// generic fetch catch-all with **no `theme.ai` point at all** — contract §5
-// promises one on every outcome, `error` included, and `chat.answer`'s twin
-// catch had the same gap closed already (this fix mirrors it: emit before the
-// instanceof branch decides the response).
+// `ChatUnavailableError`) propagates straight past `index.ts`'s
+// `if (err instanceof ChatUnavailableError)` guard to `throw err`, reaching
+// the generic fetch catch-all with no `theme.ai` point at all — contract §5
+// promises one on every outcome, `error` included, matching
+// `chat.answer`'s twin catch.
 //
-// Driven through the REAL router (`workers/api/src/index.ts`'s default
-// export), the same way token-routes.test.mjs proves route-level properties —
-// a re-declared copy of the catch would not catch this regressing.
-//
+// Driven through the real router (`workers/api/src/index.ts`'s default
+// export) — a re-declared copy of the catch would not catch this regressing.
 // Run: node --experimental-strip-types --test pipeline/theme-ai-network-error.test.mjs
 
 import test from "node:test";

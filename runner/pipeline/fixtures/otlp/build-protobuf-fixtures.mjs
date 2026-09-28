@@ -1,23 +1,21 @@
 #!/usr/bin/env node
-// Hand-encodes the OTLP `ExportLogsServiceRequest` protobuf fixtures this
-// task's tests replay (`pipeline/o11y-normalise.test.mjs`,
+// Hand-encodes the OTLP `ExportLogsServiceRequest` protobuf fixtures the
+// tests replay (`pipeline/o11y-normalise.test.mjs`,
 // `scripts/o11y-replay-fixtures.mjs`) — the binary-wire mirror of
 // `pipeline/fixtures/otlp/json/basic.json` and `.../zero-timestamp.json`,
-// same field values, so the two decoders (`workers/o11y/src/normalise/otlp.ts`'s
-// `decodeOtlpJson` / `otlp-protobuf.ts`'s `decodeOtlpProtobuf`) can be tested
-// against equivalent inputs. Uses `@bufbuild/protobuf/wire`'s `BinaryWriter`
-// only — the same wire-primitive-only choice T00 pinned for the decoder
-// (see its task Outcome). Every `repeated` field is written as one
-// tag+length-prefix *per element* (protobuf's actual wire rule) — a first
-// draft of this script wrapped a whole loop's worth of elements in one
-// shared fork, which round-tripped as garbage; fixed after decoding the
-// output with `decodeOtlpProtobuf` and finding concatenated garbled keys.
+// same field values, so the two decoders
+// (`workers/o11y/src/normalise/otlp.ts`'s `decodeOtlpJson` /
+// `otlp-protobuf.ts`'s `decodeOtlpProtobuf`) can be tested against
+// equivalent inputs. Uses `@bufbuild/protobuf/wire`'s `BinaryWriter` only.
+// Every `repeated` field must be written as one tag+length-prefix per
+// element (protobuf's actual wire rule) — wrapping a whole loop's worth of
+// elements in one shared frame round-trips as garbage.
 //
 // Regenerate: `node --experimental-strip-types
 // pipeline/fixtures/otlp/build-protobuf-fixtures.mjs`, run with a `cwd`
 // inside `workers/o11y` (or `NODE_PATH` pointing at its `node_modules`) so
-// `@bufbuild/protobuf` resolves — it is that Worker's dependency, not the
-// pipeline's. Output committed — these are fixtures, not build artifacts.
+// `@bufbuild/protobuf` resolves. Output committed — these are fixtures,
+// not build artifacts.
 
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

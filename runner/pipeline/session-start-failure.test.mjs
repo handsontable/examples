@@ -539,7 +539,7 @@ test("the header-name list is capped, and says it was", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// T07 — `onSessionStart` (§5 `session.start_ms`). `pipeline/browser-metrics.test.mjs`
+// `onSessionStart` (§5 `session.start_ms`). `pipeline/browser-metrics.test.mjs`
 // covers `apps/authoring/src/telemetry/metrics.ts`'s own emission logic against a
 // fake hook; this covers whether `container.ts`'s classification and the
 // create-clock reuse are correct against the REAL `mount()`.
@@ -668,7 +668,7 @@ test("onSessionStart: fetch() itself throwing (no response at all) still reports
 });
 
 // ---------------------------------------------------------------------------
-// T07 — `onHmr` (§5 `hmr.roundtrip_ms`). Drives the private `onFrameLoad` handler
+// `onHmr` (§5 `hmr.roundtrip_ms`). Drives the private `onFrameLoad` handler
 // directly (the same style `sandpack-reload.test.mjs` drives `onMessage`) rather
 // than through a full `poll()`/iframe simulation — see `HmrRoundtripEvent`'s own
 // doc comment for what this hook does and does not observe (only a dev server
@@ -747,7 +747,7 @@ test("onHmr: a post-ready load with no preceding edit flush does not report (not
     runtime.dispose();
   }));
 
-// D-M2 fix round: real in-place HMR never reaches `onFrameLoad` at all, so
+// Real in-place HMR never reaches `onFrameLoad` at all, so
 // `lastEditFlushDispatchedAt` could otherwise sit set for minutes until an
 // unrelated later reload reported that stale gap as the round-trip duration.
 test("onHmr: a load arriving long after the flush (stale dispatch clock) does not report", () =>

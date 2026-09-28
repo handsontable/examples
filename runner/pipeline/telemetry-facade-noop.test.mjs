@@ -2,19 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { noopTelemetry, recordingTelemetry } from "../packages/runtime/dist/telemetry/facade.js";
 
-// T05 fix (cross-task, `packages/runtime/src/telemetry/facade.ts`, T00-owned):
-// `noopTelemetry` used to mint its page-load id in a module-top-level IIFE —
-// `const pageLoadId = mintPageLoadId()` running at import time, calling
-// `crypto.randomUUID()` outside any handler. Harmless under plain Node (this
-// file's own import proves that alone is not enough to catch it), but
-// measured against a real `wrangler dev` running the API worker (T05's first
-// real consumer of `@handsontable/demo-runtime/telemetry` in a Worker, not a
-// throwaway typecheck probe): workerd refuses "asynchronous I/O ... and
-// generating random values ... within global scope" and the whole Worker
-// fails to boot. `pipeline/`'s Node harness cannot reproduce that failure
-// mode at all (Node has no such restriction) — this only pins the *contract*
-// noopTelemetry must keep (mint once, stay stable), not the boot crash
-// itself; the crash and the fix are recorded in the T05 task Outcome.
+// `noopTelemetry` (`packages/runtime/src/telemetry/facade.ts`) must not
+// mint its page-load id in a module-top-level IIFE — `const pageLoadId =
+// mintPageLoadId()` running at import time, calling `crypto.randomUUID()`
+// outside any handler. Harmless under plain Node, but measured against a
+// real `wrangler dev` running the API worker: workerd refuses
+// "asynchronous I/O ... and generating random values ... within global
+// scope" and the whole Worker fails to boot. `pipeline/`'s Node harness
+// cannot reproduce that failure mode (Node has no such restriction) — this
+// only pins the contract noopTelemetry must keep (mint once, stay stable),
+// not the boot crash itself.
 
 test("noopTelemetry.pageLoadId() is stable across calls", () => {
   const a = noopTelemetry.pageLoadId();

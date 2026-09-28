@@ -1,20 +1,18 @@
-// F33 (o11y-local-verification-findings.md): `POST /api/demos` and
-// `PATCH /api/demos/:id` both called `request.json()` with no `.catch()`, so
-// an unparseable body (or a JSON array where an object is expected — both
-// pass `JSON.parse`, neither is a plain record) threw a raw `SyntaxError`/hit
-// `body.framework` on a non-object past the handler, into the generic fetch
-// catch-all — a 500 on ordinary client garbage that pollutes the
+// `POST /api/demos` and `PATCH /api/demos/:id` must not call
+// `request.json()` with no `.catch()`: an unparseable body (or a JSON
+// array where an object is expected) would throw a raw `SyntaxError`/hit
+// `body.framework` on a non-object past the handler, into the generic
+// fetch catch-all — a 500 on ordinary client garbage that pollutes the
 // `api.request` 5xx rate and the `api-5xx-rate` alert, same class the
-// `/api/session` fix (session-malformed-json.test.mjs) already closed for
-// the public, unauthenticated routes. These two are authenticated, but the
+// `/api/session` fix (session-malformed-json.test.mjs) closed for the
+// public, unauthenticated routes. These two are authenticated, but the
 // body itself is still ordinary client input reachable by anything with a
-// token. The fix reuses the exact same helper (`isPlainRecord`) and error
-// shape as the session fix — no new abstraction needed.
+// token. Reuses the same helper (`isPlainRecord`) and error shape as the
+// session fix.
 //
-// Driven through the REAL router (`workers/api/src/index.ts`'s default
-// export), same rationale as demo-routes-version.test.mjs — a hand-rolled
-// re-check of the body would not catch a regression in the actual route.
-//
+// Driven through the real router (`workers/api/src/index.ts`'s default
+// export) — a hand-rolled re-check of the body would not catch a
+// regression in the actual route.
 // Run: node --experimental-strip-types --test pipeline/demos-malformed-json.test.mjs
 
 import test, { after } from "node:test";

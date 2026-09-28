@@ -59,17 +59,13 @@ test("POST /telemetry/collect: an accepted Faro batch answers 2xx after the stor
   const res = await worker.fetch(req, env, ctx);
   await ctx.drain();
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
-  // Fix round (item 8, ingest test gaps): the status code alone proves
-  // nothing about "after the storage commit" the test's own name claims —
-  // a 2xx would still show up here even if `InboxWriter.ingest`'s actual DO
-  // write were deleted entirely. Assert the real write landed: a `row:`
+  // The status code alone proves nothing about "after the storage commit"
+  // — a 2xx would still show up here even if `InboxWriter.ingest`'s actual
+  // DO write were deleted entirely. Assert the real write landed: a `row:`
   // entry (`inbox.ts#pendingRowStorageKey`) is what `InboxWriter.ingest`
-  // durably persists BEFORE this route ever answers (ADR §B.2 "2xx only
+  // durably persists before this route ever answers (ADR §B.2 "2xx only
   // after commit") — the same DO-storage-key check the bot-user-agent test
-  // just below already uses to prove the NEGATIVE case (no row: written).
-  // Deleting the `appendRows`/`putChunked` write inside
-  // `InboxWriter.ingest` must not leave this test green
-  // status-code-only assertion, but not under this one.
+  // just below uses to prove the negative case (no row: written).
   assert.ok(
     [...doStorage._data.keys()].some((k) => k.startsWith("row:")),
     "an accepted batch must leave a real row: entry in DO storage, not just a 2xx response",

@@ -1,9 +1,8 @@
 // `toAePoint` (observability contract §4/§5) — the runtime behaviour
-// `telemetry-contract.test.mjs` does not cover (that file checks the static
-// registry data against the doc; this checks what building a point actually
-// does with it): positional slot layout, and the validation that rejects an
-// outcome/reason/value not listed for the metric.
-//
+// `telemetry-contract.test.mjs` does not cover (that file checks the
+// static registry data against the doc; this checks what building a point
+// actually does with it): positional slot layout, and the validation that
+// rejects an outcome/reason/value not listed for the metric.
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
@@ -43,7 +42,7 @@ test("toAePoint places each value at its AE_COLUMNS slot", () => {
 test("toAePoint defaults double1 (count) to 1, even for a metric whose own §5 row never lists count", () => {
   // preview.ready_ms's Doubles column is just duration_ms (§5) — count is
   // still universal (§4's reading rule: "1 per point unless pre-aggregated"),
-  // or every count-based query (T04's alert thresholds, T09's panels) reads
+  // or every count-based query (alert thresholds, dashboard panels) reads
   // zero for this metric forever.
   const point = toAePoint(
     "preview.ready_ms",

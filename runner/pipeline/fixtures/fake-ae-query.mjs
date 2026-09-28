@@ -1,18 +1,15 @@
-// A tiny fake Analytics Engine query engine for `pipeline/o11y-alerts.test.mjs`
-// (fix round I1): recognises exactly the SQL shapes
-// `workers/o11y/src/alerts/rules.ts`'s shared helpers generate — grouped
-// `sum(_sample_interval * <count col>)` counts and a `quantileExactWeighted`
-// read — and answers them from a plain JS array of seeded rows, so each
-// rule's threshold/comparison logic is testable without a live
-// ClickHouse/AE endpoint. Column slots are resolved generically via
-// `AE_COLUMNS` (never a hand-numbered `blob8`/`double1` literal here
-// either), so this fixture stays correct if the contract ever renumbers a
-// slot.
+// A tiny fake Analytics Engine query engine for `pipeline/o11y-alerts.test.mjs`:
+// recognises exactly the SQL shapes `workers/o11y/src/alerts/rules.ts`'s
+// shared helpers generate — grouped `sum(_sample_interval * <count col>)`
+// counts and a `quantileExactWeighted` read — and answers them from a
+// plain JS array of seeded rows, so each rule's threshold/comparison logic
+// is testable without a live ClickHouse/AE endpoint. Column slots are
+// resolved generically via `AE_COLUMNS`, never a hand-numbered
+// `blob8`/`double1` literal, so this fixture stays correct if the contract
+// ever renumbers a slot.
 //
 // Deliberately narrow: throws on any SQL shape it does not recognise,
-// rather than silently answering `[]` — a rule that starts generating SQL
-// this fixture cannot parse must fail its test loudly, not read as "no
-// data".
+// rather than silently answering `[]`.
 
 import { AE_COLUMNS } from "@handsontable/demo-runtime/telemetry";
 

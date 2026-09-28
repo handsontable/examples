@@ -2,17 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { resolveTelemetryEnabled, telemetryEnvironment } from "../apps/authoring/src/telemetry/gate.ts";
 
-// T06, contract §10 "Local telemetry gate in the browser" + ADR §E.4's last
+// Contract §10 "Local telemetry gate in the browser" + ADR §E.4's last
 // bullet. `telemetry/gate.ts` is import-free for the same reason as
-// `reportingGate.ts` (its own header explains the constraint) — this file
-// imports it directly under `--experimental-strip-types`.
+// `reportingGate.ts` — this file imports it directly under
+// `--experimental-strip-types`.
 //
-// The actual Faro wiring (`telemetry/faro.ts`) cannot be tested here: it pulls
-// in `@grafana/faro-web-sdk` and reads `import.meta.env`, so `node --test`
-// cannot import it, the same constraint `sentry.ts` documents for itself. This
-// file pins the DECISION `faro.ts` delegates to `gate.ts`, which is the whole
-// of what "the local path exactly as contract §10 defines it" and "production
-// via resolveReporting unchanged" mean as testable claims.
+// The actual Faro wiring (`telemetry/faro.ts`) cannot be tested here: it
+// pulls in `@grafana/faro-web-sdk` and reads `import.meta.env`, so
+// `node --test` cannot import it. This file pins the decision `faro.ts`
+// delegates to `gate.ts` instead.
 
 test("production leg: reuses resolveReporting's decision verbatim, regardless of the local flag/host", () => {
   assert.equal(

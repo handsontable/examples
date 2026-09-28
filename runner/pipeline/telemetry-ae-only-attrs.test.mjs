@@ -1,44 +1,8 @@
-// T07 fix round — the confirmed attribute drop, controller ruling.
-//
-// `bucket`, `reason` and `fingerprint` (three of `HotAttrs`' fields with no §3
-// resource-attribute/structured-metadata slot) were silently stripped by the
-// browser-side scrub allowlist before `/telemetry/collect` ever saw them —
-// `attrs.ts#ALLOWED_ATTRIBUTE_KEYS` never listed the `hot.bucket`/`hot.reason`/
-// `hot.fingerprint` keys `apps/authoring/src/telemetry/faro.ts#DOTTED_ATTR_KEY`
-// now maps them to. Fix: `attrs.ts#AE_ONLY_ATTRIBUTE_KEYS` (T02-D4's AE-only
-// channel, same non-hoisted treatment as `DIAGNOSTIC_TAG_KEYS` — never a
-// resource attribute, never a Loki label, never hoisted into a stored
-// record by `convert.ts#hoistAttributes`; only `toAePoint`, via
-// `workers/o11y/src/normalise/browser-attrs.ts#readAeOnlyAttrs`, ever reads
-// them).
-//
-// Two tests, both real functions, no mocks:
-//
-// 1. `scrubTelemetry` (`packages/runtime` — the SAME function Faro's
-//    `beforeSend` runs in the browser AND the o11y worker re-runs at ingest,
-//    T00-D6's order) is driven directly on a Faro-item-shaped object whose
-//    context already carries the dotted `hot.bucket`/`hot.reason`/
-//    `hot.fingerprint` keys `faro.ts#attrsToContext` now produces — proving
-//    the browser/re-run scrub keeps them. `apps/authoring/src/telemetry/
-//    faro.ts` itself cannot be imported under `node --test` (pulls in
-//    `@grafana/faro-web-sdk` + `import.meta.env`, same constraint
-//    `pipeline/faro-config.test.mjs`'s header documents), so this is the
-//    real "facade → beforeSend/scrub" path as far as `node --test` can drive
-//    it — everything upstream of `scrubTelemetry` (`attrsToContext`'s own
-//    key remap) is a pure, already-reviewed one-line mapping this test's
-//    literal `hot.*` context keys stand in for.
-// 2. The scrubbed context is then fed through the real ingest conversion —
-//    `readAeOnlyAttrs` (`workers/o11y`, T02-D4's channel) → `toAePoint` — and
-//    the resulting `AePoint`'s §4 slots are asserted directly: `bucket` in
-//    `blob16` (`preview.ready_ms`), `reason` in `blob9` (`version.switch`),
-//    `fingerprint` in `blob11` (`sandpack.compile_error`).
-//
-// Both fail before the fix: reverting `attrs.ts#AE_ONLY_ATTRIBUTE_KEYS` (or
-// the `ALLOWED_ATTRIBUTE_KEYS` spread that includes it) makes test 1's three
-// `assert.equal` calls fail (the keys are gone after `scrubTelemetry`), which
-// cascades into test 2 reading `undefined` from `readAeOnlyAttrs` and the AE
-// point's blob16/blob9/blob11 landing at `""`, the unfilled-slot default —
-// confirmed by revert (see the T07 task Outcome's fix-round section).
+// `hot.bucket`/`hot.reason`/`hot.fingerprint` survive the browser scrub
+// (`scrubTelemetry`, `attrs.ts#AE_ONLY_ATTRIBUTE_KEYS` — never hoisted into
+// a stored record) and land in their AE slots through `readAeOnlyAttrs` →
+// `toAePoint`: `bucket` in `blob16`, `reason` in `blob9`, `fingerprint` in
+// `blob11` (contract §3 AE-only keys, §4 slots).
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/telemetry-ae-only-attrs.test.mjs

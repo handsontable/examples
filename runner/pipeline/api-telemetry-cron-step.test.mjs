@@ -3,23 +3,19 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-// T05 fix round (controller review): `cronStep` (`workers/api/src/telemetry/
-// cron-step.ts`, T05-D8) had no direct test — the explicit, ungated
-// `Sentry.captureException` it adds for a failed cron step (measured live to
-// be necessary: a throw inside `ctx.waitUntil(...)` is invisible to
-// `Sentry.withSentry`'s own `scheduled` auto-capture) was only exercised
-// through a live `wrangler dev` probe, never a pipeline test.
+// `cronStep` (`workers/api/src/telemetry/cron-step.ts`) needs a direct
+// test: its explicit, ungated `Sentry.captureException` for a failed cron
+// step is necessary because a throw inside `ctx.waitUntil(...)` is
+// invisible to `Sentry.withSentry`'s own `scheduled` auto-capture.
 //
-// `cron-step.ts` is a leaf on purpose (only `lines.ts` -> `resource.ts`, plus
-// the real `@sentry/cloudflare` package) so it can be copied the same way
-// `api-telemetry-diagnostic.test.mjs` copies `diagnostic.ts`'s chain — see
-// that file's header comment for why the copy lands inside `workers/api/`
-// rather than the OS temp dir (the bare `@sentry/cloudflare` specifier needs
-// `workers/api/node_modules` in its resolution ancestry).
+// `cron-step.ts` is a leaf on purpose (only `lines.ts` -> `resource.ts`,
+// plus the real `@sentry/cloudflare` package) so it can be copied the same
+// way `api-telemetry-diagnostic.test.mjs` copies `diagnostic.ts`'s chain —
+// see that file's header comment for why the copy lands inside
+// `workers/api/` rather than the OS temp dir.
 //
-// `cronStep` takes an injectable `capture` function (fix round addition) —
-// the test below passes a recorder instead of the real `@sentry/cloudflare`
-// call.
+// `cronStep` takes an injectable `capture` function — the test below
+// passes a recorder instead of the real `@sentry/cloudflare` call.
 
 const workersApiDir = join(import.meta.dirname, "..", "workers/api");
 const telemetrySrc = join(workersApiDir, "src/telemetry");

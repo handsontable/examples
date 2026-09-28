@@ -1,24 +1,20 @@
-// Malformed JSON on the session-family POST routes used to reach the generic
-// fetch catch-all — an uncaught `SyntaxError` from `request.json()`, answered
-// as a 500 — which pollutes the `api.request` 5xx rate and the `api-5xx-rate`
-// alert with what is really a 400-shaped client mistake (pre-existing on
-// master). `POST /api/session` is public and unauthenticated, so it is the
-// easiest route on this Worker for arbitrary client garbage to reach; the
-// runbook (`docs/run-and-deploy.md`) used to lean on exactly that as its
-// deliberate catch-all probe (see the doc's own updated wording for why that
-// probe moved).
+// Malformed JSON on the session-family POST routes must not reach the
+// generic fetch catch-all: an uncaught `SyntaxError` from `request.json()`,
+// answered as a 500, pollutes the `api.request` 5xx rate and the
+// `api-5xx-rate` alert with what is really a 400-shaped client mistake.
+// `POST /api/session` is public and unauthenticated, so it is the easiest
+// route on this Worker for arbitrary client garbage to reach.
 //
-// Both routes below already had the *shape* check in place
-// (`isPlainRecord`/`validateFileWrite`, whose 400 the fetch catch-all already
-// answers via `InvalidFilePathError`) — the only gap was that a body which
-// doesn't even parse as JSON never reached that check at all. The fix is the
-// same one-line `.catch(() => null)` `POST /api/theme` and `/api/chat` already
-// use for the same reason.
+// Both routes below already had the shape check in place
+// (`isPlainRecord`/`validateFileWrite`, whose 400 the fetch catch-all
+// already answers via `InvalidFilePathError`) — the gap was that a body
+// which doesn't even parse as JSON never reached that check. The fix is
+// the same one-line `.catch(() => null)` `POST /api/theme` and
+// `/api/chat` use for the same reason.
 //
-// Driven through the REAL router (`workers/api/src/index.ts`'s default
-// export) — same rationale as token-routes.test.mjs: a hand-rolled re-check
-// of the body would not catch a regression in the actual route.
-//
+// Driven through the real router (`workers/api/src/index.ts`'s default
+// export) — a hand-rolled re-check of the body would not catch a
+// regression in the actual route.
 // Run: node --experimental-strip-types --test pipeline/session-malformed-json.test.mjs
 
 import test from "node:test";

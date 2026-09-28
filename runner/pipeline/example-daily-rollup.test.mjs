@@ -1,26 +1,22 @@
-// ADR-0042 §5 — the nightly `example_daily` rollup (`workers/api/src/
-// reconcile.ts`, T12).
+// ADR-0042 §5 — the nightly `example_daily` rollup (`workers/api/src/reconcile.ts`).
 //
 // `pivotExampleDaily` and `previousUtcDay` are pure — tested directly, no I/O.
 //
-// `writeExampleDaily` is tested against a REAL SQLite database created from
-// the REAL migration files (`workers/api/migrations/0008_example_daily.sql`,
+// `writeExampleDaily` is tested against a real SQLite database created from
+// the real migration files (`workers/api/migrations/0008_example_daily.sql`,
 // then `0009_example_daily_downloaded.sql`), via Node's built-in `node:sqlite`
-// (experimental, Node 22+) — not a hand-rolled regex fake of `env.DB`. This is
-// what makes "running the rollup twice for one day yields identical rows" a
-// claim about the actual `PRIMARY KEY (day, kind, ref, framework, ht_major)`
-// constraint, not about a mock that never enforced one. The dedicated "0009"
-// test section further down applies 0008 alone, writes a row, THEN applies
-// 0009 — proving the ADD COLUMN is additive against data that predates it,
-// the real production ordering.
+// — not a hand-rolled regex fake of `env.DB`, so "running the rollup twice
+// for one day yields identical rows" is a claim about the actual
+// `PRIMARY KEY (day, kind, ref, framework, ht_major)` constraint. The
+// dedicated "0009" test section applies 0008 alone, writes a row, then
+// applies 0009 — proving the ADD COLUMN is additive against data that
+// predates it, the real production ordering.
 //
-// `queryExampleEventTotals`'s live AE/ClickHouse HTTP read is NOT exercised
-// here — this task has no Analytics Engine credentials (COMMON.md) and no
-// live ClickHouse in this run; see the task Outcome for what was and was not
-// verified there. Its production PRE-FLIGHT config guard (C-I1 fix round: a
-// missing AE_SQL_TOKEN/CF_ACCOUNT_ID throws before any `fetch` happens) IS
+// `queryExampleEventTotals`'s live AE/ClickHouse HTTP read is not
+// exercised here (no Analytics Engine credentials, no live ClickHouse in
+// this run). Its production pre-flight config guard (a missing
+// AE_SQL_TOKEN/CF_ACCOUNT_ID throws before any `fetch` happens) is
 // exercised below, since it needs no credential or network access at all.
-//
 // Run: node --experimental-strip-types --test pipeline/example-daily-rollup.test.mjs
 
 import test from "node:test";
@@ -220,7 +216,7 @@ test("writeExampleDaily: a group that disappears on a re-run is REMOVED, not lef
   assert.equal(rows[0].opens, 11);
 });
 
-// ---- C-I1: a misconfigured production AE SQL read must not silently wipe the day ----
+// ---- a misconfigured production AE SQL read must not silently wipe the day -
 
 test("queryExampleEventTotals: production with no AE_SQL_TOKEN/CF_ACCOUNT_ID THROWS, never returns []", async () => {
   const env = { PREVIEW_HOST: "demos.handsontable.com" }; // production, both secrets absent
@@ -232,7 +228,7 @@ test("queryExampleEventTotals: production with no AE_SQL_TOKEN/CF_ACCOUNT_ID THR
 
 test("queryExampleEventTotals: production, a 200 response with no data array THROWS, never degrades to []", async () => {
   // A response shape change or a truncated body must not read as "zero
-  // events today" either — same C-I1 rule as the missing-credential case
+  // events today" either — same rule as the missing-credential case
   // above, one step further down the same function.
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({ meta: [], rows: 0 }), { status: 200 });

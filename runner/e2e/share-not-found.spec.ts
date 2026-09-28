@@ -1,20 +1,20 @@
 import { test, expect, type Page } from "@playwright/test";
 import { stubShell } from "./helpers";
 
-// `/share/<bad>` used to show "entry file /index.html not found in example
+// `/share/<bad>` must not show "entry file /index.html not found in example
 // files" for a demo id that doesn't resolve — confusing, and not even about
-// the actual problem (there's no demo, not a bad entry file). Root cause: on a
-// failed `GET /api/demos/:id/source`, the loader (App.tsx) set a friendly
-// `errorMessage` and flipped `sourceLoaded` true, but never called
-// `loadWorkspace` — so `files`/`entry` stayed at their placeholder value
-// (`entry.entry` set, `files: {}`, from `toPlaceholderEntry`). `sourceLoaded`
-// flipping true is what un-gates rendering EditorShell, whose preview-mount
-// effect then ran against that still-empty, inconsistent placeholder and threw
-// its OWN "entry file … not found" error, overwriting the friendly message
-// with nothing ever having rendered it.
+// the actual problem (there's no demo, not a bad entry file). On a failed
+// `GET /api/demos/:id/source`, the loader (App.tsx) must not flip
+// `sourceLoaded` true and un-gate rendering EditorShell without also calling
+// `loadWorkspace`: `files`/`entry` would stay at their placeholder value
+// (`entry.entry` set, `files: {}`, from `toPlaceholderEntry`), and
+// EditorShell's preview-mount effect would then run against that
+// still-empty, inconsistent placeholder and throw its own "entry file …
+// not found" error, overwriting the friendly message with nothing ever
+// having rendered it.
 //
 // The fix short-circuits the render on a 404/410 (same pattern `docsNotFound`
-// already uses for the docs-example loader) before EditorShell — and hence its
+// uses for the docs-example loader) before EditorShell — and hence its
 // mount effect — is ever reached.
 //
 // Deterministic: `stubShell` (e2e/helpers.ts) covers /api/versions, the two

@@ -1,6 +1,5 @@
-// Observability contract §9 — the lite beacon payload validator, including the
-// T00-D5 total-size cap (2048 bytes, decisive over the per-field caps).
-//
+// Observability contract §9 — the lite beacon payload validator, including
+// the total-size cap (2048 bytes, decisive over the per-field caps).
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
@@ -81,7 +80,7 @@ test("rejects a stack over LITE_STACK_MAX", () => {
   // A stack well under the field cap, in an otherwise small payload, is fine —
   // note a stack *at* LITE_STACK_MAX is not asserted valid here: at 2000 chars
   // it already exceeds LITE_PAYLOAD_MAX_BYTES on its own once the rest of the
-  // payload's fields are counted (see the T00-D5 case below), which is exactly
+  // payload's fields are counted (see the case below), which is exactly
   // the "field caps don't promise they fit together" the module documents.
   assert.equal(isValidLitePayload(errPayload({ st: "x".repeat(200) })), true);
 });
@@ -100,12 +99,13 @@ test("a payload built to actually fit under the total cap passes", () => {
   assert.equal(isValidLitePayload(fits), true);
 });
 
-// F32: per-beacon `id`, added so byte-identical beacons thrown in the same
-// millisecond are not deduped as one (`workers/o11y/src/lite.ts`'s
-// `hashRecord` call). Absent entirely for an old/cached reporter — must stay
-// accepted — and, when present, a `Math.random().toString(36).slice(2,10)`
-// value: 0-16 lowercase base-36 characters, with `""` a legitimate value
-// (`Math.random()` landing on exactly 0), never a missing one.
+// The per-beacon `id` prevents byte-identical beacons thrown in the same
+// millisecond from being deduped as one (`workers/o11y/src/lite.ts`'s
+// `hashRecord` call). Absent entirely for an old/cached reporter — must
+// stay accepted — and, when present, a
+// `Math.random().toString(36).slice(2,10)` value: 0-16 lowercase base-36
+// characters, with `""` a legitimate value (`Math.random()` landing on
+// exactly 0), never a missing one.
 
 test("F32: accepts a payload with no id at all (old, pre-F32 reporter)", () => {
   const noId = errPayload();

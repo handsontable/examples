@@ -1,11 +1,10 @@
-// T08 — the lite beacon: the standalone ES5 reporter (`monitor.ts`'s
+// The lite beacon: the standalone ES5 reporter (`monitor.ts`'s
 // `injectLiteReporterIntoHtml`, contract §9, ADR §C.5) and the o11y worker's
 // `POST /telemetry/lite` route (`workers/o11y/src/lite.ts`).
 //
-// The reporter half is *executed*, not read (the DEV-2129 lesson every other
-// ES5-reporter test in this repo already follows, `monitor-inject.test.mjs`'s
-// own header comment) — a transpiler/output test that only inspects the
-// string would pass over a script that cannot actually run.
+// The reporter half is executed, not read (the DEV-2129 lesson every other
+// ES5-reporter test in this repo follows) — a transpiler/output test that
+// only inspects the string would pass over a script that cannot actually run.
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
@@ -199,11 +198,10 @@ test("an uncaught error produces one payload within the caps, matching the valid
   assert.ok(isValidLitePayload(payload), "the reporter's own payload must satisfy the ingest validator");
 });
 
-// F32: 15 errors on 15 `/embed` page loads showed 13 accepted and 2
-// duplicate — two parallel page loads that threw in the same millisecond
-// produced byte-identical beacons, deduped as one. The fix is a per-beacon
-// `id` in every `bc()` payload (`monitor.ts`'s `reporterSource`); this pins
-// that two beacons sent in the same fixed millisecond get different ids.
+// Two parallel page loads that throw in the same millisecond must not
+// produce byte-identical beacons deduped as one. A per-beacon `id` in
+// every `bc()` payload (`monitor.ts`'s `reporterSource`) pins that two
+// beacons sent in the same fixed millisecond get different ids.
 test("F32: two beacons sent within the same millisecond get different ids", () => {
   // The default `Math_` stub returns a fixed value on every call (needed so
   // the vitals sampling tests can pin `Math.random()`), which would make
@@ -236,10 +234,10 @@ test("message and stack are truncated well under the field caps before sending",
   const longStack = "at frame\n".repeat(600);
   h.window_.fire("error", { error: Object.assign(new Error(longMessage), { stack: longStack }) });
   const { payload } = h.sent[0];
-  // The caps are UTF-8 *bytes* (T08-D, fix round I2), not `.length` (UTF-16
+  // The caps are UTF-8 bytes, not `.length` (UTF-16
   // code units) — ASCII text happens to make the two numbers equal, which is
   // exactly the coincidence that let a non-ASCII payload slip past a
-  // char-count cap before this fix. `Buffer.byteLength` is the Node-side
+  // char count). `Buffer.byteLength` is the Node-side
   // stand-in for the reporter's own `bl()`.
   assert.ok(Buffer.byteLength(payload.m, "utf8") <= LITE_CLIENT_MESSAGE_MAX);
   assert.ok(Buffer.byteLength(payload.st, "utf8") <= LITE_CLIENT_STACK_MAX);
@@ -489,21 +487,18 @@ test("POST /telemetry/lite: an accepted error beacon answers 2xx and lands in th
   assert.equal(stored.length, 1);
 });
 
-// Fix round (item 8, ingest test gaps): `checkBrowserGates` (`gates/browser.ts`)
-// is the ONE gate function both `/telemetry/collect` (`index.ts#handleCollect`)
-// and `/telemetry/lite` (`lite.ts`, this file's own header: "Reuses T02's
-// ingest machinery end-to-end... the browser gate (checkBrowserGates)") call,
-// keyed only by `cf-connecting-ip` — never by route. No route-level test
-// proved that: a route-scoped rate limiter (e.g. one budget per path) would
-// have satisfied every EXISTING per-route test unchanged. Driven through the
-// real router on both routes, with a fake `RATE_LIMITER` that enforces one
-// shared budget across whatever `key` it is called with — fails if either
-// route starts keying its rate limit separately (each route would then get
-// its own untouched budget and never see the other's exhaustion).
+// `checkBrowserGates` (`gates/browser.ts`) is the one gate function both
+// `/telemetry/collect` (`index.ts#handleCollect`) and `/telemetry/lite`
+// (`lite.ts`) call, keyed only by `cf-connecting-ip` — never by route. No
+// route-level test proves that: a route-scoped rate limiter (e.g. one
+// budget per path) would satisfy every per-route test unchanged. Driven
+// through the real router on both routes, with a fake `RATE_LIMITER` that
+// enforces one shared budget across whatever `key` it is called with —
+// fails if either route starts keying its rate limit separately.
 test("POST /telemetry/collect and POST /telemetry/lite share the same rate limiter (same key, one shared budget)", async () => {
   const BUDGET = 2;
   const calls = [];
-  // Fix round (advisor finding on this test): budgeted PER KEY (a `Map`),
+  // Budgeted per key (a `Map`),
   // not with one process-wide counter — a global counter would still hit
   // 429 on the BUDGET+1'th call even if `/telemetry/collect` and
   // `/telemetry/lite` used two DIFFERENT (route-prefixed) keys, since it
@@ -634,13 +629,11 @@ test("POST /telemetry/lite: an accepted web_vital beacon writes a web_vital AE p
   assert.equal(point.doubles[2], 2500); // value, double3
 });
 
-// F28 (`/telemetry/collect`'s own fix, Round 6): the equivalent accounting
-// gap never actually existed on this route — `handleLite`'s accepted/
-// duplicate counters (below) were always unconditional, with no gate on
-// whether the item carried a stored `record`, unlike `handleCollect`'s old
-// NB3 gate. This pins that explicitly now that it matters for the
-// Observability-self dashboard: a first-time, AE-only web-vital beacon
-// (F18) must still count as "accepted", not just its own web_vital point.
+// `handleLite`'s accepted/duplicate counters (below) must stay
+// unconditional, with no gate on whether the item carried a stored
+// `record`. This pins that explicitly for the Observability-self
+// dashboard: a first-time, AE-only web-vital beacon must still count as
+// "accepted", not just its own web_vital point.
 test("POST /telemetry/lite: a first-time web_vital beacon (AE-only, F18) still writes an o11y.ingest accepted point (F28)", async () => {
   const { env, ae } = freshEnv();
   const res = await worker.fetch(liteRequest(liteVitalPayload()), env, ctx);
@@ -654,13 +647,13 @@ test("POST /telemetry/lite: a first-time web_vital beacon (AE-only, F18) still w
   assert.equal(metricValue(ingestAccepted, "count"), 1);
 });
 
-// ---- QA follow-up ("lite-beacon vitals") -----------------------------------
+// ---- lite-beacon vitals -----------------------------------------------------
 //
-// F18 (normalise/faro.ts) made a Faro measurement AE-only (`storeRecord =
-// false`) — this route still stored a Loki record for every lite web-vital
-// beacon from `/d`/`/embed`. Same pattern here: AE only, dedupe and
-// accounting kept. An error beacon (`t: "err"`) is unaffected — it must
-// still be stored.
+// A Faro measurement is AE-only (`storeRecord = false`, normalise/faro.ts)
+// — this route must not store a Loki record for a lite web-vital beacon
+// from `/d`/`/embed`. Same pattern here: AE only, dedupe and accounting
+// kept. An error beacon (`t: "err"`) is unaffected — it must still be
+// stored.
 
 function liteVitalPayload(overrides = {}) {
   return {
@@ -722,13 +715,12 @@ test("POST /telemetry/lite: a duplicated web_vital beacon (identical payload, re
   );
 });
 
-// F32 (round 9): 15 errors on 15 /embed page loads showed 13 accepted and
-// 2 duplicate. The two duplicates were two parallel page loads that threw in
-// the same millisecond, so their beacons were byte-identical (message and
-// `ts` both came from one Date.now()). This pins what the hash already does
-// for beacons that really differ: messages that differ only in digits share
-// one fingerprint but must never share a dedupe hash, even with the same
-// `ts`. The fingerprint normalises digits away; the hash must not.
+// Two parallel page loads that throw in the same millisecond produce
+// byte-identical beacons (message and `ts` both came from one Date.now()).
+// This pins what the hash already does for beacons that really differ:
+// messages that differ only in digits share one fingerprint but must never
+// share a dedupe hash, even with the same `ts`. The fingerprint normalises
+// digits away; the hash must not.
 test("POST /telemetry/lite: 15 beacons whose messages differ only in digits are 15 accepted records with one fingerprint (F32)", async () => {
   const { env, ae } = freshEnv();
   const ts = Date.now();
@@ -753,10 +745,10 @@ test("POST /telemetry/lite: 15 beacons whose messages differ only in digits are 
   assert.equal(fingerprints.size, 1, "precondition: the messages normalise to one fingerprint");
 });
 
-// F32: the actual bug — two beacons byte-identical *including* `ts` (two
-// parallel page loads throwing in the same millisecond, or several throws in
-// one synchronous pass) must no longer collapse to one record. `id` is the
-// only field that differs between them.
+// Two beacons byte-identical including `ts` (two parallel page loads
+// throwing in the same millisecond, or several throws in one synchronous
+// pass) must not collapse to one record. `id` is the only field that
+// differs between them.
 test("POST /telemetry/lite: two beacons identical except id are both accepted (F32)", async () => {
   const { env, ae } = freshEnv();
   const ts = Date.now();
@@ -800,23 +792,20 @@ test("POST /telemetry/lite: the same beacon (same id) posted twice is 1 accepted
   assert.equal(errors.length, 1, "the duplicate must not write a second error.uncaught point");
 });
 
-// F32: the conditional spread in `lite.ts` (`...(body.id !== undefined ? {
-// extra: { beacon_id: body.id } } : {})`) must leave the DEDUPE HASH of an
-// id-less beacon byte-for-byte unchanged from before this change — an
-// id-less beacon only ever comes from an old, already-cached `/d`/`/embed`
-// reporter that cannot be made to send one. Driven through the REAL route
-// (`worker.fetch`), not a hand-built `PreHashRecord`, so this actually
-// exercises the conditional spread in `lite.ts` rather than `hashRecord` in
-// isolation. The hash itself is never in the HTTP response, so this reads it
-// back from the `hash:<yyyymmdd>:<sha256>` key `InboxWriter`'s dedupe bucket
-// writes (`inbox/dedupe.ts#bucketedHashKey`) — the same key format
-// `pruneHashBuckets` sweeps.
+// The conditional spread in `lite.ts` (`...(body.id !== undefined ? {
+// extra: { beacon_id: body.id } } : {})`) must leave the dedupe hash of an
+// id-less beacon byte-for-byte unchanged — an id-less beacon only ever
+// comes from an old, already-cached `/d`/`/embed` reporter that cannot be
+// made to send one. Driven through the real route (`worker.fetch`), not a
+// hand-built `PreHashRecord`, so this actually exercises the conditional
+// spread in `lite.ts` rather than `hashRecord` in isolation. The hash
+// itself is never in the HTTP response, so this reads it back from the
+// `hash:<yyyymmdd>:<sha256>` key `InboxWriter`'s dedupe bucket writes
+// (`inbox/dedupe.ts#bucketedHashKey`).
 //
-// The pinned literal was captured by running this exact request (fixed
-// payload, fixed `ts`, no `id`) through `workers/o11y/src/lite.ts` as it
-// stood at the base commit (`a2e5c361a`, before F32): `git checkout
-// a2e5c361a -- workers/o11y/src/lite.ts`, capture, `git checkout HEAD --` to
-// restore. The current (F32) code reproduces it byte-for-byte.
+// To regenerate the pinned literal: run this exact request (fixed payload,
+// fixed `ts`, no `id`) through `workers/o11y/src/lite.ts` and capture the
+// hash it produces.
 test("F32: the dedupe hash of an id-less beacon matches its pre-F32 literal value exactly (guards the conditional spread)", async () => {
   const { env, doStorage } = freshEnv();
   const payload = litePayload({ ts: 1700000000000 }); // litePayload()'s own defaults carry no `id` field at all
@@ -886,7 +875,7 @@ test("POST /telemetry/lite: an accepted error beacon writes an error.uncaught po
 });
 
 test("POST /telemetry/lite: the fingerprint ignores the stack — two rebuilds with the same n/m but a different hashed chunk in the stack must collapse to one fingerprint", async () => {
-  // T08-D (see the task Outcome): folding the stack into the fingerprint would
+  // Folding the stack into the fingerprint would
   // mint a "new" fingerprint on every rebuild that shifts a chunk hash or line
   // number in the first frame — the same DEV-2853 ladder problem
   // `normalizeMonitorMessage` exists to collapse for the framed reporter, and

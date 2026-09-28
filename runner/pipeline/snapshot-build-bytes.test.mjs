@@ -1,17 +1,16 @@
-// The §5 `snapshot.build` point's `bytes` field was never populated on either
-// build path — `withSnapshotBuildPoint` (share.ts) always emitted `{ count,
-// duration_ms }`, with no `bytes` key at all, so the field stayed permanently
-// absent (0/undefined) in every real point this Worker has ever written,
-// regardless of whether the built artifact was 2 KB or 20 MB.
+// The §5 `snapshot.build` point's `bytes` field must be populated on
+// either build path — `withSnapshotBuildPoint` (share.ts) must not emit
+// `{ count, duration_ms }` with no `bytes` key, regardless of whether the
+// built artifact is 2 KB or 20 MB.
 //
-// Fix: `withSnapshotBuildPoint` hands its callback an `addBytes` accumulator;
-// `createDemo`/`updateDemo` call it with the real byte length of every object
-// they write to R2 (a fresh build's own output, or a `build_cache` hit's
-// copied objects — `R2Object.size`), and the point's `bytes` field carries the
-// running total.
+// `withSnapshotBuildPoint` hands its callback an `addBytes` accumulator;
+// `createDemo`/`updateDemo` call it with the real byte length of every
+// object they write to R2 (a fresh build's own output, or a `build_cache`
+// hit's copied objects — `R2Object.size`), and the point's `bytes` field
+// carries the running total.
 //
-// Companion to `snapshot-build-point.test.mjs` (F25's own test, which proved
-// the point fires at all) — this proves the one field that test never checked.
+// Companion to `snapshot-build-point.test.mjs` (which proves the point
+// fires at all) — this proves the one field that test never checked.
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/snapshot-build-bytes.test.mjs
@@ -157,9 +156,9 @@ test("createDemo (build_cache hit) counts the copied artifact's bytes but not __
   };
   const { env, points } = envWithPointCapture({ buildCacheHit: true }, seedArtifacts);
   // `fakeR2.list()` always answers `{ objects: [] }` (a harness limitation
-  // unrelated to this fix — see snapshot-build-point.test.mjs's own cache-hit
+  // unrelated to this — see snapshot-build-point.test.mjs's own cache-hit
   // tests, which never reach the copy loop for the same reason). Overridden
-  // here, for this test only, so the copy loop this fix touches actually runs.
+  // here, for this test only, so the copy loop under test actually runs.
   env.ARTIFACTS.list = async ({ prefix }) => ({
     objects: Object.keys(seedArtifacts)
       .filter((key) => key.startsWith(prefix))

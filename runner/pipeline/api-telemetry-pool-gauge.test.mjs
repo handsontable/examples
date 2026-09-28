@@ -1,15 +1,11 @@
-// F19b (R3-triage.md): `pool.gauge` (`workers/api/src/telemetry/cron.ts`,
-// reason `live`) counted every `session-meter:` key in KV — full stop. A
-// meter key outlives the container it fronts by `KV_METER_TTL_SECONDS` (24h,
-// `budget.ts`), so a single stale 24h tail read as pool pressure ("7/10 with
-// one live Tier-2 lane"). DEV-2567 already fixed the identical shape for the
-// admin panel's own count (`admin.ts#liveSessions`'s `awakeCount`, unchanged
-// since master) by classifying each meter with `session-listing.ts
-// #classifyMeter` instead of trusting key existence. This file proves
-// `countLiveSessionMeters` now shares that exact awake/slept split — via
-// `admin.ts#readMeters`, the same KV scan the panel runs — rather than
-// inventing a second window.
-//
+// `pool.gauge` (`workers/api/src/telemetry/cron.ts`, reason `live`) must not
+// count every `session-meter:` key in KV: a meter key outlives the
+// container it fronts by `KV_METER_TTL_SECONDS` (24h, `budget.ts`), so a
+// single stale 24h tail would read as pool pressure. This file proves
+// `countLiveSessionMeters` shares the same awake/slept split
+// `admin.ts#liveSessions`'s `awakeCount` uses (`session-listing.ts
+// #classifyMeter`, via `admin.ts#readMeters`, the same KV scan the panel
+// runs) rather than trusting key existence or inventing a second window.
 // Run: node --experimental-strip-types --test pipeline/api-telemetry-pool-gauge.test.mjs
 
 import test from "node:test";
@@ -50,14 +46,11 @@ test("countLiveSessionMeters: a stale 24h meter plus one awake meter counts only
 });
 
 // Boundary: one meter exactly at the idle window (must count, inclusive —
-// matches `classifyMeter`'s own `quietSeconds <= AWAKE_WINDOW_SECONDS` rule,
-// already pinned in `pipeline/admin-sessions.test.mjs`) and one meter one
-// second past it (must not). Both meters sit in the same KV so this discrim-
-// inates every revert that could fake a pass on its own:
-//  - the pre-fix key-count logic answers 2 (it does not classify at all);
-//  - a classifier that flipped the boundary to exclusive (`<` instead of
-//    `<=`) answers 0 (it would drop the at-window meter too).
-// Only the fix under test answers 1.
+// matches `classifyMeter`'s own `quietSeconds <= AWAKE_WINDOW_SECONDS` rule)
+// and one meter one second past it (must not). A key-count-only
+// implementation answers 2; a classifier with the boundary flipped to
+// exclusive (`<` instead of `<=`) answers 0. Only the fix under test
+// answers 1.
 test("countLiveSessionMeters: the idle-window boundary is inclusive, same rule as classifyMeter", async () => {
   const cache = fakeKV();
   await seedMeter(cache, "astro-atwindow1", now - sec(900), now - sec(AWAKE_WINDOW_SECONDS));
@@ -67,19 +60,13 @@ test("countLiveSessionMeters: the idle-window boundary is inclusive, same rule a
 });
 
 // ---------------------------------------------------------------------------
-// F34 — `pool.gauge`'s `cap` (`LIVE_POOL_MAX_INSTANCES`) is a hard-coded
-// constant, not read from config at runtime (wrangler does not expose
-// `containers[].max_instances` to `env`). It drifts silently the moment
-// someone changes `Sandbox.max_instances` in wrangler.jsonc without also
-// updating this constant — the "Pool gauge vs cap" panel would then compare
-// live sessions against the WRONG ceiling with no error anywhere. This test
-// parses the real wrangler.jsonc and pins the two together, so CI fails
-// instead of drifting: change either number alone and this goes red.
-//
-// No JSON5 dependency added (T00 owns new dependencies; runner/pnpm-lock.yaml
-// has none) — same zero-dependency `//`-comment stripper
-// `api-telemetry-config.test.mjs` already uses for this exact file (line
-// comments only, no trailing commas — this repo's actual .jsonc style).
+// `pool.gauge`'s `cap` (`LIVE_POOL_MAX_INSTANCES`) is a hard-coded constant,
+// not read from config at runtime (wrangler does not expose
+// `containers[].max_instances` to `env`), so it can drift silently from
+// `Sandbox.max_instances` in wrangler.jsonc — the "Pool gauge vs cap" panel
+// would then compare live sessions against the wrong ceiling with no error
+// anywhere. This test parses the real wrangler.jsonc and pins the two
+// together: change either number alone and this goes red.
 // ---------------------------------------------------------------------------
 
 function stripLineComments(text) {

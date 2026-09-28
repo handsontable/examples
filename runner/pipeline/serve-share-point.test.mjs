@@ -1,16 +1,14 @@
-// Fix round R4, "serve.share": `GET /api/demos/:id` used to emit a §5
-// `serve.share` point unconditionally on every 2xx/4xx answer — but that
-// route is the metadata load for THREE different callers (App.tsx's
-// edit/share loader in EITHER mode, `FullMode`'s own fetch, and any ad hoc
-// `GET /api/demos/<id>`), not the share-page document view. Round-4 count
-// reconciliation: "60 points for 11 share views", and
-// `GET /api/demos/<missing-id>` (an existence-check-shaped JSON call, not a
-// page view) was itself recorded as a `serve.share` 4xx.
+// `GET /api/demos/:id` must not emit a §5 `serve.share` point
+// unconditionally on every 2xx/4xx answer: that route is the metadata
+// load for three different callers (App.tsx's edit/share loader in either
+// mode, `FullMode`'s own fetch, and any ad hoc `GET /api/demos/<id>`), not
+// only the share-page document view — an existence-check-shaped
+// `GET /api/demos/<missing-id>` call is not a page view either.
 //
 // The fix: `App.tsx`'s share-mode loader appends `?view=share` on this one
 // fetch only, and the server only counts a point when that marker is
-// present — never for an edit-mode load, a `FullMode` load, or an unmarked
-// probe.
+// present — never for an edit-mode load, a `FullMode` load, or an
+// unmarked probe.
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs

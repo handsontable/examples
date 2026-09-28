@@ -1,18 +1,19 @@
-// `AeSink` (observability contract §4/§10) — `memorySink`, and `clickhouseSink`'s
-// wire format against T01's actual `containers/o11y/local/clickhouse-init.sql`
-// schema (confirmed column-for-column: index1, blob1-20 String, double1-20
-// Float64, timestamp DateTime64(3), _sample_interval). The `timestamp` shape
-// (raw epoch-millisecond integer) was cross-checked against a real, throwaway
-// `clickhouse/clickhouse-server:24.10-alpine` container running T01's exact
+// `AeSink` (observability contract §4/§10) — `memorySink`, and
+// `clickhouseSink`'s wire format against the actual
+// `containers/o11y/local/clickhouse-init.sql` schema (confirmed
+// column-for-column: index1, blob1-20 String, double1-20 Float64,
+// timestamp DateTime64(3), _sample_interval). The `timestamp` shape (raw
+// epoch-millisecond integer) was cross-checked against a real, throwaway
+// `clickhouse/clickhouse-server:24.10-alpine` container running the exact
 // DDL — see `sink.ts`'s doc comment for the measured reasoning (a bare
 // Unix-seconds integer and a formatted string were both measured wrong).
 //
-// `clickhouseSink`'s credential headers and non-2xx rejection were measured
-// against the same real container, with no credentials sent: T01's
-// `compose.yml` answers every insert with a real `403`, and a version of this
-// sink that only checked whether `fetch` itself threw resolved anyway —
-// `SELECT count()` on the table read back `0`, a silent local-mode metrics
-// blackout.
+// `clickhouseSink`'s credential headers and non-2xx rejection were
+// measured against the same real container, with no credentials sent:
+// `compose.yml` answers every insert with a real `403`, and a sink that
+// only checks whether `fetch` itself threw would resolve anyway —
+// `SELECT count()` on the table reads back `0`, a silent local-mode
+// metrics blackout.
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
@@ -66,7 +67,7 @@ test("clickhouseSink POSTs one JSONEachRow line with T01's exact column names", 
   assert.equal(row.blob10, "api/versions");
   assert.equal(row.double1, 3);
   assert.equal(row.double2, 42);
-  // Every column T01's DDL declares is a plain blobN/doubleN key — no
+  // Every column the DDL declares is a plain blobN/doubleN key — no
   // friendly name (e.g. "outcome") ever appears as a JSON key.
   assert.equal(row.outcome, undefined);
   assert.equal(row.metric, undefined);

@@ -977,24 +977,13 @@ test("C-I2 condition 4: authored/Tier-2-shaped JSON (no trusted log.kind at all)
 });
 
 test("fix round I2: a body-JSON key cannot spoof a real resource attribute (service.name, environment, hot.outcome) — the real resource value always wins", async () => {
-  // pipeline/fixtures/otlp/json/console-log-line-spoof-attempt.json: a
-  // real resource carries service.name=handsontable-demos-api,
-  // deployment.environment.name=production; the body's OWN JSON tries to
-  // set service.name=spoof, deployment.environment.name=spoof-env, and
-  // hot.outcome=spoof-outcome (a metric-scoped attr, included to prove
-  // the guard isn't limited to just the two most obvious keys). None of
-  // these must survive — tryParseJsonBodyAttrs strips every
-  // RESOURCE_ATTRS key from its own output, AND the merge at the call
-  // site gives body-JSON attrs the lowest priority, so even if a future
-  // RESOURCE_ATTRS addition were missed by the strip, a real resource/
-  // OTLP attribute still could not be overridden by body content.
-  //
-  // The real resource's
-  // `service.name` is now normalised from Cloudflare's real script name
-  // (`handsontable-demos-api`) to the contract's own `demos-api` — see
-  // `remapCloudflareServiceName` — so this test's own "the real value
-  // wins" assertion checks the POST-normalisation value, not the raw
-  // export's, which is what a real Loki label/AE blob1 now stores.
+  // The fixture's body JSON tries to spoof service.name, environment and
+  // hot.outcome; none must survive — `tryParseJsonBodyAttrs` strips every
+  // RESOURCE_ATTRS key from its own output, and the merge gives body-JSON
+  // attrs the lowest priority, so a real resource/OTLP attribute can never
+  // be overridden by body content. `service.name` is asserted against its
+  // post-`remapCloudflareServiceName` value (`demos-api`), matching what a
+  // real Loki label/AE blob1 stores.
   const result = await processOtlpBody(
     new TextEncoder().encode(otlpJsonFixture("console-log-line-spoof-attempt.json")),
     "application/json",

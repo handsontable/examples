@@ -1,16 +1,17 @@
-// Observability contract §5 browser metric catalogue (ADR-0041 §F.2, docs/observability-contract.md).
+// Observability contract §5 browser metric catalogue (ADR-0041 §F.2,
+// docs/observability-contract.md).
 //
-// Drives `apps/authoring/src/telemetry/metrics.ts` against a FAKE `DemoRuntime`
-// (onReady/onError only — `trackPreviewReady` needs nothing more) and a
-// `recordingTelemetry()` from the contract module. Every recorded call is also
-// replayed through the REAL `toAePoint` (not just asserted against the recording),
-// because `recordingTelemetry` validates nothing on its own — a misspelled outcome
-// or an attribute outside its metric's closed set would otherwise pass silently.
+// Drives `apps/authoring/src/telemetry/metrics.ts` against a fake
+// `DemoRuntime` (onReady/onError only) and a `recordingTelemetry()` from
+// the contract module. Every recorded call is also replayed through the
+// real `toAePoint`, because `recordingTelemetry` validates nothing on its
+// own — a misspelled outcome or an attribute outside its metric's closed
+// set would otherwise pass silently.
 //
-// `packages/runtime/src/sandpack.ts` and `container.ts`'s own timing hooks are
-// exercised separately, against the REAL runtimes, in `sandpack-reload.test.mjs`
-// and `session-start-failure.test.mjs` — this file cannot catch a hook wired wrong
-// inside either engine, only whether `metrics.ts`'s own emission logic is correct
+// `packages/runtime/src/sandpack.ts` and `container.ts`'s own timing hooks
+// are exercised separately, against the real runtimes, in
+// `sandpack-reload.test.mjs` and `session-start-failure.test.mjs` — this
+// file only checks whether `metrics.ts`'s own emission logic is correct
 // once a hook fires.
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.

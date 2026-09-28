@@ -68,16 +68,13 @@ test("feedsNewFingerprintAlert excludes only demo-runtime", () => {
   }
 });
 
-// ---- fix round (finding N1, second wave): one shared validator, `:` allowed
-// inside `context` -------------------------------------------------------
+// ---- one shared validator, `:` allowed inside `context` ---------------------
 //
-// Two independent, DIFFERENT regexes (this file's own `isValidFingerprint`
-// and `normalise/otlp.ts`'s now-removed `API_FINGERPRINT_PATTERN`) both
-// anchored on the FIRST `:` and rejected a second one anywhere in `context`
-// — every real call site below sends a `:`-joined call-site path and was
-// silently discarded by BOTH old patterns before this fix. Every literal
-// context string here is grepped verbatim from the real call sites, not
-// invented: `apps/authoring/src/App.tsx`'s `reportError(error,
+// A validator anchored on the first `:` and rejecting a second one
+// anywhere in `context` would silently discard every real call site below,
+// which sends a `:`-joined call-site path. Every literal context string
+// here is grepped verbatim from the real call sites:
+// `apps/authoring/src/App.tsx`'s `reportError(error,
 // "docs-example-load:fetch" | "docs-example-load:path" |
 // "docs-bucket-resolve:bucket" | "docs-bucket-resolve:fetch")`, and
 // `workers/api/src/index.ts`'s `reportDiagnostic(..., { context:

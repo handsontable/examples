@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import { demoEventReport } from "../apps/authoring/src/demoEventReport.ts";
 import { fingerprint } from "../packages/runtime/dist/telemetry/index.js";
 
-// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build` (for the
-// `fingerprint` import used to prove the ladder-collapsing claim below).
+// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build` (for
+// the `fingerprint` import used to prove the ladder-collapsing claim below).
 //
-// ADR §E.1 "Moves to the new stack only": demo-runtime preview events now
-// leave Sentry entirely and become one `preview.runtime_error` count through
-// the facade. `demoEventReport.ts` is the pure decision `sentry.ts#reportDemoEvent`
-// delegates to — see its own header for why it is import-free.
+// ADR §E.1 "Moves to the new stack only": demo-runtime preview events must
+// leave Sentry entirely and become one `preview.runtime_error` count
+// through the facade. `demoEventReport.ts` is the pure decision
+// `sentry.ts#reportDemoEvent` delegates to — see its own header for why it
+// is import-free.
 
 test("error and rejection both map to reason 'uncaught'", () => {
   const facts = { kind: "error", message: "boom", tier: 1, framework: "react", htMajor: "18" };
@@ -54,10 +55,11 @@ test("attrs carry surface=demo-runtime, the stringified tier, framework, and ht_
   assert.deepEqual(report.attrs, { surface: "demo-runtime", tier: "2", framework: "vue", ht_major: "17" });
 });
 
-// F10a (W-triage): the `tier1-playground` dashboard's "preview.runtime_error
-// rate by reason" panel filters `blob7 IN (${ht_major:sqlstring})`. Without
-// `ht_major` on the attrs, every row lands with blob7 = '' and the panel is
-// permanently empty. This proves the value survives, not just the key.
+// The `tier1-playground` dashboard's "preview.runtime_error rate by
+// reason" panel filters `blob7 IN (${ht_major:sqlstring})`. Without
+// `ht_major` on the attrs, every row lands with blob7 = '' and the panel
+// would be permanently empty. This proves the value survives, not just
+// the key.
 test("ht_major carries the caller's actual value through to attrs (contract §5 / F10a)", () => {
   for (const htMajor of ["15", "16", "17", "18", "19", "next", "none"]) {
     const report = demoEventReport({ kind: "error", message: "m", tier: 1, framework: "react", htMajor });
@@ -110,9 +112,9 @@ test("fingerprintMessage is the raw message, unnormalised — the caller runs fi
   assert.equal(report.fingerprintMessage, "licenseKey is not defined");
 });
 
-// The decisive claim (task acceptance criteria): "a demo-runtime keystroke
-// ladder becomes one deduplicated count in Faro" — proven here as "the same
-// fingerprint," via the real contract `fingerprint()` (T00), not a re-implementation.
+// "A demo-runtime keystroke ladder becomes one deduplicated count in
+// Faro" — proven here as "the same fingerprint," via the real contract
+// `fingerprint()`, not a re-implementation.
 test("a keystroke ladder collapses to one fingerprint (the actual contract dedupe)", () => {
   const ladder = ["l is not defined", "li is not defined", "lic is not defined", "licenseKey is not defined"];
   const fingerprints = ladder.map((message) => {

@@ -7,10 +7,6 @@
 // query-stripping rule alone is what turns that case red — not a different
 // rule accidentally covering for it.
 //
-// Filename note: the task's "Owns" row names this `pipeline/telemetry-*`;
-// the acceptance criteria name the file `scrub-telemetry.test.mjs` verbatim,
-// which is what this file is called (a deliberate exception, not a slip).
-//
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
@@ -74,10 +70,10 @@ test("drops meta.os and meta.device (fingerprint-shaped fields)", () => {
 });
 
 // ---- strip query/fragment on a URL-valued field, isolated from the attribute
-// allowlist (advisor note: url.full would be dropped by the allowlist rule
-// regardless, which would keep this case green even with query-stripping
-// removed — meta.page.url is not an "attribute" at all, so only the
-// query-stripping rule can make this pass) ---------------------------------------
+// allowlist: url.full would be dropped by the allowlist rule regardless,
+// which would keep this case green even with query-stripping removed —
+// meta.page.url is not an "attribute" at all, so only the query-stripping
+// rule can make this pass -----------------------------------------------------
 
 test("strips the query string and fragment from meta.page.url", () => {
   const item = faroLog({ meta: { page: { url: "https://demos.handsontable.com/share/abc123?secret=1#frag" } } });
@@ -138,7 +134,7 @@ test("strips a real Babel code frame from an exception's value", () => {
   assert.equal(scrubbed.payload.value, "unknown: Unexpected token (1:10)");
 });
 
-// ---- strip a query string embedded in message-bearing text (D-M7 fix round) ----
+// ---- strip a query string embedded in message-bearing text -----------------
 
 test("strips a query string off a URL embedded in a log item's message text, keeping the surrounding text", () => {
   const item = faroLog({
@@ -156,7 +152,7 @@ test("strips a query string off an embedded preview-host URL in a message, after
   assert.equal(scrubbed.payload.message, "stale preview at https://<preview>/src/main.js");
 });
 
-// ---- R3 F17c: redact an IP embedded in message text, browser-side defense-in-depth
+// ---- redact an IP embedded in message text, browser-side defense-in-depth --
 
 test("redacts an IPv4 address embedded in a log item's message text", () => {
   const item = faroLog({ payload: { message: "connection from 192.0.2.55 refused" } });
@@ -253,7 +249,7 @@ test("never mutates its argument", () => {
   assert.equal(JSON.stringify(item), before);
 });
 
-// ---- fix round (finding A-M1): a malformed stack frame must never throw ---------
+// ---- a malformed stack frame must never throw -------------------------------
 
 test("scrubTelemetry does not throw on a null entry inside stacktrace.frames — the exact `500` probe from finding A-M1", () => {
   const item = {

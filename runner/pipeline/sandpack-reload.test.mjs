@@ -581,17 +581,18 @@ test("an ordinary mid-edit transpile failure still reaches nobody", async () => 
 });
 
 // ---------------------------------------------------------------------------
-// T07 — the compile-timing hooks (`onCompileTiming`/`onCompileError`), driven
+// The compile-timing hooks (`onCompileTiming`/`onCompileError`), driven
 // against the real runtime rather than a fake (`pipeline/browser-metrics.test.mjs`
 // covers `apps/authoring/src/telemetry/metrics.ts`'s own emission logic; this
 // covers whether sandpack.ts's own hooks fire — once, paired to the right
 // dispatch, and only for a real compile diagnostic).
 //
 // `onBundlerUnreachable` (the `loadSandpackClient` rejection inside `mount()`) is
-// NOT covered here: `loadSandpackClient` is a direct top-level import, and Node's
-// `node:test` module mocking needs `--experimental-test-module-mocks`, which
-// `pnpm test`'s script does not pass. It is covered against a fake hook in
-// `pipeline/browser-metrics.test.mjs` instead — see the T07 Outcome.
+// not covered here: `loadSandpackClient` is a direct top-level import, and
+// Node's `node:test` module mocking needs
+// `--experimental-test-module-mocks`, which `pnpm test`'s script does not
+// pass. It is covered against a fake hook in
+// `pipeline/browser-metrics.test.mjs` instead.
 
 test("onCompileTiming: an edit that reaches the bundler and comes back done reports ok, once", async () => {
   const { runtime, client } = mounted();

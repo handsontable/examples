@@ -1,18 +1,18 @@
-// Child process for `pipeline/o11y-symbolicate-drain.test.mjs` (F30).
+// Child process for `pipeline/o11y-symbolicate-drain.test.mjs`.
 //
-// The parent spawns this with `--disallow-code-generation-from-strings`, the
-// V8 policy workerd applies to every Worker (`eval` / `new Function` throw
-// `EvalError: Code generation from strings disallowed for this context`).
-// A `node --test` file cannot set that flag for itself, and without it Node
-// happily runs a map library that generates code, which is how F30 shipped
-// green: every symbolication test passed in Node while every lookup in the
-// real Worker threw.
+// The parent spawns this with `--disallow-code-generation-from-strings`,
+// the V8 policy workerd applies to every Worker (`eval` / `new Function`
+// throw `EvalError: Code generation from strings disallowed for this
+// context`). A `node --test` file cannot set that flag for itself, and
+// without it Node happily runs a map library that generates code — a
+// symbolication test could pass in Node while every lookup in the real
+// Worker throws.
 //
-// Runs the REAL `drain.ts#drainBatch` with the REAL
-// `symbolicate.ts#symbolicateResourceLogs` over one gzipped inbox object the
-// parent wrote, and prints one JSON line to stdout: whether code generation
-// really was blocked in this process, the batch outcome, the decoded Loki
-// push bodies, and every skip report `onSkip` received.
+// Runs the real `drain.ts#drainBatch` with the real
+// `symbolicate.ts#symbolicateResourceLogs` over one gzipped inbox object
+// the parent wrote, and prints one JSON line to stdout: whether code
+// generation really was blocked in this process, the batch outcome, the
+// decoded Loki push bodies, and every skip report `onSkip` received.
 //
 // argv: <workdir>  (holds `inbox.ndjson.gz`, `inbox-key.txt` and `maps/<key>`)
 

@@ -1,21 +1,17 @@
-// F25 (fix round R4): the §5 `snapshot.build` point was only ever emitted on
-// the detached DO alarm path (`snapshot-jobs.ts#runSnapshotJob`), with its
-// own comment saying so explicitly: "the direct/synchronous build in
-// index.ts (share creates, rebuilds) is inline and does not emit this point
-// yet". `SELECT count() FROM runner_events WHERE index1='snapshot.build'`
-// stayed 0 across a whole traffic run that DID run real `vite build`s (8x,
-// in sandbox-build-<id> sessions during fork/save/share) — every one of them
-// went through the synchronous `createDemo`/`updateDemo` in `share.ts`, not
-// through the DO.
+// The §5 `snapshot.build` point must be emitted on the synchronous build
+// path too, not only the detached DO alarm path
+// (`snapshot-jobs.ts#runSnapshotJob`): every real `vite build` run through
+// the synchronous `createDemo`/`updateDemo` in `share.ts` left
+// `SELECT count() FROM runner_events WHERE index1='snapshot.build'` at 0.
 //
-// The fix moves emission INTO `createDemo`/`updateDemo` themselves
+// The fix moves emission into `createDemo`/`updateDemo` themselves
 // (`share.ts#withSnapshotBuildPoint`), so every caller gets exactly one
-// `ok`/`failed` point regardless of whether it hit `build_cache` (a fast R2
-// copy) or ran a real container build — timed end to end, tagged
+// `ok`/`failed` point regardless of whether it hit `build_cache` (a fast
+// R2 copy) or ran a real container build — timed end to end, tagged
 // `reason: "inline"` by default (the synchronous request-path callers in
 // index.ts) or `reason: "detached"` (passed explicitly by
-// `snapshot-jobs.ts`'s alarm, which used to emit its own separate point;
-// this specs that consolidation didn't turn into a double-emission).
+// `snapshot-jobs.ts`'s alarm) — this specs that consolidation doesn't turn
+// into a double-emission.
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs

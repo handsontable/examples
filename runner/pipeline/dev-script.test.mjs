@@ -10,7 +10,6 @@
 // anything that would otherwise shell out), following this repo's own
 // `pipeline/fixtures/stub-bin` pattern for the one place a real subprocess
 // is worth spawning (the Docker-missing CLI message).
-//
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -292,9 +291,9 @@ test("o11yDevVarsPatch: never includes O11Y_EXPORT_SECRET, SENTRY_HOOK_SECRET, o
   assert.equal("O11Y_SESSION_SECRET" in patch, false);
 });
 
-// ---- F21 (fix round R4): O11Y_EXPORT_SECRET/SENTRY_HOOK_SECRET stay empty
-// locally, so scripts/o11y-replay-fixtures.mjs 401s on every OTLP/deploy/
-// Sentry fixture and the worker-tenant/Sentry panels never fill. --------
+// ---- O11Y_EXPORT_SECRET/SENTRY_HOOK_SECRET must stay empty locally, or
+// scripts/o11y-replay-fixtures.mjs 401s on every OTLP/deploy/Sentry
+// fixture and the worker-tenant/Sentry panels never fill. -------------------
 
 test("fillEmptyDevVarsSecrets: fills an empty declared line with a generated value", () => {
   withTmpDir((dir) => {
@@ -477,7 +476,7 @@ test("checkO11yDevVarsStaleness (NB8): warns when a pre-existing .dev.vars decla
     writeFileSync(devVarsPath, "O11Y_ENV=local\nDEV_ADMIN=dev@handsontable.com\n");
     assert.deepEqual(checkO11yDevVarsStaleness(devVarsPath), []);
 
-    // The exact NB8 shape: an old .dev.vars from before this task's
+    // An old .dev.vars from before this file's own key set was added
     // DEV_ADMIN/O11Y_SESSION_SECRET handling existed, both declared empty.
     writeFileSync(devVarsPath, "O11Y_ENV=local\nDEV_ADMIN=\nO11Y_SESSION_SECRET=\n");
     const warnings = checkO11yDevVarsStaleness(devVarsPath);
@@ -638,18 +637,17 @@ test("applyMigrations: records each file as it succeeds, so a failure partway th
 });
 
 // ---------------------------------------------------------------------------
-// migration schema probe — adopting a pre-existing local D1 with no record
-// (the N1 bug: a hand-migrated local D1, no dev-migrations-applied.json,
-// re-applying from 0001 dies on 0003's non-idempotent `ALTER TABLE ... ADD
-// COLUMN` with a raw `duplicate column name` failure)
+// migration schema probe — adopting a pre-existing local D1 with no record:
+// a hand-migrated local D1, no dev-migrations-applied.json, re-applying
+// from 0001 must not die on 0003's non-idempotent `ALTER TABLE ... ADD
+// COLUMN` with a raw `duplicate column name` failure.
 // ---------------------------------------------------------------------------
 
 /** A stub `query` (the injectable `applyMigrations`/`snapshotLocalSchema`
  *  takes in place of a real `wrangler d1 execute ... --json`) backed by an
  *  in-memory {tables: Set<string>, indexes: Set<string>, columns: {[table]:
  *  Set<string>}} — enough to answer both queries `snapshotLocalSchema`
- *  issues (`sqlite_master`, and `PRAGMA table_info(<table>)`), shaped exactly
- *  like wrangler's own `--json` output (an array with one `{results}` entry). */
+ *  issues, shaped like wrangler's own `--json` output. */
 function stubD1Query(state) {
   return async (args) => {
     const command = args[args.indexOf("--command") + 1];
@@ -732,7 +730,7 @@ test("parseMigrationTargets: pinned against every real workers/api/migrations/*.
       { type: "column", table: "demos", name: "build_error" },
     ],
   });
-  // 0009_example_daily_downloaded.sql (R1-followups): the second real
+  // 0009_example_daily_downloaded.sql: the second real
   // ALTER TABLE ... ADD COLUMN file in this migrations dir (after 0003/0007,
   // both against `demos`) — pinned explicitly, not just swept into the
   // "checkable with >=1 target" loop below, because it is the one that
@@ -808,12 +806,11 @@ test("applyMigrations: a hand-migrated local D1 with NO record — every pending
   });
 });
 
-// R1-followups: the same N1 adoption path, exercised against the real
+// The same adoption path, exercised against the real
 // 0008/0009_example_daily_downloaded.sql pair — a table (`example_daily`)
-// that is NOT `demos`, proving `applyMigrations`' `alterTables` derivation
-// (COMMON.md's "verify with a test only" instruction for dev-lib.mjs's
-// ADD COLUMN handling) is not hardcoded to the one table every earlier
-// migration in this dir happens to alter.
+// that is not `demos`, proving `applyMigrations`' `alterTables` derivation
+// is not hardcoded to the one table every earlier migration in this dir
+// happens to alter.
 test("applyMigrations: a local D1 that already has example_daily.downloaded (dev stack migrated by hand) adopts 0009 instead of re-running it", async () => {
   await withTmpDir(async (dir) => {
     const migrationsDir = path.join(dir, "migrations");
@@ -830,7 +827,7 @@ test("applyMigrations: a local D1 that already has example_daily.downloaded (dev
     // 0008 was recorded as applied by an earlier run; 0009 is pending, and a
     // developer's local D1 already carries the `downloaded` column (e.g.
     // adopted by hand, or applied once before the applied-migrations record
-    // existed — the same N1 class of drift the adjacent `demos` test above
+    // existed — the same class of drift the adjacent `demos` test above
     // covers).
     mkdirSync(path.dirname(migrationRecordPath(dir)), { recursive: true });
     writeFileSync(migrationRecordPath(dir), JSON.stringify(["0008_example_daily.sql"]));
@@ -983,22 +980,17 @@ test("DOCKER_NOT_RUNNING_MESSAGE: names the fix (start Docker), not just the sym
   assert.match(DOCKER_NOT_RUNNING_MESSAGE, /Start Docker/);
 });
 
-// B-I2: `--wait` (T1) makes `docker compose ... up -d --wait minio
-// clickhouse` block-and-FAIL on a real condition (a named service's
-// healthcheck never goes green) — before this fix, that throw happened
-// BEFORE this call's own teardown step was ever pushed onto
-// `teardownSteps`, and propagated straight past the try/catch around the
-// readiness wait further down to `main().catch`, which only logs and
-// `process.exit(1)`s — no cleanup, no `docker compose down`, orphaning
-// whichever of minio/clickhouse DID start under `up -d`. `bringUpO11yCompose`
-// (extracted to dev-lib.mjs specifically so this is unit-testable with a
-// stub, matching `resetO11yLocalState`'s own pattern — a real CLI-level
-// `spawnSync` test would otherwise be the only way to exercise this, and
-// would have to run real `wrangler` D1 migrations just to reach the compose
-// section, contradicting this file's own header comment). Fails without
-// the fix: reverting `bringUpO11yCompose`'s try/catch back to a bare
-// `execFileSyncImpl("docker", [...up...])` makes the "down" call never
-// happen — the down-args assertion below fails.
+// `--wait` makes `docker compose ... up -d --wait minio clickhouse`
+// block-and-fail on a real condition (a named service's healthcheck never
+// goes green). That throw must not happen before this call's own teardown
+// step is pushed onto `teardownSteps`, or it propagates straight past the
+// try/catch around the readiness wait further down to `main().catch`,
+// which only logs and `process.exit(1)`s — no cleanup, no `docker compose
+// down`, orphaning whichever of minio/clickhouse did start under `up -d`.
+// `bringUpO11yCompose` (extracted to dev-lib.mjs so this is unit-testable
+// with a stub, matching `resetO11yLocalState`'s own pattern) needs a
+// try/catch around the up call, not a bare
+// `execFileSyncImpl("docker", [...up...])`.
 test("bringUpO11yCompose: tears down (no -v, data kept) when the compose up itself throws, then rethrows", () => {
   const calls = [];
   const execFileSyncImpl = (cmd, args, opts) => {
@@ -1035,17 +1027,13 @@ test("bringUpO11yCompose: still rethrows the original up error even if the teard
   assert.throws(() => bringUpO11yCompose({ composeFile: "/x/compose.yml", composeEnv: {}, execFileSyncImpl }), /up failed/);
 });
 
-// B-9: `--reset-local-db` used to run BEFORE the Docker-availability check,
-// so `dev.mjs --tier=2 --reset-local-db` with Docker not running deleted
-// workers/api's local D1 state and then immediately exited on the
-// Docker-not-running error — a surprising side effect for a run that
-// otherwise did nothing. `resetLocalD1`'s call site in dev.mjs (unlike its
-// unit-tested form above) is hardcoded to the real `workers/api` dir, so
-// this test seeds and inspects that REAL (gitignored, disposable)
-// `.wrangler/state/v3/d1` directory directly rather than a temp one. Fails
-// without the fix: reverting the ordering in scripts/dev.mjs's `main()`
-// (moving the Docker check below the `if (resetLocalDb)` block again)
-// makes the marker file disappear even though `docker info` fails.
+// `--reset-local-db` must run after the Docker-availability check: `dev.mjs
+// --tier=2 --reset-local-db` with Docker not running must not delete
+// workers/api's local D1 state before exiting on the Docker-not-running
+// error. `resetLocalD1`'s call site in dev.mjs (unlike its unit-tested
+// form above) is hardcoded to the real `workers/api` dir, so this test
+// seeds and inspects that real (gitignored, disposable)
+// `.wrangler/state/v3/d1` directory directly rather than a temp one.
 test("CLI: `dev.mjs --tier=2 --reset-local-db` does NOT wipe local D1 state when Docker is not running (Docker check runs first)", () => {
   const stubBinDir = path.join(HERE, "fixtures", "stub-bin");
   const devScript = path.join(RUNNER_ROOT, "scripts", "dev.mjs");
@@ -1282,7 +1270,7 @@ test("pullImageWithRetry: a real `docker pull` writes progress to stdout and the
       // stdout keeps writing lines AFTER stderr's own last write (the
       // process failing mid-pull, not at the very start) — a naive
       // "concat stdout after stderr, take the last line" extraction would
-      // report the harmless stdout progress line instead of this error.
+      // report the harmless stdout progress line instead of a spurious error.
       err.stdout = Buffer.from("0.12.3: Pulling from cloudflare/sandbox\nabc123: Downloading  [==>  ]  12MB/48MB\n");
       err.stderr = Buffer.from("error pulling image configuration: download failed after attempts=6: context deadline exceeded\n");
       throw err;
@@ -1508,13 +1496,11 @@ test("wranglerBuildErrorLine: null for an ordinary log line", () => {
   assert.equal(wranglerBuildErrorLine("[o11y] Ready on http://localhost:4200"), null);
 });
 
-// Two real examples from this repo's own history (progress.md, S1-report.md)
-// that must NOT be treated as a build failure: wrangler's runtime
-// uncaught-exception logging reuses the identical `✘ [ERROR]` prefix for a
-// request handler throwing at RUNTIME — the worker came up fine and is
-// already serving traffic — which is the opposite of "never came up".
-// Reverting the `Uncaught` exclusion in wranglerBuildErrorLine makes both of
-// these match and fails this test.
+// Two real examples that must not be treated as a build failure: wrangler's
+// runtime uncaught-exception logging reuses the identical `✘ [ERROR]`
+// prefix for a request handler throwing at runtime — the worker came up
+// fine and is already serving traffic — which is the opposite of "never
+// came up".
 test("wranglerBuildErrorLine: null for wrangler's own runtime uncaught-exception logging, not a build failure", () => {
   assert.equal(
     wranglerBuildErrorLine("✘ [ERROR] Uncaught Error: No such image available named cloudflare-dev/sandbox:f01d8965"),
@@ -1684,12 +1670,12 @@ test("buildPlan: never spawns wrangler via npx (spawns node_modules/.bin/wrangle
 });
 
 // ---------------------------------------------------------------------------
-// container REPORTING, never stopping (re-review 2, NB2: Ctrl-C does not
-// make wrangler's own Sandbox-container orchestration tear itself down
-// synchronously, and several worktrees running `wrangler dev` on this same
-// machine at once is the NORMAL case — a "new since my own snapshot" +
-// name-match container can just as easily be ANOTHER worktree's session as
-// this run's own, so this module must never `docker stop` one on a guess.)
+// container reporting, never stopping: Ctrl-C does not make wrangler's own
+// Sandbox-container orchestration tear itself down synchronously, and
+// several worktrees running `wrangler dev` on this same machine at once is
+// the normal case — a "new since my own snapshot" + name-match container
+// can just as easily be another worktree's session as this run's own, so
+// this module must never `docker stop` one on a guess.
 // ---------------------------------------------------------------------------
 
 test("possiblyLeftoverContainers: only a container absent from `before` AND matching this run's own worker names counts", () => {
@@ -1726,7 +1712,7 @@ test("possiblyLeftoverContainers: never flags an unrelated container even if it'
 });
 
 test("reportLeftoverContainers (NB2, the required stubbed-docker test): a foreign container that appears new during the session, matching this run's own worker-name pattern, is REPORTED but never stopped", () => {
-  // Simulates the exact false-positive re-review 2 describes: worktree B
+  // Simulates a false positive: worktree B
   // starts its own `wrangler dev`/Tier-2 session partway through worktree
   // A's (this run's) session. B's `workerd-handsontable-demos-api-Sandbox-*`
   // container is "new since A's snapshot" and matches the name pattern —
@@ -1738,7 +1724,7 @@ test("reportLeftoverContainers (NB2, the required stubbed-docker test): a foreig
     dockerCalls.push([cmd, ...args]);
     if (cmd !== "docker") throw new Error(`unexpected command: ${cmd}`);
     if (args[0] === "stop") {
-      // The exact regression this test guards against: NB2's old code
+      // The regression this test guards against: naive code
       // ran `docker stop` on a container it could not prove was its own.
       throw new Error("docker stop must NEVER be called by reportLeftoverContainers — NB2 regression");
     }
@@ -1874,20 +1860,12 @@ test("resetO11yLocalState: logs 'nothing to delete' when there is no o11y worker
   });
 });
 
-// Revert evidence for the two tests above: dropping the `-v` push in
-// `composeDownArgs({ fresh: true })`'s branch makes the first assertion in
-// "runs `docker compose down -v` scoped..." fail (`args.includes("-v")` is
-// false); widening `resetO11yLocalState`'s rm target from
-// `path.join(o11yDir, ".wrangler", "state")` to `o11yDir` itself (or to
-// `dir`) makes "workers/api's own state untouched" fail, since `otherDir`
-// sits next to `o11yDir` under the same tmp root.
-
 // ---------------------------------------------------------------------------
-// Z-D-H2: per-worktree default COMPOSE_PROJECT_NAME (dev.mjs's own default
-// used to be the fixed literal "o11y-dev" — every worktree's `--tier=full`
-// resolved to the SAME compose project, so one worktree's `--fresh` (or even
-// a plain Ctrl-C) could wipe/stop another worktree's stack). See
-// `defaultComposeProjectName`'s own doc comment in dev-lib.mjs.
+// per-worktree default COMPOSE_PROJECT_NAME: a fixed literal "o11y-dev"
+// would make every worktree's `--tier=full` resolve to the same compose
+// project, so one worktree's `--fresh` (or even a plain Ctrl-C) could
+// wipe/stop another worktree's stack. See `defaultComposeProjectName`'s
+// own doc comment in dev-lib.mjs.
 // ---------------------------------------------------------------------------
 
 test("defaultComposeProjectName: two different worktree roots give two different names", () => {
@@ -1903,12 +1881,9 @@ test("defaultComposeProjectName: the same root gives the same (stable) name ever
   assert.equal(defaultComposeProjectName(root), defaultComposeProjectName(root), "must be stable across calls/restarts, not randomly generated");
 });
 
-// Revert evidence: reverting `defaultComposeProjectName` to the old fixed
-// `"o11y-dev"` literal (ignoring `runnerRoot` entirely) makes the first test
-// above fail (`a === b`, since both worktree paths would produce the exact
-// same literal) — the second test would still incidentally pass (a constant
-// is trivially "stable"), which is exactly why the first test is the one
-// that catches a worktree-collision regression.
+// `defaultComposeProjectName` must derive from `runnerRoot`, not a fixed
+// `"o11y-dev"` literal, or two different worktree paths would produce the
+// same project name — the collision this exists to prevent.
 
 test("resolveComposeProjectName: an explicit COMPOSE_PROJECT_NAME env override always wins over the derived default", () => {
   assert.equal(
@@ -1944,19 +1919,14 @@ test("dev.mjs's own --tier=full compose section resolves COMPOSE_PROJECT_NAME vi
   );
 });
 
-// Revert evidence: reverting dev.mjs's own `composeProjectName` line back to
-// `process.env.COMPOSE_PROJECT_NAME || "o11y-dev"` makes both assertions
-// above fail (the first regex no longer matches; the second one now does).
-
 // Behavioural companion to the source-grep drift guard above: reproduces
 // dev.mjs's own `--tier=full --fresh` wiring end to end (resolve the
 // project name the same way dev.mjs does -> build composeEnv from it ->
-// call resetO11yLocalState with it) and asserts the ACTUAL docker call
-// `resetO11yLocalState` makes carries THIS worktree's derived project name,
-// not a value shared across worktrees. Fails the same way the grep test
-// does if `resolveComposeProjectName`'s fallback is ever removed, but also
-// catches a caller-side mistake (e.g. building `composeEnv` from a
-// different/stale variable) that a pure source-text match cannot see.
+// call resetO11yLocalState with it) and asserts the actual docker call
+// `resetO11yLocalState` makes carries this worktree's derived project
+// name, not a value shared across worktrees. This also catches a
+// caller-side mistake (e.g. building `composeEnv` from a different/stale
+// variable) that a pure source-text match cannot see.
 test("--tier=full's own wiring: --fresh's docker compose down -v carries THIS worktree's derived COMPOSE_PROJECT_NAME (behavioural)", () => {
   withTmpDir((dir) => {
     const o11yDir = path.join(dir, "workers", "o11y");
@@ -1991,12 +1961,11 @@ test("stop-roundtrip.mjs's own dev-stack collision guard imports its default fro
   assert.match(src, /const DEV_STACK_DEFAULT_PROJECT = defaultComposeProjectName\(\)/);
 });
 
-// Revert evidence: reverting stop-roundtrip.mjs's `DEV_STACK_DEFAULT_PROJECT`
-// back to the literal `"o11y-dev"` makes this test's second assertion fail,
-// and re-introduces the exact drift risk this item exists to close (a
-// worktree-derived dev.mjs default this script's guard would then silently
-// never match, so a `stop-roundtrip.mjs` run under this worktree's real
-// dev-stack project name would no longer be refused).
+// `stop-roundtrip.mjs`'s `DEV_STACK_DEFAULT_PROJECT` must not be the fixed
+// literal `"o11y-dev"`, or a worktree-derived dev.mjs default would
+// silently never match this script's guard, so a `stop-roundtrip.mjs` run
+// under this worktree's real dev-stack project name would no longer be
+// refused.
 
 test("run-and-deploy.md documents the per-worktree derivation and what happens to an existing single-worktree user's old volumes (they are NOT renamed — orphaned, not migrated)", () => {
   const doc = readFileSync(path.join(RUNNER_ROOT, "docs", "run-and-deploy.md"), "utf8");
