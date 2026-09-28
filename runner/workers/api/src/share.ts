@@ -198,7 +198,7 @@ export class BuildFailure extends Error {
 /** The build command ran and rejected the demo's own code (a vite/rollup/esbuild error):
  *  client input, answered 422. An install failure, a command killed by a signal (exit
  *  code 128 and above, e.g. an OOM kill) or a result without an exit code is ours. */
-export function isUserBuildError(err: unknown): err is BuildFailure {
+export function isUserBuildError(err: unknown): boolean {
   return err instanceof BuildFailure && err.phase === "build"
     && err.exitCode !== null && err.exitCode > 0 && err.exitCode < 128;
 }
