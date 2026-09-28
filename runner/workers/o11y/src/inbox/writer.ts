@@ -235,8 +235,8 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     }
   }
 
-  async nextWrittenKeys(limit: number): Promise<string[]> {
-    return ledgerNextWrittenKeys(adaptStorage(this.ctx.storage), limit);
+  async nextWrittenKeys(limit: number, excludeTenants: Tenant[] = []): Promise<string[]> {
+    return ledgerNextWrittenKeys(adaptStorage(this.ctx.storage), limit, excludeTenants);
   }
 
   // Lets `box.ts#drainStepBody` know whether the batch it just pushed

@@ -321,6 +321,17 @@ test("nextWrittenKeys returns only `written` keys, in ascending key order, cappe
   assert.equal(capped.length, 1);
 });
 
+test("nextWrittenKeys pages past an excluded tenant before the limit, so the batch fills with the other tenant", async () => {
+  const storage = memoryStorage();
+  const browser = Array.from({ length: 12 }, (_, i) => `inbox/browser/2026-01-01/00/${String(i).padStart(12, "0")}.ndjson.gz`);
+  const worker = Array.from({ length: 3 }, (_, i) => `inbox/worker/2026-01-01/00/${String(i).padStart(12, "0")}.ndjson.gz`);
+  await storage.put(Object.fromEntries([...browser, ...worker].map((k) => [inboxKeyStorageKey(k), "written"])));
+
+  assert.deepEqual(await nextWrittenKeys(storage, 10), browser.slice(0, 10), "browser keys sort first");
+  assert.deepEqual(await nextWrittenKeys(storage, 10, ["browser"]), worker);
+  assert.deepEqual(await nextWrittenKeys(storage, 10, ["browser", "worker"]), []);
+});
+
 test("markKeysProvisional / rejectKey write the exact ledger states ADR §B.3 defines", async () => {
   const storage = memoryStorage();
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";

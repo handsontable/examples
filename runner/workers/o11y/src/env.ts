@@ -127,8 +127,9 @@ export interface InboxWriterApi {
 
   /** Up to `limit` `written` keys, in key order (re-opened keys sort first —
    *  see `ledger.ts#nextWrittenKeys`'s doc comment for why DRAIN ORDERING
-   *  needs no separate "re-opened" flag). The drain's own batch source. */
-  nextWrittenKeys(limit: number): Promise<string[]>;
+   *  needs no separate "re-opened" flag), skipping `excludeTenants`. The
+   *  drain's own batch source. */
+  nextWrittenKeys(limit: number, excludeTenants?: Tenant[]): Promise<string[]>;
 
   /** Consumes (reads AND clears) the one-shot reopen markers
    *  `reopenWindow` left for `inboxKeys`, so `box.ts#drainStepBody` can

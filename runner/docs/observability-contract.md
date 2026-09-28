@@ -580,6 +580,24 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   still triggers an automatic replay instead of being silently unrecoverable except by
   manual reopen. Only a key with ZERO accepted chunks stays `rejected`. See
   `drain.ts#drainKey`'s own doc comment.
+- **Drain refusals.** A `429` whose body names Loki's stream limit (`Maximum active
+  stream limit exceeded`) is never retried (a retry can answer 204 with the excess
+  streams dropped) and never rejects: the table may have been filled by earlier keys,
+  so that key is deferred and stays `written`, with no `rejectedEvent`. Its tenant is
+  then excluded for the rest of the wake (`streamLimitedTenants` in the box's storage;
+  `nextWrittenKeys` pages past it), so the batch fills with the other tenant's keys, and
+  one `o11y.drain.stream_limit` warning line names the tenant and Loki's message. Any
+  other `429`, and a `5xx`, stays transient and stops the batch. An inbox read that
+  throws defers only that key; the rest of the batch still pushes and commits. A batch
+  of only deferred keys ends the wake's drain once no un-excluded tenant has keys left.
+- **Symbolication read caps.** One inbox object reads at most 32 distinct maps
+  (`MAX_MAP_KEYS_PER_CALL`, first-seen order), one body adds at most 8 of them
+  (`MAX_NEW_MAP_KEYS_PER_BODY`), and at most 128 frames are looked up per body
+  (`MAX_FRAMES_PER_BODY`), so a drain step of 10 objects stays at a few hundred of the
+  Workers limit of 10,000 subrequests. Frames past a cap stay byte-for-byte and are
+  reported as `o11y.symbolicate.skip` with reason `over_cap`, plus one aggregate
+  `over_cap` line with the call's capped `frames` and `keys` that `MAX_SKIP_REPORTS`
+  never suppresses.
 
 ## 9. Lite beacon payload
 

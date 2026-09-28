@@ -96,10 +96,15 @@ export interface DrainDeps {
 export interface KeyOutcome {
   key: string;
   tenant: Tenant;
-  outcome: "provisional" | "rejected" | "error";
-  /** Set on `rejected` (why), and also on `provisional` when one chunk
-   *  2xx'd but another 400'd — the caller should still surface this via
-   *  `recordPartialReject`. `undefined` on a fully clean `provisional`. */
+  /** `deferred`: left `written` for a later wake, see {@link KeyOutcome.deferral};
+   *  unlike `error`, the batch continues. */
+  outcome: "provisional" | "rejected" | "error" | "deferred";
+  /** Set on `deferred` only: the inbox read threw, this key hit Loki's stream
+   *  limit, or its tenant already had (so it was not fetched). */
+  deferral?: "fetch_error" | "stream_limit" | "tenant_limited";
+  /** Set on `rejected` (why), on `deferred`, and also on `provisional` when
+   *  one chunk 2xx'd but another 400'd — the caller should still surface
+   *  that via `recordPartialReject`. `undefined` on a fully clean `provisional`. */
   reason?: string;
   bytesPushed: number;
   /** Records dropped by {@link dropOldRecords} before this key's push.
@@ -110,10 +115,19 @@ export interface KeyOutcome {
 
 export interface DrainBatchResult {
   outcomes: KeyOutcome[];
-  /** `true` when a `429`/`5xx` exhausted its retries — the batch stops
+  /** `true` when a rate-limit `429`/`5xx` exhausted its retries — the batch stops
    *  immediately, leaving the rest `written` for a later wake rather than
    *  hammering a server that's currently failing every request. */
   stoppedEarly: boolean;
+}
+
+/** Loki's per-tenant active-stream limit: the ingester keeps its streams until
+ *  it stops, so this 429 lasts the rest of the wake, and a retry can answer 204
+ *  with the excess streams dropped. Never retried; the key waits for a new wake. */
+const STREAM_LIMIT_RE = /stream limit/i;
+
+function isStreamLimit(result: LokiPushResult): boolean {
+  return result.status === 429 && STREAM_LIMIT_RE.test(result.message ?? "");
 }
 
 const MAX_RETRIES = 3;
@@ -175,11 +189,11 @@ async function pushChunkWithRetry(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     result = await deps.pushToLoki(tenant, gz);
     if (result.status >= 200 && result.status < 300) return { result, bytesPushed: gz.byteLength };
-    if (result.status === 400) return { result, bytesPushed: 0 }; // never retried — a malformed/too-old push
+    if (result.status === 400 || isStreamLimit(result)) return { result, bytesPushed: 0 }; // never retried
     const delay = RETRY_DELAYS_MS[attempt];
     if (attempt < MAX_RETRIES && delay !== undefined) await sleep(delay);
   }
-  return { result, bytesPushed: 0 }; // 429/5xx, retries exhausted
+  return { result, bytesPushed: 0 }; // rate-limit 429/5xx, retries exhausted
 }
 
 /** Drains one key: fetch, decode, symbolicate exceptions, dedupe against
@@ -188,12 +202,26 @@ async function pushChunkWithRetry(
  *  including the zero-chunk case (nothing left to push is not a failure).
  *  `box.ts#drainStep` commits a zero-`bytesPushed` `provisional` outcome
  *  directly — see {@link KeyOutcome.droppedOld}. */
-export async function drainKey(key: string, seenHashes: Set<string>, deps: DrainDeps): Promise<KeyOutcome> {
+export async function drainKey(
+  key: string,
+  seenHashes: Set<string>,
+  deps: DrainDeps,
+  streamLimited: Set<Tenant> = new Set(),
+): Promise<KeyOutcome> {
   const parsed = parseInboxKey(key);
   if (!parsed) return { key, tenant: "worker", outcome: "rejected", reason: "unparseable_key", bytesPushed: 0, droppedOld: 0 };
   const { tenant } = parsed;
+  if (streamLimited.has(tenant)) {
+    return { key, tenant, outcome: "deferred", deferral: "tenant_limited", reason: "stream_limit", bytesPushed: 0, droppedOld: 0 };
+  }
 
-  const raw = await deps.fetchObject(key);
+  let raw: Uint8Array | null;
+  try {
+    raw = await deps.fetchObject(key);
+  } catch (err) {
+    const reason = `fetch_error: ${err instanceof Error ? err.message : String(err)}`;
+    return { key, tenant, outcome: "deferred", deferral: "fetch_error", reason, bytesPushed: 0, droppedOld: 0 };
+  }
   if (!raw) return { key, tenant, outcome: "rejected", reason: "object_missing", bytesPushed: 0, droppedOld: 0 };
 
   let records: OtlpResourceLogs[];
@@ -249,6 +277,14 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
   for (const chunk of chunkBySize(fresh)) {
     const { result, bytesPushed: chunkBytes } = await pushChunkWithRetry(tenant, chunk, deps);
     bytesPushed += chunkBytes;
+    if (isStreamLimit(result)) {
+      // The table may have been filled by earlier keys, so this key is never
+      // blamed: it stays `written` (a replay re-pushes chunks that landed) and
+      // the tenant is skipped for the rest of the wake.
+      streamLimited.add(tenant);
+      const reason = result.message ?? "stream_limit";
+      return { key, tenant, outcome: "deferred", deferral: "stream_limit", reason, bytesPushed, droppedOld };
+    }
     if (result.status === 400) {
       rejectedReason ??= result.message ?? "loki_400";
       continue; // keep pushing the REST of this key's chunks — don't lose them
@@ -275,11 +311,19 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
 
 /** Drains `keys` in order, stopping immediately on the first `error`
  *  outcome (leaves it and everything after it `written`, per
- *  {@link DrainBatchResult.stoppedEarly}'s own doc comment). */
-export async function drainBatch(keys: readonly string[], seenHashes: Set<string>, deps: DrainDeps): Promise<DrainBatchResult> {
+ *  {@link DrainBatchResult.stoppedEarly}'s own doc comment). A `deferred`
+ *  key does not stop the batch. `streamLimited` holds the tenants that hit
+ *  Loki's stream limit earlier in this wake (their keys are not fetched), and
+ *  gains any that hit it now. */
+export async function drainBatch(
+  keys: readonly string[],
+  seenHashes: Set<string>,
+  deps: DrainDeps,
+  streamLimited: Set<Tenant> = new Set(),
+): Promise<DrainBatchResult> {
   const outcomes: KeyOutcome[] = [];
   for (const key of keys) {
-    const outcome = await drainKey(key, seenHashes, deps);
+    const outcome = await drainKey(key, seenHashes, deps, streamLimited);
     outcomes.push(outcome);
     if (outcome.outcome === "error") return { outcomes, stoppedEarly: true };
   }

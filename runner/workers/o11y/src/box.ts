@@ -8,7 +8,7 @@
 import { Container } from "@cloudflare/containers";
 import { o11ySelfIdentity } from "./normalise/respond.js";
 import { writePointFromDo } from "./normalise/points.js";
-import { toAePoint, type HotAttrs } from "@handsontable/demo-runtime/telemetry";
+import { toAePoint, type HotAttrs, type Tenant } from "@handsontable/demo-runtime/telemetry";
 import { drainBatch, type DrainDeps } from "./drain/drain.js";
 import { symbolicateResourceLogs } from "./drain/symbolicate.js";
 import type { Env } from "./env.js";
@@ -33,6 +33,9 @@ const LAST_GRAFANA_STORAGE_KEY = "lastGrafanaAt";
 /** Guards `onStart`'s double-invocation (see its own doc comment) from
  *  scheduling `drainStep` twice for the same wake. */
 const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
+/** `{ wakeId, tenants }`: tenants that hit Loki's stream limit in this wake,
+ *  whose keys later steps skip, because the ingester keeps its streams until it stops. */
+const STREAM_LIMITED_STORAGE_KEY = "streamLimitedTenants";
 /** The wakeId whose wake-to-ready time was already reported to InboxWriter,
  *  so only a wake's first successful `isReady()` reports it. */
 const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
@@ -43,9 +46,9 @@ const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
 /** ADR §A stop protocol: "if no Grafana request arrived in the last 10
  *  minutes the Worker calls `stop()`." */
 const GRAFANA_QUIET_STOP_MS = 10 * 60 * 1000;
-/** Objects drained per `drainStep` invocation — kept well under any
- *  plausible per-object cost so one invocation cannot blow the Worker's
- *  CPU budget. */
+/** Objects drained per `drainStep` invocation (one `alarm()`): bounds its CPU,
+ *  and its subrequests at 10 inbox GETs + 10 × `MAX_MAP_KEYS_PER_CALL` map GETs
+ *  + ~200 push attempts, far under the Workers limit of 10,000. */
 const DRAIN_BATCH_SIZE = 10;
 /** Minimum gap before `drainStep` reschedules itself: the base
  *  `Container.alarm()` loop reads every due `container_schedules` row ONCE
@@ -632,7 +635,9 @@ export class GrafanaBox extends Container<Env> {
       await this.#finishDrain(payload.wakeId);
       return;
     }
-    const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE);
+    const limitedRecord = await this.ctx.storage.get<{ wakeId: string; tenants: Tenant[] }>(STREAM_LIMITED_STORAGE_KEY);
+    const streamLimited = new Set<Tenant>(limitedRecord?.wakeId === payload.wakeId ? limitedRecord.tenants : []);
+    const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE, [...streamLimited]);
 
     if (keys.length === 0) {
       await this.#finishDrain(payload.wakeId);
@@ -679,7 +684,18 @@ export class GrafanaBox extends Container<Env> {
       symbolicate: (records) => symbolicateResourceLogs(records, { getMap: (key) => this.#getMap(key) }),
     };
 
-    const result = await drainBatch(keys, new Set(), deps);
+    const limitedBefore = new Set(streamLimited);
+    const result = await drainBatch(keys, new Set(), deps, streamLimited);
+    const newlyLimited = [...streamLimited].filter((t) => !limitedBefore.has(t));
+    if (newlyLimited.length > 0) {
+      await this.ctx.storage.put(STREAM_LIMITED_STORAGE_KEY, { wakeId: payload.wakeId, tenants: [...streamLimited] });
+    }
+    // A stream-limit 429 means the Loki limit no longer covers the tenant's
+    // label cardinality (config drift): one line per tenant per wake.
+    for (const tenant of newlyLimited) {
+      const hit = result.outcomes.find((o) => o.tenant === tenant && o.deferral === "stream_limit");
+      console.warn(JSON.stringify({ event: "o11y.drain.stream_limit", wakeId: payload.wakeId, tenant, message: hit?.reason }));
+    }
 
     // A `provisional` key that pushed ZERO bytes (every record already
     // deduped/too-old — `drain.ts#drainKey`'s zero-chunk case) commits
@@ -704,6 +720,12 @@ export class GrafanaBox extends Container<Env> {
     // be counted, never silent) — `value` is otherwise unused by
     // `o11y.drain`.
     const droppedOld = result.outcomes.reduce((sum, o) => sum + o.droppedOld, 0);
+    // Deferred keys stay `written`; the rest of the batch still commits.
+    const deferred = result.outcomes.filter((o) => o.outcome === "deferred");
+    for (const d of deferred) {
+      if (d.deferral !== "fetch_error") continue;
+      console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, key: d.key, message: d.reason }));
+    }
 
     if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
     if (zeroByteKeys.length > 0) await writer.commitKeys(zeroByteKeys);
@@ -714,7 +736,7 @@ export class GrafanaBox extends Container<Env> {
       this.env,
       this.ctx,
       "o11y.drain",
-      { count: result.outcomes.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed, value: droppedOld },
+      { count: result.outcomes.length - deferred.length, duration_ms: Date.now() - startedAt, bytes: bytesPushed, value: droppedOld },
       {
         // Already a contract-allowed `reason` value
         // (`METRICS["o11y.drain"].values.reason`) — used instead of the
@@ -729,11 +751,19 @@ export class GrafanaBox extends Container<Env> {
         // for a drain that permanently lost real data.
         // `recordPartialReject` above already logs the loss; this outcome
         // must not hide it too.
-        outcome: result.stoppedEarly ? "error" : rejectedKeys.length > 0 || partiallyRejected.length > 0 ? "partial" : "ok",
+        outcome:
+          result.stoppedEarly || deferred.length > 0
+            ? "error"
+            : rejectedKeys.length > 0 || partiallyRejected.length > 0
+              ? "partial"
+              : "ok",
       },
     );
 
-    if (result.stoppedEarly) {
+    // A batch of only deferred keys would come back unchanged on every step,
+    // so it ends this wake's drain like a Loki outage does — unless a tenant
+    // was just limited, whose exclusion lets the next step reach the other one.
+    if (result.stoppedEarly || (deferred.length === result.outcomes.length && newlyLimited.length === 0)) {
       // Everything from here on stays `written` for the next wake to
       // retry (a possibly-recovered Loki by then) — but this wake itself
       // is done trying, so run the same post-drain stop decision.

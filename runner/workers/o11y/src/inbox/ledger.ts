@@ -301,14 +301,23 @@ export async function computeBacklog(
  * `written` keys, in key order. The inbox key format sorts chronologically
  * within a tenant by construction, so this satisfies "re-opened keys
  * first" without a separate flag — a re-opened key is always older than
- * any key from the current wake. Cross-tenant interleaving is irrelevant:
- * Loki isolates ingester state per tenant.
+ * any key from the current wake. `excludeTenants` (tenants the drain found
+ * stream-limited this wake) are skipped before the limit applies, so the
+ * batch fills with the other tenant's keys.
  */
-export async function nextWrittenKeys(storage: StorageLike, limit: number): Promise<string[]> {
+export async function nextWrittenKeys(
+  storage: StorageLike,
+  limit: number,
+  excludeTenants: readonly string[] = [],
+): Promise<string[]> {
   const keys = await storage.list<InboxKeyState>({ prefix: KEY_PREFIX });
+  const excludedPrefixes = excludeTenants.map((t) => `inbox/${t}/`);
   const written: string[] = [];
   for (const [storageKey, state] of keys) {
-    if (state === "written") written.push(inboxKeyOf(storageKey));
+    if (state !== "written") continue;
+    const inboxKey = inboxKeyOf(storageKey);
+    if (excludedPrefixes.some((prefix) => inboxKey.startsWith(prefix))) continue;
+    written.push(inboxKey);
   }
   written.sort();
   return written.slice(0, limit);
