@@ -42,6 +42,7 @@ const {
   _deriveLoginKeyForTests,
 } = await import("../workers/o11y/src/gates/session.ts");
 const { isValidBrokerUrl, resolveBrokerIdentity } = await import("../workers/o11y/src/gates/broker.ts");
+const { RATE_LIMIT_PERIOD_SECONDS } = await import("../workers/o11y/src/gates/rate-limit.ts");
 const { handleCallback, handleLogin, handleLogout, handleLogoutPage, handleSession } = await import(
   "../workers/o11y/src/grafana/login.ts"
 );
@@ -621,10 +622,11 @@ test("GET /login returns 500 (not a broken relative redirect) when LOGIN_BROKER_
   assert.equal(res.headers.get("Location"), null);
 });
 
-test("GET /login is rate-limited", async () => {
+test("GET /login is rate-limited, with a Retry-After equal to the limiter window", async () => {
   const env = baseEnv({ RATE_LIMITER: { limit: async () => ({ success: false }) } });
   const res = await handleLogin(new Request("https://demos.handsontable.com/grafana/_o11y/login"), env, {});
   assert.equal(res.status, 429);
+  assert.equal(res.headers.get("retry-after"), String(RATE_LIMIT_PERIOD_SECONDS));
 });
 
 test("GET /grafana/_o11y/callback: strict CSP (framing and forms refused too), no-store, referrer-policy, nosniff, no third-party script", async () => {
@@ -736,7 +738,7 @@ test("POST /grafana/_o11y/session: a non-JSON content-type is refused with 415",
   assert.equal(res.status, 415);
 });
 
-test("POST /grafana/_o11y/session is rate-limited", async () => {
+test("POST /grafana/_o11y/session is rate-limited, with a Retry-After equal to the limiter window", async () => {
   const env = baseEnv({ RATE_LIMITER: { limit: async () => ({ success: false }) } });
   const req = new Request("https://demos.handsontable.com/grafana/_o11y/session", {
     method: "POST",
@@ -745,6 +747,7 @@ test("POST /grafana/_o11y/session is rate-limited", async () => {
   });
   const res = await handleSession(req, env, {});
   assert.equal(res.status, 429);
+  assert.equal(res.headers.get("retry-after"), String(RATE_LIMIT_PERIOD_SECONDS));
 });
 
 test("POST /grafana/_o11y/logout clears BOTH cookies and redirects home, only for a same-origin JSON request", async () => {

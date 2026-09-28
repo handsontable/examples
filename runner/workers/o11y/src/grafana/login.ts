@@ -21,7 +21,7 @@ import {
   verifyLoginCookie,
 } from "../gates/session.js";
 import { isValidBrokerUrl, resolveBrokerIdentity } from "../gates/broker.js";
-import { checkRateLimit } from "../gates/rate-limit.js";
+import { checkRateLimit, RATE_LIMIT_PERIOD_SECONDS } from "../gates/rate-limit.js";
 import type { Env } from "../env.js";
 import type { RouteHandler } from "../router.js";
 
@@ -38,11 +38,15 @@ function contentTypeIsJson(req: Request): boolean {
 }
 
 /** Keyed on `cf-connecting-ip`, prefixed per route so an attacker
- *  hammering one route cannot exhaust the other's budget for the same IP. */
-async function rateLimited(req: Request, env: Env, prefix: string): Promise<boolean> {
+ *  hammering one route cannot exhaust the other's budget for the same IP.
+ *  Returns the `Retry-After` seconds to send when rate-limited, `null`
+ *  otherwise — a scripted client hitting this 429 gets the same back-off
+ *  signal `respond.ts#respondDrop` already gives the telemetry routes. */
+async function rateLimited(req: Request, env: Env, prefix: string): Promise<number | null> {
   const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
   const result = await checkRateLimit(env, `${prefix}:${ip}`);
-  return !result.ok;
+  if (result.ok) return null;
+  return result.retryAfterSeconds ?? RATE_LIMIT_PERIOD_SECONDS;
 }
 
 /** `handleLogin`'s own pre-flight: a misconfigured secret or broker URL
@@ -60,8 +64,12 @@ export const handleLogin: RouteHandler = async (req, env) => {
   const configError = configurationError(env);
   if (configError) return new Response(configError, { status: 500 });
 
-  if (await rateLimited(req, env, "o11y-login")) {
-    return new Response("Too many sign-in attempts. Try again shortly.", { status: 429 });
+  const retryAfter = await rateLimited(req, env, "o11y-login");
+  if (retryAfter !== null) {
+    return new Response("Too many sign-in attempts. Try again shortly.", {
+      status: 429,
+      headers: { "retry-after": String(retryAfter) },
+    });
   }
 
   const url = new URL(req.url);
@@ -187,8 +195,9 @@ export const handleSession: RouteHandler = async (req, env) => {
   if (!isSameOrigin(req)) return jsonResponse({ error: "bad_origin" }, 403);
   if (!contentTypeIsJson(req)) return jsonResponse({ error: "expected content-type: application/json" }, 415);
 
-  if (await rateLimited(req, env, "o11y-session")) {
-    return jsonResponse({ error: "rate_limited" }, 429);
+  const retryAfter = await rateLimited(req, env, "o11y-session");
+  if (retryAfter !== null) {
+    return jsonResponse({ error: "rate_limited" }, 429, { "retry-after": String(retryAfter) });
   }
 
   let body: unknown;
