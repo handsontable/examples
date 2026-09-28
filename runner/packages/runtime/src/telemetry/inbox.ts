@@ -1,7 +1,7 @@
 // Observability contract §8 — the inbox: OTLP `ResourceLogs` builders, NDJSON
 // encode/decode, the `inbox/...` object key and the `InboxWriter` storage-key
-// shapes. `InboxWriter` itself (T02) is the only writer; this module is just the
-// shapes and pure string/JSON functions it and the drain (T03) share.
+// shapes. `InboxWriter` itself is the only writer; this module is just the
+// shapes and pure string/JSON functions it and the drain share.
 
 export type Tenant = "browser" | "worker";
 
@@ -147,11 +147,9 @@ export const SEQ_STORAGE_KEY = "seq";
 export const DRAINS_PAUSED_STORAGE_KEY = "drainsPaused";
 export const HEARTBEAT_STORAGE_KEY = "heartbeat";
 
-/** Digits `pendingRowStorageKey` zero-pads `n` to. Zero-padding makes native
- *  ascending key order equal arrival order, so a bounded `list({prefix,
- *  limit})` read is enough (`workers/o11y/src/inbox/pack.ts#collectRowBatch`).
- *  12 digits matches the packed-object `<seq>` width (§8's `inboxKey`) —
- *  headroom far past any realistic pending-row count for one `InboxWriter`. */
+/** Digits `pendingRowStorageKey` zero-pads `n` to, so native ascending key
+ *  order equals arrival order for a bounded `list({prefix, limit})` read.
+ *  Matches the packed-object `<seq>` width (§8's `inboxKey`). */
 export const ROW_SEQ_DIGITS = 12;
 
 export function pendingRowStorageKey(n: number): string {
@@ -160,13 +158,9 @@ export function pendingRowStorageKey(n: number): string {
 export function inboxKeyStorageKey(key: string): string {
   return `key:${key}`;
 }
-/** F2 fix (B-C1/A-I1): a `key:<inbox key>` entry that reaches `committed`
- *  moves OUT of the `key:` prefix entirely into `done:<inbox key>` (see
- *  contract §8) — `key:` then holds only `written`/`provisional:*`/
- *  `rejected:*`, the live set every drain/backlog/resolve read cares about,
- *  never the (unbounded, ever-growing) committed history. `done:` entries
- *  are themselves pruned by retention (`ledger.ts#pruneLedger`) and are
- *  only consulted by a manual reopen of an old window. */
+/** A `key:<inbox key>` entry that reaches `committed` moves OUT of `key:`
+ *  into `done:<inbox key>` (contract §8), so `key:` holds only the live set
+ *  every drain/backlog/resolve read cares about. */
 export function doneKeyStorageKey(key: string): string {
   return `done:${key}`;
 }
@@ -177,16 +171,10 @@ export function fingerprintStorageKey(fp: string): string {
  *  component to — 15 covers every ms timestamp until the year 5138, far
  *  past any realistic operational lifetime for this key shape. */
 export const FPTS_TIMESTAMP_DIGITS = 15;
-/** `fpts:<firstSeenMs, zero-padded>:<fingerprint>` (F2/G1 fix round, B-C1/
- *  A-I1 remainder) — a time-ordered secondary index alongside `fp:<fp>`
- *  (same first-seen value, same write), so `newFingerprintsSince` can do a
- *  bounded `start`/`end` range read instead of listing the entire (alphabetic,
- *  not chronological) `fp:` prefix every alert tick. The fingerprint is
- *  appended as a plain suffix (never parsed out of the padded-ms prefix by
- *  position alone would be ambiguous if it contained `:` — reading back
- *  always slices at the fixed padded-ms width, so a `:` inside the
- *  fingerprint itself is safe). Deleted together with its `fp:<fp>` twin by
- *  `pruneFingerprintRegistry`. */
+/** `fpts:<firstSeenMs, zero-padded>:<fingerprint>` — a time-ordered
+ *  secondary index alongside `fp:<fp>`, so `newFingerprintsSince` can do a
+ *  bounded range read instead of listing the entire `fp:` prefix. Deleted
+ *  together with its `fp:<fp>` twin by `pruneFingerprintRegistry`. */
 export function fingerprintTimeIndexKey(firstSeenMs: number, fp: string): string {
   return `fpts:${Math.max(0, Math.trunc(firstSeenMs)).toString().padStart(FPTS_TIMESTAMP_DIGITS, "0")}:${fp}`;
 }
@@ -207,7 +195,7 @@ export interface WakeState {
   startedAt: number;
   reason: "backlog" | "visit";
   over: boolean;
-  /** F8: wake-to-ready time in ms (contract §5 `o11y.wake` `duration_ms`,
+  /** Wake-to-ready time in ms (contract §5 `o11y.wake` `duration_ms`,
    *  "to ready"; exit criterion 6): from `GrafanaBox.wake()` minting this
    *  wake to its first successful `isReady()`. Written once by
    *  `InboxWriter.recordWakeReady`; absent while the box has not yet become

@@ -108,7 +108,7 @@ export async function injectScheme(response: Response): Promise<Response> {
   }
 }
 
-// ---- T08: lite beacon injection, `/d` and `/embed` (ADR §C.5, contract §9) ----
+// ---- Lite beacon injection, `/d` and `/embed` (ADR §C.5, contract §9) ----
 //
 // A wholly different seam from `injectMonitor`/`injectScheme` above: those guard
 // a *proxied* Tier-2 response (arbitrary upstream bytes, unknown encoding, must

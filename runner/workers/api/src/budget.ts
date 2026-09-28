@@ -193,13 +193,9 @@ function upsertEstimate(env: Env, day: string, sku: string, units: number, usd: 
  * Meter a closed container awake window. Additive per (day, sku) so concurrent
  * writers never clobber each other.
  *
- * `sku` (T04, ADR-0041 §G: "`recordContainerUsage` takes the SKU as a
- * parameter") defaults to `"container"` — every existing call site (the
- * app's own session meter, below) is unaffected. `workers/api/src/o11y-usage.ts`
- * calls this with `sku: "o11y_container"` for `GrafanaBox`'s awake seconds,
- * reported over the `API` service binding — a distinct SKU so its upsert
- * never overwrites the app's `container` rows (same (day, sku) primary key,
- * different sku).
+ * `sku` (ADR-0041 §G) defaults to `"container"` — every existing call site
+ * is unaffected. `o11y-usage.ts` calls this with `sku: "o11y_container"`,
+ * a distinct SKU so its upsert never overwrites the app's `container` rows.
  */
 export async function recordContainerUsage(
   env: Env,
@@ -213,14 +209,10 @@ export async function recordContainerUsage(
 
 /**
  * Month-to-date observability spend (`o11y_container` + `o11y_workers`
- * SKUs only), plus the ADR-0041 §G cap it is checked against. Read by
- * `O11yUsage#o11ySpend` (the o11y worker's spend-cap alert rule) and by
- * `adminUsage` (the `/admin` app/observability/total split).
- *
- * Deliberately separate from {@link computeBudgetState}: the app's own
- * `limitUsd`/tier machinery keeps summing *every* sku in `cost_ledger`
- * unchanged (ADR §G: "Product tiers keep acting on the total") — this is an
- * additional, narrower read over the same table, not a replacement.
+ * SKUs only), plus the ADR-0041 §G cap it is checked against. Deliberately
+ * separate from {@link computeBudgetState}, whose `limitUsd`/tier machinery
+ * keeps summing every sku unchanged (ADR §G: "Product tiers keep acting on
+ * the total").
  */
 export async function computeO11ySpend(env: Env): Promise<{ spendUsd: number; capUsd: number }> {
   const settings = await loadSettings(env);
@@ -277,14 +269,9 @@ export interface SessionMeter {
   startedAt: number;
   meteredThrough: number;
   instanceType: InstanceType;
-  /**
-   * The session's framework (`session.end`, contract §5). Optional because a
-   * meter written before this field existed round-trips with it absent — same
-   * defaulting shape as `instanceType` above. Carried here, rather than
-   * re-derived at teardown, because teardown call sites (`teardownLiveSession`,
-   * `sessionSubrouteGuard`) only ever have a `sessionId`, and this meter is the
-   * one piece of state that already lives from create to teardown under that key.
-   */
+  /** The session's framework (`session.end`, contract §5). Optional: a meter
+   *  written before this field existed round-trips with it absent. Carried
+   *  here because teardown call sites only ever have a `sessionId`. */
   framework?: string;
 }
 
@@ -348,10 +335,9 @@ export async function startSessionMeter(
  * Book the slice of awake time since the last flush.
  * `final` (teardown) always books and then drops the meter.
  *
- * Returns the meter's `framework` (contract §5's `session.end` blob) when one
- * is on record — `undefined` on a KV miss/hiccup or a pre-F14 meter that
- * never had one. `void`-safe: every existing caller already ignores the
- * return value.
+ * Returns the meter's `framework` (contract §5's `session.end` blob) when
+ * on record — `undefined` on a KV miss. `void`-safe: every existing caller
+ * already ignores the return value.
  */
 export async function meterSession(
   env: Env,

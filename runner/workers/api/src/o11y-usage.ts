@@ -17,8 +17,8 @@ import type { Env } from "./env.js";
 import { computeO11ySpend, recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
 
 export class O11yUsage extends WorkerEntrypoint<Env> {
-  /** `GrafanaBox`'s awake seconds for one wake (`box.ts#onStop`, T04-D — see
-   *  the task Outcome). Recorded under the `o11y_container` sku, additive
+  /** `GrafanaBox`'s awake seconds for one wake (`box.ts#onStop`). Recorded
+   *  under the `o11y_container` sku, additive
    *  per (day, sku) the same way the app's own session meter is (never
    *  overwrites it — distinct sku, same table). */
   async recordAwakeSeconds(awakeSeconds: number): Promise<void> {

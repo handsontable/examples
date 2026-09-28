@@ -39,10 +39,10 @@ export function serviceVersion(env: Env): string {
 /**
  * `deployment.environment.name` (contract §3): `production` only when deployed
  * under the real host, `local` otherwise — the same two-way distinction
- * `apiSentryDsn` already makes for Sentry, reused here rather than duplicated
- * (T05-D: this repo has no separate `O11Y_ENV` var for the API worker the way
- * the o11y worker does; `PREVIEW_HOST === PRODUCTION_HOST` is the existing,
- * already-load-bearing signal for "this is the real deploy").
+ * `apiSentryDsn` already makes for Sentry, reused here rather than duplicated:
+ * this repo has no separate `O11Y_ENV` var for the API worker the way the
+ * o11y worker does; `PREVIEW_HOST === PRODUCTION_HOST` is the existing,
+ * already-load-bearing signal for "this is the real deploy".
  */
 export function serviceEnvironment(env: Env): "production" | "local" {
   return env.PREVIEW_HOST === PRODUCTION_HOST ? "production" : "local";
@@ -60,14 +60,14 @@ export function commonAttrs(env: Env): CommonResourceAttrs {
  * Analytics Engine sink (contract §10): the real `RUNNER_EVENTS` binding in
  * production, local ClickHouse otherwise — `wrangler dev`'s own AE binding
  * simulation accepts writes but they are not queryable, so local mode routes
- * around it the same way the o11y worker does (T00's `clickhouseSink`).
+ * around it the same way the o11y worker does (`clickhouseSink`).
  *
- * T05-D: the contract's §2 "API worker additions" table does not name a local
+ * The contract's §2 "API worker additions" table does not name a local
  * ClickHouse URL/credential var for this worker (only the o11y worker's
  * `AE_SQL_TOKEN` is pinned there). `RUNNER_EVENTS_CLICKHOUSE_URL` and
  * `AE_SQL_TOKEN` are added to this worker's `env.ts` as `.dev.vars`-only
  * additions (never in the committed `wrangler.jsonc` `vars` block) for this
- * purpose — same credential header names T00 measured against T01's
+ * purpose — same credential header names measured against the local
  * container (`X-ClickHouse-User` / `X-ClickHouse-Key`).
  */
 export function getSink(env: Env): AeSink {

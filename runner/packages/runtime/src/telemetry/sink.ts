@@ -28,8 +28,8 @@ export function bindingSink(dataset: AnalyticsEngineDatasetLike): AeSink {
 
 /**
  * `date` as raw epoch milliseconds — the value to send a `DateTime64(3)`
- * column over JSONEachRow (T00-D2, revised; see `clickhouseSink`'s doc
- * comment for the measured reasoning). Exported for
+ * column over JSONEachRow (see `clickhouseSink`'s doc comment for the
+ * measured reasoning). Exported for
  * `pipeline/telemetry-sink.test.mjs`.
  */
 export function clickhouseTimestamp(date: Date): number {
@@ -42,12 +42,13 @@ export interface ClickhouseSinkOptions {
   /** Injectable for tests; defaults to the global `fetch`. */
   fetchImpl?: typeof fetch;
   /** ClickHouse HTTP user (`X-ClickHouse-User`). `"default"` if omitted, the
-   *  same default T01's `compose.yml` uses. */
+   *  same default `containers/o11y/compose.yml` uses. */
   user?: string;
-  /** ClickHouse HTTP password (`X-ClickHouse-Key`) — T01's local container
+  /** ClickHouse HTTP password (`X-ClickHouse-Key`) — the local container
    *  always requires one (`CLICKHOUSE_PASSWORD`, defaulting to
-   *  `local-dev-token` from `AE_SQL_TOKEN`); T02 passes `env.AE_SQL_TOKEN`.
-   *  Measured (T00-D2, revised): with no credentials sent at all, T01's
+   *  `local-dev-token` from `AE_SQL_TOKEN`); the API worker passes
+   *  `env.AE_SQL_TOKEN`.
+   *  Measured: with no credentials sent at all, the local
    *  container answers the insert with a non-2xx auth error, which a version
    *  of this sink that only checked "did `fetch` throw" swallowed —
    *  `writeDataPoint` resolved, `SELECT count()` on the table read `0`. Omit
@@ -56,49 +57,20 @@ export interface ClickhouseSinkOptions {
 }
 
 /**
- * Local-mode sink (§10): ClickHouse at `http://localhost:8123` (or wherever
- * `url` points), table `runner_events` with the §4 columns plus `timestamp` and
- * `_sample_interval` (always `1` locally — no real sampling), DDL in
- * `containers/o11y/local/clickhouse-init.sql` (T01, confirmed column-for-
- * column identical to what this sink writes: `index1`, `blob1`…`blob20` as
- * `String`, `double1`…`double20` as `Float64`, `timestamp` as
- * `DateTime64(3)`, `_sample_interval` — T00-D2).
+ * Local-mode sink (§10): ClickHouse at `http://localhost:8123`, table
+ * `runner_events` with the §4 columns plus `timestamp`/`_sample_interval`
+ * (DDL in `containers/o11y/local/clickhouse-init.sql`).
  *
- * `timestamp` is sent as a raw epoch-millisecond integer (`clickhouseTimestamp`),
- * not a formatted string — measured against a real, throwaway
- * `clickhouse/clickhouse-server:24.10-alpine` container running T01's exact DDL
- * (the image tag T01's `compose.yml` pins), read via `toUnixTimestamp64Milli`:
+ * `timestamp` is sent as a raw epoch-millisecond integer
+ * (`clickhouseTimestamp`), not a formatted string: a `DateTime64(3)` column
+ * reads a plain integer as milliseconds (not seconds), and a formatted
+ * string is parsed in the SERVER's configured timezone — measured 9 hours
+ * off under a `session_timezone` override. A unit-less epoch-ms integer is
+ * immune to both.
  *
- * - A bare Unix-**seconds** integer (the first version of this sink) is not
- *   read as seconds at all: ClickHouse reads a plain integer into a
- *   `DateTime64(3)` column as raw **milliseconds** ticks — the column's own
- *   declared scale — so `1758628800` (meant as seconds) landed on
- *   `1970-01-21 08:30:28.800`, off by a factor of 1000. A wrong guess, not
- *   truncated precision as an earlier version of this comment claimed.
- * - A `'YYYY-MM-DD HH:MM:SS.sss'` **string** (this sink's second version)
- *   round-trips exactly correct under a UTC server timezone, but is parsed in
- *   the server's configured timezone — under a `session_timezone` override to
- *   `Asia/Tokyo` in the same measurement, the identical string parsed 9 hours
- *   off. Not safe to ship without pinning the container's timezone, which
- *   nothing here does.
- * - A raw **epoch-millisecond integer** (`Date.getTime()`, this version) is a
- *   pure tick count — `toUnixTimestamp64Milli` returned it back byte-for-byte
- *   identical, and being unit-less it cannot be timezone-dependent by
- *   construction. This is what `clickhouseTimestamp` sends.
- *
- * Column names are the AE slot names themselves — the same query a real
- * Analytics Engine SQL call would run, no second name mapping.
- *
- * **Authenticates, and rejects on a non-2xx response** — both measured
- * against the same real container: with no `user`/`password` sent, T01's
- * `compose.yml` container answers every insert with `403` (`Authentication
- * failed`), and an earlier version of this function only checked whether
- * `fetch` itself threw, so `writeDataPoint` resolved anyway — `SELECT
- * count()` on the table read back `0`. Every non-2xx response now rejects
- * the returned promise with the status and the first 200 bytes of the body,
- * and the credentials (`X-ClickHouse-User` / `X-ClickHouse-Key`, ClickHouse's
- * own HTTP header names) are sent whenever `options.user`/`.password` are
- * given — T02 passes `env.AE_SQL_TOKEN`.
+ * Authenticates and rejects on a non-2xx response (measured: no
+ * credentials gets `403` from the local container); credentials are sent
+ * whenever `options.user`/`.password` are given.
  */
 export function clickhouseSink(url: string, options: ClickhouseSinkOptions = {}): AeSink {
   const table = options.table ?? "runner_events";

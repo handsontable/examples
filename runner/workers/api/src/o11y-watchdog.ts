@@ -1,18 +1,10 @@
-// ADR-0041 §F.3's fourth alerting row: "The o11y stack itself stale (no cron
-// tick or ingest for 30 min) — the API worker's `*/5` cron reads the o11y
-// heartbeat over a service binding and sends `captureMessage` to Sentry."
-//
-// Dispatched from `index.ts#runFiveMinuteCron`'s marked T04 call point
-// (T05's handoff comment there), through `cron-step.ts#cronStep` like its
-// sibling gauges — see that module's own doc comment for why every cron
-// branch needs its own isolated try/catch (a heartbeat check must still run
-// even when `emitPoolGauge`/`emitBudgetGauge` throw first).
-//
-// State (stale vs. recovered) lives in this Worker's own KV `CACHE` binding,
-// not in `InboxWriter` (T04-D, see the task Outcome): the watchdog watches
-// the o11y stack FROM OUTSIDE it, and its own fire/resolve bookkeeping must
-// survive even when the o11y worker (and therefore `InboxWriter`) is the
-// thing that is stale or unreachable.
+// ADR-0041 §F.3: the o11y stack itself going stale (no cron tick or ingest
+// for 30 min) is caught here — the API worker's `*/5` cron reads the o11y
+// heartbeat over a service binding and sends `captureMessage` to Sentry.
+// Dispatched from `index.ts#runFiveMinuteCron` through `cron-step.ts#cronStep`.
+// State lives in this Worker's own KV `CACHE`, not `InboxWriter`: this
+// watchdog watches the o11y stack from outside it and must keep working when
+// that stack (and therefore `InboxWriter`) is what's stale or unreachable.
 
 import * as Sentry from "@sentry/cloudflare";
 import type { Env } from "./env.js";
@@ -27,22 +19,11 @@ export interface HeartbeatReport {
 }
 
 /** Structural mirror of `O11yHeartbeat`'s RPC surface
- *  (`workers/o11y/src/heartbeat.ts`), duplicated here rather than imported
- *  (T04-D, see the task Outcome; same reasoning `workers/o11y/src/cost.ts`'s
- *  own `O11yUsageRpc` doc comment gives on the o11y side): the two Workers
- *  are separate `tsconfig.json` projects (each `"include": ["src"]`), so a
- *  type-only import across the worker boundary is unnecessary. `env.O11Y`
- *  stays typed `Fetcher` (T00's own declaration, unchanged) —
- *  `workers/api/wrangler.jsonc` now binds it to the named `O11yHeartbeat`
- *  entrypoint (see that file's comment), so the RPC method below is real at
- *  runtime even though the ambient type does not know it. Fixed round
- *  A-C1: this used to call `.fetch("/_internal/heartbeat")` on the binding,
- *  which only ever worked while the o11y worker's default export answered
- *  that path over HTTP. It no longer does (RPC-only, W1) — without an
- *  `entrypoint` on the binding, `.fetch()` here resolved to the o11y
- *  worker's *default* export, which now 404s that route, permanently
- *  latching the watchdog stale. Calling the named RPC method directly is
- *  both the fix and the reason the binding now needs `entrypoint` set. */
+ *  (`workers/o11y/src/heartbeat.ts`), duplicated rather than imported: the
+ *  two Workers are separate `tsconfig.json` projects. `env.O11Y` stays typed
+ *  `Fetcher`; `workers/api/wrangler.jsonc` binds it to the named
+ *  `O11yHeartbeat` entrypoint, so the RPC method below is real at runtime
+ *  even though the ambient type does not know it. */
 interface O11yHeartbeatRpc {
   heartbeat(): Promise<HeartbeatReport>;
 }
@@ -71,14 +52,11 @@ async function writeWatchdogState(env: Env, state: WatchdogState): Promise<void>
   });
 }
 
-/** Calls `heartbeat()` over the `O11Y` service binding's named
- *  `O11yHeartbeat` RPC entrypoint — never `.fetch()`: the o11y worker's
- *  default export has no HTTP route for this report any more (RPC-only,
- *  W1/A-C1), so a `.fetch()` call here would silently and permanently
- *  regress to always-unreachable. Any failure (missing binding, RPC
- *  rejection, malformed body) is treated the same as a stale heartbeat —
- *  an unreachable o11y worker is exactly the condition this watchdog
- *  exists to catch. */
+/** Calls `heartbeat()` over the `O11Y` binding's named `O11yHeartbeat` RPC
+ *  entrypoint — never `.fetch()`: the o11y worker's default export has no
+ *  HTTP route for this report. Any failure (missing binding, RPC rejection,
+ *  malformed body) is treated as a stale heartbeat — an unreachable o11y
+ *  worker is exactly the condition this watchdog exists to catch. */
 async function fetchHeartbeat(env: Env): Promise<HeartbeatReport | null> {
   const o11y = o11yHeartbeatRpc(env);
   if (!o11y) return null;
@@ -96,15 +74,13 @@ async function fetchHeartbeat(env: Env): Promise<HeartbeatReport | null> {
 }
 
 /**
- * One five-minute cron tick's watchdog check. Sends exactly one `captureMessage`
- * on the transition INTO stale, and one on the transition back to fresh —
- * never on every tick (same fire-once/resolve-once contract ADR §F.3 asks
- * of every alert in this task, mirrored here even though this one channel
- * is Sentry, not Slack).
+ * One five-minute cron tick's watchdog check. Sends exactly one
+ * `captureMessage` on the transition INTO stale, and one on the transition
+ * back to fresh — never on every tick (same fire-once/resolve-once contract
+ * ADR §F.3 asks of every alert).
  *
- * `capture` is injectable (mirrors `cron-step.ts#CronCaptureFn`/
- * `diagnostic.ts#CaptureExceptionFn`) so a test can assert on a transport
- * spy instead of the real SDK call.
+ * `capture` is injectable (mirrors `cron-step.ts#CronCaptureFn`) so a test
+ * can assert on a transport spy instead of the real SDK call.
  */
 export async function checkO11yHeartbeat(
   env: Env,

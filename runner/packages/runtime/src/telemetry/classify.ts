@@ -1,8 +1,8 @@
 // Bot filter and UA classifiers, moved here from
 // `workers/api/src/analytics.ts` (DEV-2030) so both the anonymous-audience
 // counters there and the o11y ingest gates (ADR §B.5 `BOT_RE` filter, §4 blob15
-// `device`) share one definition. `analytics.ts` now imports these — byte-identical
-// regexes, no behaviour change (T00 task "Owns" row).
+// `device`) share one definition. `analytics.ts` imports these — byte-identical
+// regexes, no behaviour change.
 
 export const BOT_RE =
   /bot|crawler|spider|crawling|slurp|bingpreview|headlesschrome|lighthouse|curl\/|wget\/|python-requests|node-fetch|axios\/|monitoring|uptime|pingdom|semrush|ahrefs|facebookexternalhit|whatsapp|telegrambot|preview/i;

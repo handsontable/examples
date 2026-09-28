@@ -1,8 +1,8 @@
 // Observability contract §6 — the browser facade. The app never calls Faro
-// directly (COMMON.md interface 4: `apps/authoring/src/telemetry/index.ts`
-// exports `telemetry: Telemetry`, `noopTelemetry` until `initTelemetry()` runs,
-// and T06 implements the Faro-backed one). No Faro import here — that stays in
-// T06's module, so this file can be imported from `pipeline/` under plain Node.
+// directly: `apps/authoring/src/telemetry/index.ts` exports `telemetry:
+// Telemetry`, `noopTelemetry` until `initTelemetry()` runs, and a separate
+// module implements the Faro-backed one. No Faro import here, so this file
+// can be imported from `pipeline/` under plain Node.
 
 import type { HotAttrs } from "./attrs.js";
 import type { MetricName, MetricValues } from "./metrics.js";
@@ -37,26 +37,13 @@ function mintPageLoadId(): string {
  * real, stable id — call sites that read it to tag `x-hot-session` before init
  * has run must not see an empty string.
  *
- * Lazy on purpose (T05, cross-task fix — see that task's Outcome): the first
- * version minted the id eagerly in a module-top-level IIFE, which called
- * `crypto.randomUUID()` at import time. That is disallowed "global scope"
- * async/random I/O under workerd — `Uncaught Error: Disallowed operation
+ * Lazy on purpose: minting eagerly in a module-top-level IIFE calls
+ * `crypto.randomUUID()` at import time, which is disallowed "global scope"
+ * async/random I/O under workerd (`Uncaught Error: Disallowed operation
  * called within global scope ... generating random values are not allowed
- * within global scope`, thrown at Worker boot, not at a lint or a type error.
- * Measured against a real `wrangler dev`: this module was never actually
- * imported by a running Worker before (T00 typechecked it via throwaway probe
- * files only), so the crash was latent until a real consumer imported the
- * barrel. `pageLoadId()` still returns the exact same id on every call after
- * the first — the contract above is unchanged, only *when* the mint happens.
- *
- * T02 independently hit and fixed the same bug running a real `wrangler dev`
- * for `workers/o11y` (see T02's task Outcome) — T05's fix (this version) is
- * kept on merge. T02's own regression test
- * (`pipeline/telemetry-facade.test.mjs`) was removed on merge: it stubbed
- * `crypto.randomUUID`, cache-busted an import, and asserted zero calls at
- * import / one call on first `pageLoadId()` — the exact same technique and
- * assertions as `pipeline/telemetry-facade-boot-safety.test.mjs` below,
- * which stays as the one copy of that case.
+ * within global scope`, thrown at Worker boot). `pageLoadId()` still returns
+ * the exact same id on every call after the first — only *when* the mint
+ * happens changes.
  */
 let noopPageLoadId: string | undefined;
 export const noopTelemetry: Telemetry = {

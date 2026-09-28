@@ -13,8 +13,8 @@
 // into workers/api — a second copy is a second set of caps to keep in sync.
 
 import { injectedScriptTag, insertInjectedTag } from "./inject-html.js";
-// T08 (ADR §C.5, contract §9): imported from the leaf modules directly, never
-// from `./telemetry/index.js` — `scrub.ts` and `fingerprint.ts` already import
+// ADR §C.5, contract §9: imported from the leaf modules directly, never from
+// `./telemetry/index.js` — `scrub.ts` and `fingerprint.ts` already import
 // `../monitor.js`, so a barrel import here would be a cycle.
 import { LITE_PAYLOAD_MAX_BYTES, type LiteSurface } from "./telemetry/lite.js";
 import type { Framework, HtMajor } from "./telemetry/attrs.js";
@@ -134,16 +134,9 @@ export const PREVIEW_HOST_PLACEHOLDER = "<preview>";
  * sending, which is the precise version; this catches whatever crossed the boundary
  * anyway, including a payload from a demo that never ran the reporter.
  *
- * Fix round (finding Z-A-C1): the label quantifier used to be unbounded
- * (`[a-z0-9-]+`). On a string with no `.demos.handsontable.com` suffix at
- * all (e.g. `"a-"` repeated), every `\b` position started a greedy run to
- * the end of the string, failed the required literal, and backtracked one
- * character at a time — O(n) of work at each of O(n) start positions,
- * O(n²) total (measured: 40k chars ~1.2s, 80k ~4.8s). A DNS label is at
- * most 63 octets by spec (RFC 1035 §2.3.4), so bounding the quantifier to
- * `{1,63}` is not a behavior change for any real hostname — it caps the
- * backtrack at 63 steps per start position, making this O(n) overall. Same
- * fix class as `text-scrub.ts`'s `EMAIL_PATTERN`/`USER_AGENT_PATTERN`.
+ * The label is bounded to `{1,63}` (RFC 1035 §2.3.4), so a suffix-less input
+ * cannot backtrack quadratically; `pipeline/o11y-redos.test.mjs` pins the
+ * timing. Same fix class as `text-scrub.ts`'s `EMAIL_PATTERN`/`USER_AGENT_PATTERN`.
  */
 export function redactPreviewHosts(value: string): string {
   return value.replace(/\b[a-z0-9-]{1,63}\.demos\.handsontable\.com\b/gi, PREVIEW_HOST_PLACEHOLDER);
@@ -363,14 +356,11 @@ export function createMonitorBudget(ceiling: number = MONITOR_EVENT_CEILING): {
  *
  * Used for the Sentry fingerprint, not for the message the issue displays.
  *
- * Fix round (finding Z-A-C1): the input is bounded to
- * {@link NORMALIZE_MESSAGE_INPUT_MAX} chars BEFORE any of the passes below
- * run — the final result is sliced to 200 chars anyway (last line), so
- * nothing past a few thousand input characters can ever survive into the
- * output; truncating first bounds the cost of every pass on a
- * caller-controlled message, independent of whether that pass is itself
- * linear. See rule 1's own comment for the other half of this fix (the
- * identifier-rule regex itself used to be quadratic).
+ * Bounded to {@link NORMALIZE_MESSAGE_INPUT_MAX} chars before any pass below
+ * runs — the result is sliced to 200 chars anyway (last line), so nothing
+ * past a few thousand input characters can survive into the output;
+ * truncating first bounds the cost of every pass on a caller-controlled
+ * message.
  */
 const NORMALIZE_MESSAGE_INPUT_MAX = 4096;
 
@@ -385,17 +375,11 @@ export function normalizeMonitorMessage(message: string): string {
     // number rule below (see the doc comment) and follow the quoted-string
     // rule above.
     //
-    // Fix round (finding Z-A-C1): both quantifiers used to be unbounded
-    // (`[\w$]*` and `(?:\.[\w$]+)*`). On a long identifier-shaped run with
-    // no trailing " is not defined" (e.g. `"a"` repeated), the lookahead
-    // failed at the end of every greedy match and backtracked one
-    // character at a time before the engine moved on to the next start
-    // position — O(n) of work at each of O(n) positions, O(n²) total
-    // (measured via the real `fingerprint()`: 40k chars ~1.9s, 80k ~7.7s).
-    // No real identifier or dotted path is anywhere near 256 characters
-    // per segment or 32 segments deep, so bounding both quantifiers is not
-    // a behavior change for any real message — it caps the backtrack at a
-    // small constant per start position, making this O(n) overall.
+    // Both quantifiers are bounded ({0,256}/{1,32} segments): unbounded, a
+    // long identifier-shaped run with no trailing " is not defined" could
+    // backtrack quadratically (O(n²); measured via the real `fingerprint()`:
+    // 40k chars ~1.9s, 80k ~7.7s). No real identifier or dotted path is
+    // anywhere near that size.
     .replace(/[A-Za-z_$][\w$]{0,256}(?:\.[\w$]{1,256}){0,32}(?= is not defined\b)/g, "<ident>")
     // DEV-2853 rule 2 — the partial locale in a RangeError from Intl, e.g.
     // `Invalid language tag: zh-c` ladders alongside `zh-`, `z`, and the
@@ -883,101 +867,40 @@ export function injectReporter(files: Record<string, string>, entryPath: string)
   return { ...files, [entryPath]: injected };
 }
 
-// ---- T08: the lite beacon — standalone mode for `/d` and `/embed` -------------
-//
-// ADR §C.5 / contract §9. A wholly separate reporter from `REPORTER_SOURCE` above,
-// never composed with it: `REPORTER_SOURCE` only ever runs inside a Tier-1 sandbox
-// entry or a Tier-2 preview document, both framed by the authoring app, which is
-// what makes `postMessage(..., "*")` to `parent` the right transport there.
-//
-// `/d`/`/embed` documents ARE sometimes framed by our own runner — the authoring
-// app's FullMode view (`App.tsx`) frames `/d/:id/` cross-origin to show a saved
-// demo's build full-window — so "no parent frame" is not a claim about every
-// request this reporter ever sees. What is still true, and is the actual reason
-// this needs no runtime parent-detection, is narrower: this reporter is injected
-// only at the `share.ts` serve seam, never into a Tier-1 sandbox entry or a Tier-2
-// preview document, so it never runs anywhere `REPORTER_SOURCE`'s `postMessage`
-// transport would be the right answer — a FullMode-framed `/d/:id/` is still just
-// the public build, standalone-transported exactly like a direct visit, and that
-// framing costs nothing (no listener there expects this reporter's beacon either
-// way). Standalone by construction, not by detection. Keeping the two reporters
-// wholly separate is also what keeps `REPORTER_SOURCE` byte-for-byte unchanged, so
-// the framed Tier-1/Tier-2 tests stay green untouched.
-//
-// It sends far less than the framed reporter: only `error`/`unhandledrejection`
-// (no console wrapping, no fetch/XHR monkey-patching — §9's payload has no
-// `console`/`network` kind at all) and four sampled web vitals, each as its own
-// `navigator.sendBeacon` POST to same-origin `/telemetry/lite` (contract §1: on
-// the same `demos.handsontable.com` zone as `/d` and `/embed` themselves, so this
-// is same-origin regardless of who frames the page).
+// ---- The lite beacon — standalone mode for `/d` and `/embed` ------------
+// ADR §C.5, contract §9. A separate reporter from `REPORTER_SOURCE` above,
+// injected only at the `share.ts` serve seam — standalone by construction,
+// no `postMessage`-to-parent transport needed. Sends only
+// `error`/`unhandledrejection` and four sampled web vitals via
+// `navigator.sendBeacon` to same-origin `/telemetry/lite`.
 
 /** Same-origin beacon target (contract §9). */
 export const LITE_ENDPOINT = "/telemetry/lite";
 
-/** The injection idempotency marker — distinct from `MONITOR_MESSAGE_TYPE`
- *  (never sent in a beacon payload; §9's payload has no such field at all).
+/** The injection idempotency marker — distinct from `MONITOR_MESSAGE_TYPE`.
  *  Deliberately the same string as the reporter's own double-injection guard
- *  property (`window.__hotLiteMonitor`) below, so the marker costs no extra
- *  bytes in the shipped script — one string, two jobs, matched by the test
- *  that pins `injectLiteReporterIntoHtml`'s idempotency. */
+ *  property (`window.__hotLiteMonitor`) below, so it costs no extra bytes. */
 export const LITE_REPORTER_MARKER = "__hotLiteMonitor";
 
 /** §9: "Vitals are sampled at 10% per page view, decided once per page." */
 export const LITE_VITALS_SAMPLE_RATE = 0.1;
 
-/**
- * Client-side truncation caps, in **UTF-8 bytes** — deliberately tighter than
- * the contract's own per-field ceilings (`LITE_MESSAGE_MAX` 500 chars /
- * `LITE_STACK_MAX` 2000 chars, `telemetry/lite.ts`): that module's own doc
- * comment measures a maxed-out `st` alone at ~2150 bytes, already over
- * `LITE_PAYLOAD_MAX_BYTES` (2048) by itself, and says producing a payload
- * that actually fits is the *sender's* job. A first stack frame is enough
- * for a fingerprint; the rest is only volume this reporter would otherwise
- * have to trim away at send time anyway.
- *
- * Bytes, not characters, on purpose (T08-D, fix round I2): a JS string's
- * `.length` counts UTF-16 code units, and every non-ASCII character (a
- * non-English error message, an emoji, a curly quote) costs 2-4 UTF-8 bytes
- * for one `.length` unit — a char-count cap silently let a non-ASCII payload
- * grow past `LITE_PAYLOAD_MAX_BYTES` (2048), which the ingest route then
- * drops outright (`isValidLitePayload`'s own total-byte check), so a
- * non-English error was reported as "sent" client-side and never actually
- * stored. `reporterSource`'s `bt()` (byte-trim) enforces this in the shipped
- * ES5, and `bc()` (build+send) makes a final `bl()` (byte-length) check
- * against the whole serialized payload before ever calling `sendBeacon` —
- * belt and braces against JSON's own escaping (`"`/`\`/control characters
- * each cost 2+ output characters) pushing an already-trimmed payload back
- * over budget.
- */
+/** Client-side truncation caps, in **UTF-8 bytes** — tighter than the
+ *  contract's own per-field ceilings, since a maxed-out stack alone already
+ *  exceeds `LITE_PAYLOAD_MAX_BYTES` (2048). Bytes, not characters: `.length`
+ *  counts UTF-16 code units, so a char-count cap could let a non-ASCII
+ *  payload exceed the byte budget. */
 export const LITE_CLIENT_NAME_MAX_BYTES = 100;
 export const LITE_CLIENT_MESSAGE_MAX = 300;
 export const LITE_CLIENT_STACK_MAX = 300;
 
 /**
  * Size budget for the *injected script itself* — distinct from
- * `LITE_PAYLOAD_MAX_BYTES` (`telemetry/lite.ts`), which bounds one beacon
- * body.
- *
- * T08-D (see the task Outcome): the task's own Goal prose reads "a script
- * under 2 KB." Measured (`pipeline/lite-beacon.test.mjs`) at ~2.8 KB for the
- * `<script>` element's own content with a realistic config, after cutting
- * every inline comment and all non-essential whitespace from the shipped
- * string (the rationale that would normally sit beside this code moved to
- * `reporterSource`'s own doc comment instead, which costs no shipped bytes).
- * What is left is `sendBeacon` transport, truncation, the per-page-once
- * sampling coin flip, and three `PerformanceObserver` registrations (LCP,
- * CLS, INP) each wrapped in its own defensive `try`/`catch` — none of it
- * dead weight. Getting under 2 KB from here means either accepting a
- * correctness cut (documented alternatives considered and rejected: reading
- * `layout-shift`/`event`/`largest-contentful-paint` once via
- * `performance.getEntriesByType` instead of a live, buffered
- * `PerformanceObserver` is the standard *incorrect* shortcut — those entry
- * types are not reliably in the global timeline buffer without an active
- * observer, which this reporter cannot verify without a real browser) or a
- * minifier in the injection path, which this feature does not have. This
- * constant is set from the measured size with headroom for a longer
- * `demo`/`fw` string, not the Goal's literal figure — flagged for the
- * controller in the task's Outcome/Concerns.
+ * `LITE_PAYLOAD_MAX_BYTES`, which bounds one beacon body. Target was under
+ * 2 KB; measured (`pipeline/lite-beacon.test.mjs`) at ~2.8 KB for a
+ * realistic config after cutting every inline comment and non-essential
+ * whitespace. Set from the measured size, with headroom for a longer
+ * `demo`/`fw` string.
  */
 export const LITE_REPORTER_MAX_BYTES = 3072;
 
@@ -1002,63 +925,18 @@ function escapeScriptClose(source: string): string {
 }
 
 /**
- * The standalone reporter, as ES5 source — hand-written for the same reason
- * `REPORTER_SOURCE` is (`pipeline/lite-beacon.test.mjs` parses it with `acorn`
- * `ecmaVersion: 5` and *executes* it against a fake DOM, never just reads it).
+ * The standalone reporter, as ES5 source — parsed and executed by
+ * `pipeline/lite-beacon.test.mjs` against a fake DOM. Written with no inline
+ * comments (the shipped script has its own byte budget,
+ * {@link LITE_REPORTER_MAX_BYTES}). The four vitals are intentional
+ * approximations, not the spec metrics (e.g. LCP is the LAST candidate
+ * before hide, not the first; INP is the single longest `event` duration,
+ * not a 98th-percentile grouping) — see the test file for the exact shape
+ * each measures.
  *
- * Every browser API it touches — `window`, `document`, `navigator`,
- * `performance`, `PerformanceObserver`, `Blob`, `Math`, `Date` — is referenced
- * as a bare global, exactly like `REPORTER_SOURCE`'s `window`/`parent`/etc.: in
- * production these resolve to the real globals; a test can shadow every one of
- * them with `new Function("window", "document", ..., SOURCE)(fakeWindow, ...)`,
- * which is what makes the sampling test able to fix `Math.random()` without
- * touching the real global `Math` (a shared, mutable, cross-test resource).
- *
- * Self-defence rules, same as `REPORTER_SOURCE`: every hook body is wrapped so
- * a throw cannot break the page it observes, and `__hotLiteMonitor` makes a
- * double injection a no-op.
- *
- * Written with no inline comments and minimal whitespace — the shipped script
- * itself has a size budget (`LITE_REPORTER_MAX_BYTES`, `pipeline/lite-beacon.
- * test.mjs`) distinct from the 2 KB *payload* cap; the rationale that would
- * normally sit beside this code lives here instead, where it costs no bytes:
- *
- * - **LCP**: reports the *last* `largest-contentful-paint` candidate observed
- *   before the page hides, not the first — candidates keep arriving until the
- *   first user interaction, and the first one is reliably an under-estimate.
- * - **CLS**: summed for the page's lifetime, not session-windowed. The real
- *   CLS algorithm groups shifts into gap/limit-bounded sessions and reports
- *   the worst window; this is a simpler running total, so it can overstate a
- *   page with several small, separated shifts.
- * - **INP approximation** (documented per the task's Outcome, ADR §C.5): the
- *   longest single `event`-timing entry's `duration` observed during the
- *   page's life, filtered to real interactions (`interactionId > 0`) at the
- *   same 40 ms `durationThreshold` the `web-vitals` library defaults to. This
- *   is *not* the spec metric — real INP groups one interaction's several
- *   events (pointerdown/pointerup/click) into a single duration and reports
- *   the 98th percentile across every interaction in the page's life; this
- *   reports one number, the single longest event seen, unweighted and
- *   ungrouped. It trends the same direction as real INP (a page with one slow
- *   handler shows a high value; a smooth page shows a low one) but is not
- *   comparable to a real-INP number from another source.
- * - **TTFB**: `PerformanceNavigationTiming.responseStart`, the one vital here
- *   that is not an observer/approximation — read once, synchronously, at
- *   report time.
- *
- * All four fire together, once, at `visibilitychange` (hidden) or `pagehide`
- * — never eagerly — because LCP and CLS are only final once the page is done
- * being looked at.
- *
- * Fix round D-I4: `bt(s,n)` (the byte-trim helper) used to `slice(0,-1)` one
- * character at a time, re-encoding the WHOLE string on every iteration — for
- * an authored `Error(hugeString)` message this is quadratic in string length
- * (measured: 10k chars ~100ms, 50k chars ~2.4s, ~40s projected at 200k),
- * synchronous on the main thread, so it could freeze the `/d`/`/embed` host
- * page this reporter is meant to never harm. Now cuts to at most `n`
- * characters first (`slice(0,n)` — every char is at least one UTF-8 byte, so
- * this can only ever need to trim further, never trim too much), THEN runs
- * the byte loop, which is now bounded to at most `n` further iterations over
- * a string of at most `3n` bytes.
+ * `bt(s,n)` cuts to `n` chars first, THEN runs the byte loop, avoiding a
+ * per-character re-encode that would be quadratic for a huge message
+ * (measured: 10k chars ~100ms, 50k ~2.4s).
  */
 function reporterSource(config: LiteReporterConfig): string {
   return `(function(){

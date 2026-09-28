@@ -2,22 +2,8 @@
 // (Faro's `beforeSend`) and authoritatively again at ingest, on the normalised
 // OTLP record (ADR §B.2 step 1). Structural types only — no `@grafana/faro-core`
 // import, so this module stays DOM/Cloudflare-free and importable from
-// `pipeline/` under plain Node (index.ts's header rule).
-//
-// Typechecked against the real `@grafana/faro-web-sdk` types (`apps/authoring`'s
-// actual dependency) with a temporary probe, not just read by eye: a concrete,
-// narrowed `TransportItem<LogEvent>` / `TransportItem<ExceptionEvent>` / etc.
-// passes into and back out of `scrubTelemetry` with zero casts — the shape
-// every real `pushLog`/`pushError`/`pushEvent`/`pushMeasurement` call site
-// produces. The one place a cast is unavoidable is wiring an actual `Config`'s
-// `beforeSend`: Faro types that hook generically over the *whole* item union,
-// `TraceEvent` included, and this module does not model traces (none are
-// exported, ADR §C.4) — modeling it would mean either importing Faro's types
-// here (against this file's own rule) or handling a kind nothing ever sends.
-// T06's wiring is expected to be:
-//
-//   const beforeSend: BeforeSendHook = (item) =>
-//     scrubTelemetry(item as unknown as ScrubbableFaroItem) as TransportItem | null;
+// `pipeline/` under plain Node. Typechecked against the real
+// `@grafana/faro-web-sdk` types with a temporary probe.
 
 import { redactPreviewHosts, type MonitorKind } from "../monitor.js";
 import { stripCodeFrame } from "./fingerprint.js";
@@ -25,49 +11,20 @@ import { browserOf, deviceOf } from "./classify.js";
 import { ALLOWED_ATTRIBUTE_KEYS } from "./attrs.js";
 import { INBOX_RECORD_MAX_BYTES } from "./inbox.js";
 
-// ---- Structural mirrors of the Faro shapes we scrub -----------------------------
-//
-// These match `@grafana/faro-core`'s `TransportItem<P>` / `Meta` closely enough
-// that a real Faro item satisfies them structurally, without importing the
-// package — verified against the installed `@grafana/faro-web-sdk` types
-// (`apps/authoring`'s real dependency) with a temporary typecheck probe, not
-// just by reading the source. Two things a first draft got wrong, both fixed
-// here:
-//
-// 1. **No `[key: string]: unknown` index signatures.** A real `TransportItem`
-//    (and its nested `LogEvent`/`ExceptionEvent`/`Meta`/`ExceptionStackFrame`)
-//    carries none, and TS requires the *source* type to also have a matching
-//    index signature when the *target* parameter type has one — so a real
-//    Faro item failed to satisfy these interfaces even though every field it
-//    needs is declared. Only the fields the scrubber reads or removes are
-//    declared; passing a richer real object still works (TS's excess-property
-//    check only applies to object literals, not to a variable of a wider
-//    type), it just cannot be read back through the removed signature.
-// 2. **`type` is `string`, not a literal union.** Faro's own `type` is the
-//    string *enum* `TransportItemType`, not a plain string-literal union —
-//    TS does not consider an enum member assignable to an unrelated literal
-//    union even though the runtime values are identical strings. Every
-//    runtime check here (`item.type === "log"`) still works against a plain
-//    `string`; only the type-level union is gone.
+// ---- Structural mirrors of the Faro shapes we scrub ---------------------
+// Match `@grafana/faro-core`'s `TransportItem<P>`/`Meta` closely enough that
+// a real Faro item satisfies them structurally, without importing the
+// package (verified against the real `@grafana/faro-web-sdk` types with a
+// temporary probe). No `[key: string]: unknown` index signature: a real
+// `TransportItem` carries none, and TS requires the source type to match.
+// `type` is `string`, not `TransportItemType`'s literal union: TS does not
+// consider an enum member assignable to an unrelated literal union.
 export interface ScrubbableFaroStackFrame {
   filename?: string;
-  /** T03 addition (drain-time symbolication, ADR §C.3): the real
-   *  `@grafana/faro-core` `ExceptionStackFrame` (`api/exceptions/types.d.ts`)
-   *  already carries `function`/`lineno`/`colno` on every frame at runtime —
-   *  `structuredClone` in `scrubTelemetry` below has always copied them
-   *  through unchanged, only this *type* never declared them, so nothing
-   *  downstream could read them. Without these three fields a symbolicator
-   *  has no line/column to resolve and no minified function name to fall
-   *  back to — `convert.ts#faroItemToRecord` needs all three to embed a
-   *  stack trace in the record body at all (T03-D, see that task's Outcome
-   *  for the full reasoning: the pre-T03 `faroBody()` dropped
-   *  `payload.stacktrace` entirely, so a Faro exception record carried no
-   *  frame data anywhere and criterion 5 could not be satisfied by any
-   *  drain-time code). No new redaction rule needed: `function` is a JS
-   *  identifier (or empty string for an anonymous frame), never a URL;
-   *  `lineno`/`colno` are numbers. `filename` already goes through
-   *  `redactPreviewHosts`/`stripQueryAndFragment` a few lines below,
-   *  unchanged. */
+  /** ADR §C.3 drain-time symbolication: the real `ExceptionStackFrame`
+   *  already carries these at runtime; `structuredClone` copies them
+   *  through unchanged, only the type never declared them. `function` is a
+   *  JS identifier, never a URL — no new redaction rule needed. */
   function?: string;
   lineno?: number;
   colno?: number;
@@ -103,7 +60,7 @@ export interface ScrubbableFaroMeta {
   browser?: { userAgent?: string; browser?: string; device?: string };
   /** Faro's `app` config — `name`/`version`/`environment` are exactly `service.name`
    *  / `service.version` / `deployment.environment.name` (§3) under Faro's own
-   *  naming, set once at `initTelemetry()` (T06). */
+   *  naming, set once at `initTelemetry()`. */
   app?: { name?: string; version?: string; environment?: string };
   os?: unknown;
   device?: unknown;
@@ -155,19 +112,9 @@ export function stripQueryAndFragment(value: string): string {
 }
 
 /** Faro's console instrumentation is disabled (ADR §E.4), but a demo-runtime
- *  `console-error`/`console-warn` relay (`monitor.ts`) can still surface as a
- *  Faro log item, tagged by whoever pushes it with `context["hot.relay"]` set
- *  to one of those two `MonitorKind`s (T00-D4 — the tagging convention
- *  T06/T07 must use for this check to find them). Deliberately **not**
- *  `context["hot.kind"]`: that key's contract value set is the Faro item kind
- *  (`exception`/`log`/`event`/`measurement`, §3) and `convert.ts` always
- *  overwrites it with `item.type` regardless of what the client sent — a
- *  console-tagged value there would never survive to be checked. `hot.relay`
- *  is also not on `ALLOWED_ATTRIBUTE_KEYS`, so even if this check somehow
- *  missed one, the marker itself is scrubbed away, never stored.
- *
- *  §3 forbids console output outright, so a matching item is dropped, not
- *  scrubbed. */
+ *  `console-error`/`console-warn` relay (`monitor.ts`) can surface as a Faro
+ *  log item, tagged via `context["hot.relay"]`. §3 forbids console output
+ *  outright, so a matching item is dropped, not scrubbed. */
 const CONSOLE_KINDS: ReadonlySet<MonitorKind> = new Set(["console-error", "console-warn"]);
 
 function isConsoleItem(item: ScrubbableFaroItem): boolean {
@@ -176,11 +123,9 @@ function isConsoleItem(item: ScrubbableFaroItem): boolean {
   return typeof kind === "string" && CONSOLE_KINDS.has(kind as MonitorKind);
 }
 
-/** §3: "reduce any browser meta to the device and browser classes
- *  `analytics.ts` uses" — replaces the rich `MetaBrowser`/`MetaOS`/`MetaDevice`
- *  objects (raw user-agent string, OS build id, device model — all
- *  fingerprint-shaped) with the same two coarse classes `classify.ts` computes
- *  for the API worker's anonymous analytics. */
+/** §3: "reduce any browser meta to the device and browser classes" —
+ *  replaces the rich `MetaBrowser`/`MetaOS`/`MetaDevice` objects with the
+ *  same two coarse classes `classify.ts` computes for anonymous analytics. */
 function reduceBrowserMeta(meta: ScrubbableFaroMeta): void {
   const ua = meta.browser?.userAgent;
   if (ua !== undefined || meta.browser !== undefined || meta.os !== undefined || meta.device !== undefined) {
@@ -199,19 +144,11 @@ function allowlistAttributes(attrs: Record<string, string> | undefined): Record<
   return out;
 }
 
-/**
- * §3: strips a query string/fragment off a URL merely *embedded* inside a
- * message/value string — unlike `stripQueryAndFragment` above, which only
- * strips a field that IS a URL end to end (`meta.page.url`, a stack frame's
- * `filename`). Exported so `workers/o11y/src/normalise/text-scrub.ts` runs
- * the same rule server-side, on every stored record's free body text, as
- * its own extra pass beyond what this module alone guarantees.
- *
- * Matches after `redactPreviewHosts` has already replaced a preview host
- * with the literal `<preview>` placeholder (`scrubText` below runs this
- * last), so the pattern optionally consumes that placeholder before
- * continuing into the (ordinary, `<`/`>`-free) path and query.
- */
+/** §3: strips a query/fragment off a URL *embedded* inside a message/value
+ *  string (unlike `stripQueryAndFragment`, which only handles a field that
+ *  IS a URL). Exported so `text-scrub.ts` runs the same rule server-side.
+ *  Matches after `redactPreviewHosts` (`scrubText` runs this last), so the
+ *  pattern optionally consumes the `<preview>` placeholder first. */
 const EMBEDDED_URL_PATTERN = /\bhttps?:\/\/(?:<preview>)?[^\s"'<>)]*/gi;
 
 export function stripUrlQueriesInText(text: string): string {
@@ -222,43 +159,21 @@ export function stripUrlQueriesInText(text: string): string {
 }
 
 /**
- * Contract §3's "never sent" list includes "an IP". Exported so
- * `workers/o11y/src/normalise/text-scrub.ts` runs the same rule
- * server-side; applied browser-side too so a stripped IP never leaves the
- * client at all, not only at ingest.
+ * Contract §3's "never sent" list includes "an IP" — applied browser-side
+ * too, exported for `text-scrub.ts`'s server-side pass. Bounded quantifiers
+ * throughout: no ReDoS backtrack regardless of input shape
+ * (`pipeline/o11y-redos.test.mjs` pins the timing).
  *
- * Bounded from the start — no unbounded quantifier, so no ReDoS backtrack
- * regardless of input shape; see `pipeline/o11y-redos.test.mjs` for the
- * adversarial-input timing proof.
- *
- * IPv4: four dotted octets 0–255, boundary-guarded on both ends so a
- * version string never matches (`18.1.1` has too few dotted numbers to
- * reach the pattern; `1.2.3.4-beta`/`1.2.3.4.5` are rejected by the
- * trailing lookahead), while a trailing `.` with nothing/a non-digit after
- * it — an IP that simply ends a sentence — still redacts.
- *
- * The START boundary is a CAPTURING alternation (`^` or one non-`[\w.-]`
- * character), never a lookbehind: `new RegExp` with a lookbehind
- * (`(?<!...)`, ES2018) throws on Safari before 16.4 (March 2023), and this
- * module is imported EAGERLY at browser boot (`apps/authoring/src/main.tsx`
- * → `telemetry/index.js` → this package) — a throw here at module
- * evaluation time would fail the whole telemetry module's import on any
- * older Safari, exactly the class of eager-import regression
- * `pipeline/telemetry-facade-boot-safety.test.mjs` exists to catch. The
- * trailing boundary stays a plain negative LOOKAHEAD (`(?!...)`), which has
- * always been supported — only lookBEHIND is the compatibility risk. The
- * replacer functions below re-attach the captured prefix character.
+ * The START boundary is a capturing alternation, never a lookbehind:
+ * `new RegExp` with `(?<!...)` throws on Safari <16.4, and this module is
+ * imported EAGERLY at browser boot — a throw here would fail the whole
+ * telemetry import on any older Safari.
  */
 const IPV4_OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d{2}|[1-9]?\\d)";
 const IPV4_PATTERN = new RegExp(`(^|[^\\w.-])(?:${IPV4_OCTET}\\.){3}${IPV4_OCTET}(?![\\w-]|\\.\\d)`, "g");
 
-/** IPv6, the standard bounded form (7 alternatives covering the
- *  uncompressed 8-group shape and every valid position of one `::`
- *  compression) — same shape as the IPv4 pattern above: a small fixed
- *  alternation built only from `{1,4}`/`{1,7}`-capped quantifiers, so a
- *  single match attempt costs a small constant regardless of input length.
- *  Same capturing-prefix boundary as IPv4 above, for the same lookbehind
- *  compatibility reason. */
+/** IPv6, the standard bounded form (7 alternatives, all `{1,4}`/`{1,7}`-capped) —
+ *  same lookbehind-avoidance boundary as IPv4 above. */
 const IPV6_GROUP = "[0-9A-Fa-f]{1,4}";
 const IPV6_PATTERN = new RegExp(
   "(^|[^\\w:])(?:" +
@@ -285,26 +200,15 @@ export function redactIpInText(text: string): string {
 }
 
 /**
- * ReDoS defense-in-depth (finding Z-A-C1, step 2 "truncate first"): bound a
- * free-text string to this length BEFORE any scrub/redact regex in this
- * module (or `../monitor.js`'s `redactPreviewHosts`, or
- * `workers/o11y/src/normalise/text-scrub.ts`'s own passes) ever sees it —
- * regardless of whether that particular regex is itself linear-time, so a
- * pattern this fix round did not identify still has a bounded worst case.
+ * ReDoS defense-in-depth: bound a free-text string to this length BEFORE any
+ * scrub/redact regex in this module ever sees it, so an unidentified pattern
+ * still has a bounded worst case.
  *
- * Set to {@link INBOX_RECORD_MAX_BYTES} (contract §8's own "records over
- * 256 KB are dropped" limit), not a smaller number: a smaller cap would
- * change what a legitimately-long (but still under the record limit)
- * message/body looks like once scrubbed, and — concretely —
- * `pipeline/o11y-normalise.test.mjs`'s two 300 KB-message oversize tests
- * rely on the untruncated length surviving scrub far enough that the
- * record-level size check (which runs AFTER scrubbing) still measures over
- * the limit. Truncating at exactly that limit keeps both true: no single
- * field can ever push regex cost past what a 256 KB scan already costs
- * (trivial once every pattern is linear, see `redactPreviewHosts`'s and
- * `EMAIL_PATTERN`'s own fix-round comments), and the oversize tests are
- * unaffected because the JSON structure wrapped around a maxed-out field
- * always pushes the whole record past the same limit anyway.
+ * Set to {@link INBOX_RECORD_MAX_BYTES} (contract §8's 256 KB drop limit),
+ * not a smaller number: `pipeline/o11y-normalise.test.mjs`'s 300 KB-message
+ * oversize tests rely on the untruncated length surviving scrub far enough
+ * that the record-level size check (which runs AFTER scrubbing) still
+ * measures over the limit.
  */
 export const SCRUB_TEXT_MAX_CHARS = INBOX_RECORD_MAX_BYTES;
 
@@ -318,15 +222,11 @@ function scrubText(value: string | undefined): string | undefined {
 }
 
 /**
- * §3: "`redactPreviewHosts` on every string" — not only the message/URL
- * fields the targeted rules above already cover. A preview URL is a session
- * credential (`monitor.ts`'s own words), so it must never survive in an
- * allowlisted attribute value, a resource attribute (`hot.framework` is
- * client-supplied and becomes a Loki label), or any other string this
- * scrubber does not name individually. Walks every string leaf of a plain
- * object/array tree in place; `redactPreviewHosts` is a pure regex replace,
- * so re-applying it to a string already handled above is a no-op — this can
- * safely run last, after every targeted rule, regardless of order.
+ * §3: "`redactPreviewHosts` on every string" — not only the fields the
+ * targeted rules above cover. A preview URL is a session credential, so it
+ * must never survive in an allowlisted attribute or resource attribute
+ * (`hot.framework` becomes a Loki label). Walks every string leaf in place;
+ * idempotent, so it can safely run last, after every targeted rule.
  */
 function redactStringsDeep<V>(value: V): V {
   if (typeof value === "string") return redactPreviewHosts(truncateForScrub(value)) as V;
@@ -361,7 +261,7 @@ function redactStringsDeep<V>(value: V): V {
  * Babel code frames from message-bearing text; allowlist `attributes` /
  * `resourceAttributes` / `context` (§3's forbidden attributes — `url.full`, geo,
  * ASN, the user pseudonym, an email, an IP, a user-agent string — are simply
- * never on the allowlist, T00-D1); finally, `redactPreviewHosts` on every
+ * never on the allowlist); finally, `redactPreviewHosts` on every
  * remaining string in the record, not only the fields named above — an
  * allowlisted attribute value (`session.id`, `hot.framework`) is still
  * client-supplied and can carry a preview host too.
@@ -380,12 +280,12 @@ export function scrubTelemetry<T extends Scrubbable>(record: T): T | null {
     }
 
     for (const frame of clone.payload.stacktrace?.frames ?? []) {
-      // Fix round (finding A-M1): an untrusted client can send a `null`/
-      // non-object entry inside `stacktrace.frames` (`{"stacktrace":
-      // {"frames":[null]}}` is valid JSON) — `frame.filename` on a `null`
-      // threw a `TypeError` that escaped every caller as an uncaught `500`,
-      // contradicting this module's own "never a 500" contract. Skipped,
-      // not scrubbed: there is nothing in a non-object frame to redact.
+      // An untrusted client can send a `null`/non-object entry inside
+      // `stacktrace.frames` (`{"stacktrace": {"frames":[null]}}` is valid
+      // JSON) — `frame.filename` on a `null` would throw a `TypeError` that
+      // escapes as an uncaught `500`, contradicting this module's own
+      // "never a 500" contract. Skipped, not scrubbed: there is nothing in
+      // a non-object frame to redact.
       if (!frame || typeof frame !== "object") continue;
       // A stack frame's `filename` is a URL-valued field too (a bundler's
       // cache-busting `?t=`/`?v=` query string shows up here as often as on

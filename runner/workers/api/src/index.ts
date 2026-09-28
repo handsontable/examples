@@ -91,10 +91,9 @@ import {
 } from "./telemetry/index.js";
 import { checkO11yHeartbeat } from "./o11y-watchdog.js";
 
-// T04's "register the usage entrypoint" (this file's Shared row): a real
-// `WorkerEntrypoint`, not an HTTP route — see `o11y-usage.ts`'s own header
-// for why. `workers/o11y/wrangler.jsonc` binds `API` to this exact name via
-// `"entrypoint": "O11yUsage"`.
+// A real `WorkerEntrypoint`, not an HTTP route — see `o11y-usage.ts`'s own
+// header for why. `workers/o11y/wrangler.jsonc` binds `API` to this exact
+// name via `"entrypoint": "O11yUsage"`.
 export { O11yUsage } from "./o11y-usage.js";
 
 // proxyToSandbox() hard-requires a single DO namespace literally named `Sandbox`,
@@ -181,18 +180,10 @@ class SandboxBaseWithSleep extends SandboxBase {
   /** One Sentry event per overrunning boot, not one per HMR retry. */
   private bootFailureReported = false;
 
-  /**
-   * F14 (W-triage): the framework `POST /api/session` created this session
-   * with, so a LATER, unrelated request against this same DO —
-   * `previewBootFailureResponse`, reachable minutes or restarts after create
-   * — can still label its `container.boot_ms window_exceeded` point
-   * (contract §5's `framework` blob). Set once, best-effort, by
-   * `setFramework` right after create; also persisted to durable storage
-   * (unlike `bootStartedAt` above) because "since this container started" is
-   * meaningless to recompute after an isolate eviction, but the framework a
-   * session was created with does not change — reading it back in `onStart`
-   * costs one storage read per container start and never biases the metric.
-   */
+  /** The framework this session was created with (`setFramework`), so a
+   *  LATER request against this same DO can label `container.boot_ms
+   *  window_exceeded`. Persisted to storage since "since container started"
+   *  cannot be recomputed after an isolate eviction. */
   private framework: string | null = null;
   private static readonly FRAMEWORK_STORAGE_KEY = "o11y:boot-framework";
 
@@ -283,13 +274,10 @@ class SandboxBaseWithSleep extends SandboxBase {
     if (descriptor.report && !this.bootFailureReported) {
       this.bootFailureReported = true;
       const env = this.env as Env;
-      // ADR-0041 §E.1: "the preview boot-window report" is named explicitly as
-      // a diagnostic (handled) capture — it moves to the new stack always and
-      // to Sentry only while SENTRY_SCOPE is "full". Fingerprinted away from
-      // the raw error either way: without this the surviving events land in
-      // the same issue as the 500s this change removes, and the one signal
-      // that tells "the fix worked" from "the report never fired" — volume
-      // dropping to near zero rather than to exactly zero — is unreadable.
+      // ADR-0041 §E.1: a diagnostic (handled) capture — always on the new
+      // stack, to Sentry only while SENTRY_SCOPE is "full". Fingerprinted
+      // away from the raw error so surviving events stay countable as a
+      // capacity signal.
       reportDiagnostic(env, err, {
         context: "preview-boot-window-exceeded",
         routeClass: "api/session/:id/*",
@@ -297,24 +285,11 @@ class SandboxBaseWithSleep extends SandboxBase {
         sentryFingerprint: ["preview-boot-window-exceeded"],
       });
       // `container.boot_ms`, outcome `window_exceeded` — not `session.start`'s
-      // `boot_timeout` (advisor review, second pass): this DO fetch override
-      // fires from EVERY refused preview request past the boot window,
-      // including a dev server that crashes mid-session long after its
-      // `POST /api/session` already returned "ready" (the class comment on
-      // `bootStartedAt` documents the re-stamp-on-first-refusal behaviour that
-      // makes this not a boot timeout at all in that case). Double-counting
-      // `session.start` — one `ready` point from the create, then a second,
-      // unrelated `boot_timeout` point from a later mid-session crash, for the
-      // SAME session — would corrupt `SUM(double1)` reads and any ratio T04's
-      // alerts build on `session.start`'s own outcome mix. `reason` is not
-      // available at this call site and is left unset — optional per the
-      // metric's own blob list, not a validation error. `framework` (F14,
-      // W-triage) IS available, best-effort, via `this.framework` — set by
-      // `setFramework` right after create and rehydrated in `onStart` — so
-      // the `tier2-sessions` panel's `blob6 IN (${framework})` filter has
-      // something to match; a session created before this fix, or one whose
-      // `setFramework` RPC never landed, still gets a framework-less point,
-      // same as today.
+      // `boot_timeout`: this DO fetch override can fire long after
+      // `POST /api/session` already returned "ready" (a mid-session crash).
+      // Double-counting `session.start` here would corrupt `SUM(double1)`
+      // reads and any ratio alerts build on its outcome mix. `framework` is
+      // best-effort via `this.framework`, set by `setFramework`.
       void emitPoint(
         env,
         "container.boot_ms",
@@ -442,10 +417,8 @@ type SandboxLike = {
   startProcess(cmd: string, opts?: { cwd?: string; env?: Record<string, string> }): Promise<unknown>;
   exposePort(port: number, opts?: { hostname?: string }): Promise<{ url?: string; exposedAt?: string }>;
   destroy(): Promise<unknown>;
-  // F14: best-effort framework hand-off so a later, unrelated request against
-  // this same DO (`previewBootFailureResponse`, on a preview request that can
-  // arrive long after create) can label its `container.boot_ms
-  // window_exceeded` point — see `SandboxBaseWithSleep#setFramework`.
+  // Best-effort framework hand-off for `container.boot_ms window_exceeded`
+  // — see `SandboxBaseWithSleep#setFramework`.
   setFramework(framework: string): Promise<void>;
 };
 // Cast the function itself so TS never instantiates its deep generic return.
@@ -494,13 +467,10 @@ async function putTombstone(env: Env, sessionId: string, marker: string): Promis
  * to write an admin-only variant that skips it and leaks the container it was
  * clicked to reclaim.
  *
- * `endReason` feeds `session.end` (contract §5): `"pagehide"` from the
- * client's own teardown (the default — this function's original, only
- * caller), `"admin"` from the panel's kill button. `"admin"` is not one of
- * the contract's four closed `session.end` reasons, so that path emits no
- * point (T05-D — no fitting label exists yet); `"teardown_failed"` always
- * overrides it below when the platform declines the destroy, regardless of
- * which caller asked for it.
+ * `endReason` feeds `session.end` (contract §5): `"pagehide"` (default) or
+ * `"admin"` from the panel's kill button, which emits no point (not one of
+ * the contract's four closed reasons); `"teardown_failed"` overrides both
+ * when the platform declines the destroy.
  */
 async function teardownLiveSession(
   env: Env,
@@ -537,12 +507,9 @@ async function teardownLiveSession(
   // teardown path that knows the session is over for good. It also drops the
   // meter key, which is what takes the row off the admin panel.
   //
-  // `session.end` framework (W-triage, adjacent to F14): this handler only
-  // ever has a `sessionId`, never the framework the session was created
-  // with — the meter is the one piece of state that already lives from
-  // create to teardown under that key, so its (now-final) read is also
-  // where `session.end`'s `framework` blob comes from. `undefined` (a
-  // pre-fix meter, or a KV miss) degrades to today's framework-less point.
+  // `session.end` framework: the meter is the only state that lives from
+  // create to teardown under this key, so its final read is also where the
+  // `framework` blob comes from. `undefined` degrades to a framework-less point.
   const framework = await meterSession(env, sessionId, { final: true });
   const sandbox = liveSbx(env, sessionId);
   // Releasing a container must not need one (DEV-2556, Sentry DEMOS-1).
@@ -575,16 +542,10 @@ async function teardownLiveSession(
     // retained. Capacity events are rare (two in 90 days), which makes the
     // expected number of surviving log lines a fraction of one.
     //
-    // So the event still goes to Sentry (while SENTRY_SCOPE is "full" — this is
-    // a handled refusal, ADR-0041 §E.1's "handled refusals" class, not an
-    // escape) — a `warning` that no longer fails the request, instead of the
-    // 500 it used to ride in on. Fingerprinted for the reason the preview-boot
-    // capture is, and because this project groups on the culprit
-    // `Object.fetch(index)`: without one this would land back in the same
-    // grab-bag as DEMOS-1 and be unreadable as a capacity signal. `beforeSend`
-    // (rehomeBudgetAlert) only re-homes `context: "budget-alert"` and drops
-    // nothing, so a warning arrives. The structured line and `error.handled`
-    // point below are the always-on signal now — see `reportDiagnostic`.
+    // So the event also goes to Sentry, as a `warning` (a handled refusal,
+    // ADR-0041 §E.1, not an escape), fingerprinted so it doesn't land in the
+    // same grab-bag as DEMOS-1. The structured line and `error.handled`
+    // point below are the always-on signal — see `reportDiagnostic`.
     //
     // This matters most for `container service is unreachable`, the weakest
     // member of `isExpectedTeardownFailure`: unlike the other three it does NOT
@@ -609,19 +570,14 @@ function cors(resp: Response): Response {
   // dev proxy are both same-origin, so its absence never surfaced — but a dev
   // pointing VITE_API_BASE straight at :8787 fails preflight without it.
   h.set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  // `x-hot-session` (T11): T05/T06 wired `apiHeaders()` onto nearly every
-  // fetch call site in `apps/authoring/src` (the o11y session join, contract
-  // §6) after this list was last written — same "prod/the vite proxy are
-  // same-origin, so it never surfaced" blind spot as the PUT comment above.
-  // Found live running this task's own required local walkthrough (not by
-  // reading source): a direct cross-origin `VITE_API_BASE` build (the same
-  // shape `e2e/telemetry-metrics.spec.ts` already uses) failed CORS
-  // preflight on `/api/profile`, `/api/versions`, `/api/budget`,
-  // `/api/beacon` and, load-bearing for this task's own Fork+Save flow, the
-  // demo-save endpoint — every one of those calls now sends `x-hot-session`.
-  // T07's own passing telemetry-metrics.spec.ts run never caught this: none
-  // of its assertions depend on those particular calls succeeding, so the
-  // preflight failures were silent background console errors.
+  // `x-hot-session`: `apiHeaders()` is wired onto nearly every fetch call
+  // site in `apps/authoring/src` (the o11y session join, contract §6). Prod
+  // and the vite dev proxy are both same-origin, so its absence never
+  // surfaced — same blind spot as the PUT comment above. A direct
+  // cross-origin `VITE_API_BASE` build (the same shape
+  // `e2e/telemetry-metrics.spec.ts` uses) fails CORS preflight on
+  // `/api/profile`, `/api/versions`, `/api/budget`, `/api/beacon` and the
+  // demo-save endpoint without it.
   h.set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-hot-session");
   return new Response(resp.body, { status: resp.status, headers: h });
 }
@@ -852,13 +808,9 @@ async function writeFiles(sandbox: SandboxLike, files: Record<string, string>) {
 }
 
 /**
- * ADR-0041 §D: "one structured JSON line per non-proxy request ... plus an
- * `api.request` Analytics Engine point"; "the preview proxy path emits
- * nothing per request." `fetch()` below keeps the proxy branch untouched
- * (return before this ever runs) and calls this for every other request,
- * timing it and logging/pointing the result — never blocking the response
- * itself (`ctx.waitUntil`, matching the "never block on Analytics Engine"
- * trap for the point half too).
+ * ADR-0041 §D: one structured JSON line plus an `api.request` point per
+ * non-proxy request (the preview proxy path emits nothing per request).
+ * Never blocks the response (`ctx.waitUntil`).
  */
 async function recordRequestSignal(
   env: Env,
@@ -876,11 +828,9 @@ async function recordRequestSignal(
     status: response.status,
     duration_ms: durationMs,
     cf_ray: request.headers.get("cf-ray") ?? "",
-    // Minor triage item 8: kept only when shaped like a real page-load id
-    // (`telemetry/lines.ts#validSessionId`'s own doc comment) — an arbitrary
-    // client-controlled header value must not land verbatim in Loki
-    // structured metadata. `demoIdFromPath` (`route-class.ts`) does the
-    // matching shape check for `hot.demo_id` internally.
+    // `validSessionId`: kept only when shaped like a real page-load id — an
+    // arbitrary client-controlled header value must not land verbatim in
+    // Loki structured metadata.
     session_id: validSessionId(request.headers.get("x-hot-session")),
     demo_id: demoIdFromPath(pathname),
   });
@@ -905,9 +855,8 @@ export default Sentry.withSentry(sentryOptions, {
     // monitor rewrite so its bytes are metered too.
     // Our own boot-failure page (DEV-2537) is not a dev-server document and has
     // no demo to monitor or re-theme — skip both injections, but still meter the
-    // bytes. Nothing is logged or pointed here — ADR-0041 §D, "the preview proxy
-    // path emits nothing per request" (every module request of every live
-    // preview would otherwise multiply this).
+    // bytes. Nothing is logged or pointed here (ADR-0041 §D): every module
+    // request of every live preview would otherwise multiply it.
     if (proxied) {
       const body = proxied.headers.has(PREVIEW_BOOTING_HEADER)
         ? proxied
@@ -934,9 +883,9 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // POST /api/session  { framework, files, sessionId? } -> { sessionId, previewUrl }
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "session" && parts.length === 2) {
         // Unparseable JSON (this route is public — anonymous, and reachable
-        // by anything that sends garbage) used to fall through to the fetch
-        // catch-all's generic 500, polluting the `api.request` 5xx rate and
-        // the `api-5xx-rate` alert with what is really a 400-shaped client
+        // by anything that sends garbage) would otherwise fall through to
+        // the fetch catch-all's generic 500, polluting the `api.request`
+        // 5xx rate and the `api-5xx-rate` alert with what is really a 400-shaped client
         // mistake. `.catch(() => null)` here, same as every other public
         // POST route's `request.json()` call in this file, so a parse
         // failure reaches the existing `isPlainRecord` check (`null` fails
@@ -1037,7 +986,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         // `return`/`throw` inside stays exactly as it was — `withSpan` only
         // wraps, it does not change control flow, see `spans.ts`).
         return await withSpan("session.start", async () => {
-        // F14 (W-triage): `container.boot_ms` timing, set only once the
+        // `container.boot_ms` timing, set only once the
         // `container.boot` span below actually starts — a throw earlier in
         // this try (metering, `writeFiles`) never booted a container, so it
         // must not count as a `container.boot_ms` outcome. `null` also
@@ -1047,14 +996,14 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // Billing starts at the first sandbox RPC, so the awake-window meter
           // starts here rather than after a successful boot — a create that
           // throws half-way still ran a container. `session.end`'s
-          // `framework` blob (W-triage, adjacent to F14) rides along on the
-          // same meter: it is the only state that already lives from create
+          // `framework` blob rides along on the same meter: it is the only
+          // state that already lives from create
           // to teardown under this session id.
           await startSessionMeter(env, sessionId, undefined, body.framework);
           // Best-effort: lets a later, unrelated request (the DO's own
           // `previewBootFailureResponse`, hours or restarts away) attach this
           // session's framework to its own `container.boot_ms window_exceeded`
-          // point (contract §5 / W-triage F14 adjacent note). A KV hiccup here
+          // point (contract §5). A KV hiccup here
           // must not fail the create — the window_exceeded point already
           // degrades to framework-less if this never lands. Wrapped in a real
           // try/catch, not just `.catch()`: an RPC method the SDK's stub
@@ -1131,7 +1080,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // (DEV-2541/DEV-2537 above), not the file writes or budget checks
           // around it.
           //
-          // F14: the SAME two RPCs also give `container.boot_ms` (contract §5)
+          // The SAME two RPCs also give `container.boot_ms` (contract §5)
           // its clock — container start to port exposed, NOT dev-server ready
           // (that is the browser's own `session.start_ms`, through to
           // `data-preview-status="ready"`). Stamped immediately before the
@@ -1169,10 +1118,10 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // (browser) is what measures through to `data-preview-status="ready"`.
           // A race with a client DELETE that arrived mid-create is not scored
           // either way: the visitor is already gone, so neither outcome is
-          // meaningful (T05-D).
+          // meaningful.
           if (!closedRace) {
             void emitSessionStart("ready");
-            // F14: `bootStartedAt` is always set here — it is stamped right
+            // `bootStartedAt` is always set here — it is stamped right
             // before the span this branch's success depends on.
             void emitPoint(
               env,
@@ -1183,7 +1132,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           }
           return closedRace ?? json({ sessionId, previewUrl, port: dev.port });
         } catch (err) {
-          // F14: measured at catch ENTRY, before `closedWhileCreating()`'s own
+          // Measured at catch ENTRY, before `closedWhileCreating()`'s own
           // KV read (and everything else this branch does) can inflate it.
           const errorAt = Date.now();
           // A create step that throws may still have left a booted container
@@ -1242,9 +1191,9 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // were added anywhere in this fix.
           if (isContainerStartingFailure(err)) {
             console.warn(`[session] ${body.framework} session ${sessionId}: container never became ready`);
-            // Handled refusal (ADR-0041 §E.1) — was an unconditional Sentry
-            // capture; now the scope switch, plus the structured line and
-            // `error.handled` point that make it visible without Sentry too.
+            // Handled refusal (ADR-0041 §E.1): the scope switch, plus the
+            // structured line and `error.handled` point, make it visible
+            // without Sentry too.
             reportDiagnostic(env, err, {
               context: "tier2-session-container-starting",
               routeClass: "api/session",
@@ -1256,7 +1205,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             return json({ error: CONTAINER_STARTING_CODE, message: containerStartingMessage }, 503);
           }
           void emitSessionStart("error");
-          // F14: only the genuinely unrecognised failures reach here —
+          // Only the genuinely unrecognised failures reach here —
           // `isAtCapacityFailure`/`isContainerStartingFailure` both returned
           // above with their own `session.start` outcome, which already
           // covers those refusals; double-counting them as `container.boot_ms
@@ -1542,9 +1491,9 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       if (request.method === "POST" && parts[0] === "api" && parts[1] === "demos" && parts.length === 2) {
         const id = await authenticate(request, env);
         if (!id) return json({ error: "unauthorized" }, 401);
-        // Malformed JSON, or a JSON array where an object is expected, used
-        // to fall through to the fetch catch-all's generic 500 (F33) — same
-        // class the session routes' fix already closed, and the same fix:
+        // Malformed JSON, or a JSON array where an object is expected, would
+        // otherwise fall through to the fetch catch-all's generic 500 — same
+        // class the session routes close, and the same fix:
         // `.catch(() => null)` reaches the existing `isPlainRecord` check
         // instead of throwing (unparseable body) or a bare property read on
         // a non-record throwing past this handler (an array body).
@@ -1796,21 +1745,12 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
 
       // GET /api/demos/:id  (public) — metadata; 410 if revoked
       //
-      // T08 (contract §5, ADR §F.2 "Share & build"), fix round R4 (F20 count
-      // reconciliation: "60 points for 11 share views", and a missing-id probe
-      // recorded as a `serve.share` 4xx): this route is the metadata load for
-      // THREE different callers — `App.tsx`'s edit/share loader (both modes),
-      // `FullMode`'s own fetch, and any ad hoc `GET /api/demos/<id>` — and only
-      // the first, in share mode, is an actual `/share/:id` page view.
-      // `/share/:id` itself is the authoring SPA's own client route, served by
-      // a different, assets-only deployable with no server code in the loop
-      // (`apps/authoring/wrangler.jsonc`), so this Worker never sees that
-      // page's own document request. `?view=share` is the client's one-shot
-      // marker for "this fetch IS that share-mode load" (only ever appended by
-      // the `isShare` branch in `App.tsx`) — the closest analogue this Worker
-      // has to "serving the share surface," and the only case counted as
-      // `serve.share`. Every other call to this route (edit mode, `FullMode`,
-      // an unmarked probe) emits nothing, on either branch below.
+      // Contract §5, ADR §F.2 "Share & build": this route serves THREE
+      // different callers (edit/share loader, `FullMode`, ad hoc fetches),
+      // but only counts `serve.share` when `?view=share` marks it as the
+      // actual `/share/:id` client-route page view — the client's one-shot
+      // signal, since this Worker never sees that route's own document
+      // request.
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "demos" && parts.length === 3) {
         const demoId = parts[2]!;
         const isShareView = url.searchParams.get("view") === "share";
@@ -1847,7 +1787,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         const row = await getDemo(env, demoId);
         if (!row) return json({ error: "not found" }, 404);
         if (!sameOwner(row.created_by, id.email)) return json({ error: "forbidden" }, 403);
-        // Same fix as the create route above (F33): malformed JSON or an
+        // Same handling as the create route above: malformed JSON or an
         // array body must not throw past this handler.
         const rawPatch = await request.json().catch(() => null);
         if (!isPlainRecord(rawPatch)) return json({ error: "request body must be a plain record" }, 400);
@@ -2236,19 +2176,14 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
               { model: env.LITELLM_MODEL ?? "unknown", outcome: "error" },
             );
             // Configuration faults (no `status`) are already logged in chat.ts;
-            // a gateway failure (`status` set) is the ADR-0041 §E.1 diagnostic —
-            // reported here, not in chat.ts, because that module is copied and
-            // imported standalone by a pipeline test (see chat.ts's own note).
+            // a gateway failure (`status` set) is the ADR-0041 §E.1 diagnostic.
             if (err.status !== undefined) {
               reportDiagnostic(env, err, {
                 context: "chat-gateway",
                 routeClass: "api/chat",
                 tags: { upstream: "litellm-chat", status: String(err.status), request_id: err.requestId ?? "none" },
-                // Minor triage item 9: without this, Sentry's default
-                // message-based grouping fingerprints every request
-                // separately (a `request_id` in `err.message`), so a LiteLLM
-                // outage becomes one ungrouped issue per request instead of
-                // one issue per status code.
+                // Groups by gateway + status, not by message (which carries a
+                // unique `request_id` and would fingerprint every request separately).
                 sentryFingerprint: ["litellm-gateway", String(err.status)],
               });
             }
@@ -2305,15 +2240,9 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           return json(suggestion);
         } catch (err) {
           // §5's `theme.ai` row promises a point on every outcome, `error`
-          // included — this used to only fire for a `ChatUnavailableError`
-          // (a gateway 4xx/5xx or a malformed reply), so a network-level
-          // throw from the `fetch` in `requestTheme` (LiteLLM host
-          // unreachable, DNS failure, connection reset) fell straight to
-          // `throw err` below with no point at all. Emitted for every
-          // non-ok outcome now, before the instanceof branch decides the
-          // response/diagnostic — mirroring the shape of the `chat.answer`
-          // catch above (which still has this same gap for its own raw
-          // `fetch`; out of scope here).
+          // included: a network-level throw from `requestTheme`'s `fetch`,
+          // not only a `ChatUnavailableError`, must not skip it. Mirrors the
+          // `chat.answer` catch above (same gap for its own raw `fetch`).
           void emitPoint(
             env,
             "theme.ai",
@@ -2327,9 +2256,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
                 context: "theme-gateway",
                 routeClass: "api/theme",
                 tags: { upstream: "litellm-theme", status: String(err.status), request_id: err.requestId ?? "none" },
-                // Minor triage item 9: same reasoning as the chat-gateway
-                // call site above — group by gateway + status, not by
-                // message (which carries a unique `request_id`).
+                // Same reasoning as the chat-gateway call site above.
                 sentryFingerprint: ["litellm-gateway", String(err.status)],
               });
             }
@@ -2658,10 +2585,9 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // Client input validation (a 400) is not a fault — never reported.
       if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
       // This catch turns every unexpected throw into a 500 body, so withSentry()
-      // never sees it. Report here or the error is invisible. ADR-0041 §E.1: "the
-      // fetch catch-all" is named explicitly as an uncaught-class site — stays in
-      // Sentry unconditionally in both scopes, and now also gets our own
-      // structured line (§D — "every error that escapes a handler").
+      // never sees it. Report here or the error is invisible. ADR-0041 §E.1: stays
+      // in Sentry unconditionally in both scopes, and now also gets our own
+      // structured line (§D).
       if (err instanceof BuildFailure) {
         logErrorLine(env, "fetch-catch-all:build-failure", err, { phase: err.phase, code: err.code });
         Sentry.captureException(err, {
@@ -2689,12 +2615,12 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
 }
 
 // `cronStep` (run one cron step in isolation, with its own Sentry capture)
-// moved to `telemetry/cron-step.ts` (fix round, T05 review) so it is directly
+// moved to `telemetry/cron-step.ts` so it is directly
 // testable with an injected capture function — imported above.
 
 /**
  * ADR-0041 §D's 5-minute tick: `pool.gauge`, `budget.gauge`, the o11y
- * heartbeat check (T04). Each gets its own `cronStep` — measured live, a
+ * heartbeat check. Each gets its own `cronStep` — measured live, a
  * fresh local D1 without migrations applied throws `no such table:
  * cost_ledger` out of `emitBudgetGauge`, and a single shared try/catch would
  * have skipped the heartbeat check that follows it, which exists
@@ -2702,11 +2628,10 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
  * exactly the case a gauge hiccup must not itself cause.
  */
 async function runFiveMinuteCron(env: Env): Promise<void> {
-  // Minor triage item 2 (C-M2): a structured line every tick, so o11y's
-  // `heartbeat.lastIngest` watchdog check is a true end-to-end signal even
-  // during a real quiet period with no user traffic — see
-  // `telemetry/lines.ts#logCronTickLine`'s doc comment for why no W1-side
-  // normaliser change was needed.
+  // A structured line every tick, so o11y's `heartbeat.lastIngest` watchdog
+  // check is a true end-to-end signal even during a real quiet period with
+  // no user traffic — see `telemetry/lines.ts#logCronTickLine`'s doc
+  // comment for why no normaliser change was needed.
   await cronStep(env, "cron:five-minute:tick", () => {
     logCronTickLine(env);
     return Promise.resolve();
@@ -2717,24 +2642,15 @@ async function runFiveMinuteCron(env: Env): Promise<void> {
 }
 
 /**
- * Nightly (04:17 UTC, see `triggers.crons`): replace yesterday's estimated
- * ledger rows with Cloudflare's own figures, flush anything the in-memory
- * meters were still holding, and — when explicitly enabled — purge the R2
- * artifacts of long-revoked demos. One `cronStep` for the billing chain,
- * not one per line: these four awaits are a sequential dependency chain
- * (alerts want reconciled numbers, GC wants alerts to have run), so a
- * failure partway through stopping the rest is the same behaviour this
- * branch always had — only the structured line and the explicit Sentry
- * capture are new.
+ * Nightly (04:17 UTC): replace yesterday's estimated ledger rows with
+ * Cloudflare's own figures, flush in-memory meters, and — when enabled —
+ * purge R2 artifacts of long-revoked demos. One `cronStep` for the billing
+ * chain: these four awaits are a sequential dependency chain (alerts want
+ * reconciled numbers, GC wants alerts to have run).
  *
- * Minor triage item 1 (C-M1): the ADR-0042 (T12) `example_daily` rollup
- * used to sit as a fifth `await` INSIDE that same billing `cronStep` call,
- * with a comment claiming it was "independent" and had "its own try/catch"
- * — neither was true: a throw anywhere earlier in the chain (e.g.
- * `reconcileBilling`) skipped `rollupExampleDaily` for the whole night with
- * no independent retry. It now gets its OWN `cronStep`, run unconditionally
- * after the billing chain (not nested inside it), so a billing-side failure
- * can no longer take the rollup down with it.
+ * The ADR-0042 `example_daily` rollup gets its OWN `cronStep`, run
+ * unconditionally after the billing chain: nesting it inside would let an
+ * earlier throw (e.g. `reconcileBilling`) skip it for the whole night.
  */
 async function runNightlyCron(env: Env): Promise<void> {
   await cronStep(env, "cron:nightly", async () => {
@@ -2746,9 +2662,7 @@ async function runNightlyCron(env: Env): Promise<void> {
     await gcRevokedArtifacts(env);
     await pruneAnalytics(env, Number(env.ANALYTICS_RETENTION_DAYS ?? 180));
   });
-  // ADR-0042 (T12): the previous full UTC day's example_daily rollup — its
-  // own independent cronStep (minor triage item 1), so an upstream throw in
-  // the billing chain above can't skip it.
+  // ADR-0042: the previous full UTC day's example_daily rollup.
   await cronStep(env, "cron:nightly:rollup", async () => {
     await rollupExampleDaily(env);
   });

@@ -13,14 +13,15 @@
 //   fingerprint.ts  — §7 fingerprint, the Babel-code-frame stripper.
 //   scrub.ts        — §3 / ADR §E.4 scrubber, browser and ingest alike.
 //   classify.ts     — bot filter, device/browser/OS classifiers (moved from
-//                     `workers/api/src/analytics.ts`, T00).
+//                     `workers/api/src/analytics.ts`).
 //   inbox.ts        — §8 OTLP `ResourceLogs` builders, NDJSON, inbox keys,
 //                     `InboxWriter` storage-key shapes.
 //   lite.ts         — §9 lite beacon payload type and validator.
 //   sink.ts         — `AeSink`: the real Analytics Engine binding, the local
 //                     ClickHouse shim, and an in-memory sink for tests.
 //   facade.ts       — §6 browser `Telemetry` interface, `noopTelemetry`,
-//                     `recordingTelemetry` (T06 implements the Faro-backed one).
+//                     `recordingTelemetry` (a Faro-backed one is implemented
+//                     separately).
 //   convert.ts      — §6/§9 Faro item / beacon → OTLP log record.
 
 export * from "./attrs.js";
