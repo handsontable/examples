@@ -411,7 +411,7 @@ dedupe hash is computed over the decoded, scrubbed record before timestamps are 
 | Key | Value |
 |---|---|
 | `seq` | last issued sequence |
-| `row:<n:012d>` | pending records with their arrival time, ≤ 1 MB per row. `<n>` is zero-padded to 12 digits (G1 fix round, A-I2) so native ascending key order equals arrival order; a row written before this fix, under the un-padded `row:<n>` shape, is migrated in place (rewritten under the padded key, oldest first) before the pack alarm packs anything appended after the fix — see `pack.ts#migrateLegacyRows` |
+| `row:<n:012d>` | pending records with their arrival time, ≤ 1 MB per row. `<n>` is zero-padded to 12 digits so native ascending key order equals arrival order (`pack.ts#collectRowBatch`) |
 | `key:<inbox key>` | `written` \| `provisional:<wakeId>` \| `rejected:<reason>` — **never `committed`** (see `done:`, below) |
 | `done:<inbox key>` | `1` — a **committed** key, moved OUT of `key:` on commit (same write that deletes `key:<inbox key>`) |
 | `hash:<yyyymmdd>:<sha256>` | first-seen epoch ms; 24 h window, checked across the current and previous UTC-day bucket |
@@ -475,10 +475,9 @@ must never scan committed history):**
 **G1 fix round (final review, second wave) additions:**
 - **Pack alarm, bounded (A-I2 remainder).** The alarm no longer loads every pending
   `row:` into memory before packing (F1's fix only bounded the packed OBJECT's size, not
-  this read). It first migrates any legacy (un-padded) `row:<n>` rows to completion, then
-  pages `row:` in small chunks, accumulating up to one packed object's own ~4 MB budget
-  per round, looping until the backlog is drained or `MAX_OBJECTS_PER_ALARM` (25) objects
-  have been packed this invocation. See `pack.ts#collectRowBatch`/`migrateLegacyRows`.
+  this read). It pages `row:` in small chunks, accumulating up to one packed object's own
+  ~4 MB budget per round, looping until the backlog is drained or `MAX_OBJECTS_PER_ALARM`
+  (25) objects have been packed this invocation. See `pack.ts#collectRowBatch`.
 - **DO storage 128-key batch limit (N2).** Cloudflare's SQLite-backed Durable Object
   storage API caps `get`/`put`/`delete` at 128 keys/pairs per call
   (<https://developers.cloudflare.com/durable-objects/api/storage-api/>, fetched

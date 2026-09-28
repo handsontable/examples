@@ -242,10 +242,7 @@ stores and packs. For each accepted request, in this order:
    zero-padded (12 digits, matching `<seq>`'s own width), so native ascending key order
    equals arrival order without an in-memory sort, and the alarm pages `row:` in small
    chunks, accumulated up to one packed object's own byte budget per round, rather than
-   one unbounded `list()`. A row written before this fix, under the old un-padded shape,
-   is migrated in place (rewritten under the padded key, oldest first, a bounded batch at
-   a time) before the alarm packs anything appended after the fix deployed — see contract
-   §8 and `workers/o11y/src/inbox/pack.ts`.
+   one unbounded `list()` — see contract §8 and `workers/o11y/src/inbox/pack.ts`.
 
 One writer means key order equals arrival order; storage-backed buffering means a
 deploy, eviction or host restart between two alarms loses nothing.

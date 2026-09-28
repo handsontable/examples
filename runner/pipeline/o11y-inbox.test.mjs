@@ -16,17 +16,15 @@ import { register } from "node:module";
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
 const { makeEnv, makeDurableObjectStorage, makeR2Bucket, ctx } = await import("./fixtures/o11y-harness.mjs");
+const { pendingRowsByTenant } = await import("./fixtures/o11y-inbox-helpers.mjs");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { checkDuplicates, pruneHashBuckets } = await import("../workers/o11y/src/inbox/dedupe.ts");
 const { newFingerprintWrites } = await import("../workers/o11y/src/inbox/registry.ts");
 const {
   appendRows,
-  pendingRowsByTenant,
   packTenant,
   commitPackedObject,
   collectRowBatch,
-  migrateLegacyRows,
-  LEGACY_MIGRATE_BATCH_LIMIT,
   ROW_LIST_PAGE_LIMIT,
   PACK_OBJECT_MAX_DECOMPRESSED_BYTES,
 } = await import("../workers/o11y/src/inbox/pack.ts");
@@ -367,16 +365,6 @@ function pendingRowValue(body, index, arrivalMs) {
   return { tenant: "worker", arrivalMs, resourceLogs: [buildResourceLogs(record(body, index))] };
 }
 
-/** Seeds `row:<n>` directly into the harness's raw backing `Map`, in the
- *  OLD, un-padded shape (`row:${n}`, exactly what `pendingRowStorageKey`
- *  produced before this fix) — simulating rows written by a pre-fix
- *  deploy, still pending when this fix's code starts running. */
-function seedLegacyRows(doStorage, ns, arrivalBaseMs) {
-  for (const n of ns) doStorage._data.set(`row:${n}`, pendingRowValue(`r${n}`, n, arrivalBaseMs + n));
-  const maxN = Math.max(...ns);
-  doStorage._data.set("rowSeq", maxN + 1);
-}
-
 /** Decodes every packed R2 object, in `inbox/...` key order (the embedded
  *  `<seq:012d>` already sorts packing order correctly), and returns the
  *  `body.stringValue` of every log record across all of them, concatenated
@@ -394,44 +382,6 @@ async function decodeAllPackedBodies(r2) {
   }
   return bodies;
 }
-
-test("A-I2: legacy (un-padded) row keys migrate to completion, across several alarm calls, before any packing — packed records come out in NUMERIC arrival order across digit boundaries", async () => {
-  const doStorage = makeDurableObjectStorage();
-  const { env, r2 } = makeEnv(InboxWriter, { doStorage });
-  const writer = new InboxWriter({ storage: doStorage }, env);
-
-  // Digit-boundary values (0, 1, 2, 8, 9, 10, 11, 98, 99, 100, 101, ...) are
-  // exactly where "row:10" sorting BEFORE "row:2" (the un-padded shape's
-  // bug) would diverge from arrival order. More than
-  // LEGACY_MIGRATE_BATCH_LIMIT (64) rows so migration must span more than
-  // one alarm() call — proving it does NOT try to migrate everything in one
-  // shot (which would defeat A-I2's own point).
-  const ns = Array.from({ length: 70 }, (_, i) => i); // 0..69
-  seedLegacyRows(doStorage, ns, 1_700_000_000_000);
-  assert.ok(70 > LEGACY_MIGRATE_BATCH_LIMIT, "sanity: this test's row count must exceed one migration batch");
-
-  // Run the real alarm repeatedly, exactly as the platform's own scheduler
-  // would (an alarm that reschedules itself runs again) — bounded to 200
-  // iterations so a bug that never converges fails the test instead of
-  // hanging it.
-  let iterations = 0;
-  do {
-    await writer.alarm();
-    iterations++;
-  } while ((await doStorage.getAlarm()) !== null && iterations < 200);
-  assert.ok(
-    iterations >= 2,
-    `70 legacy rows over a ${LEGACY_MIGRATE_BATCH_LIMIT}-row migrate batch must take more than one alarm call (took ${iterations})`,
-  );
-
-  const remaining = await pendingRowsByTenant(doStorage);
-  assert.equal(remaining.size, 0, "every row must have been packed");
-
-  const bodies = await decodeAllPackedBodies(r2);
-  assert.equal(bodies.length, 70, "no record may be lost");
-  const expected = ns.map((n) => `r${n}`);
-  assert.deepEqual(bodies, expected, "records must come out in NUMERIC arrival order, not the legacy format's lexicographic order");
-});
 
 test("A-I2 flood: many MB of pending rows are packed with a bounded read per list() call and per alarm, in order, with no loss", async () => {
   const doStorage = makeDurableObjectStorage();
@@ -463,8 +413,10 @@ test("A-I2 flood: many MB of pending rows are packed with a bounded read per lis
   const rowCount = 30;
   const bigBody = "x".repeat(900_000);
   for (let n = 0; n < rowCount; n++) {
-    // Padded (current-shape) keys — this test is about the READ bound, not
-    // the legacy migration path (that's the test above).
+    // Padded (current-shape) keys, hand-built here rather than through
+    // `pendingRowStorageKey` — this test is about `collectRowBatch`'s own
+    // READ bound, not the key-padding invariant (see the numeric-order test
+    // below, which writes through the real ingest path instead).
     doStorage._data.set(`row:${n.toString().padStart(12, "0")}`, pendingRowValue(`${bigBody}-${n}`, n, 1_700_000_000_000 + n));
   }
   doStorage._data.set("rowSeq", rowCount);
@@ -488,4 +440,34 @@ test("A-I2 flood: many MB of pending rows are packed with a bounded read per lis
   assert.equal(bodies.length, rowCount, "no record may be lost");
   const expected = Array.from({ length: rowCount }, (_, n) => `${bigBody}-${n}`);
   assert.deepEqual(bodies, expected, "records must come out in arrival order despite the bounded, paged reads");
+});
+
+test("InboxWriter.alarm: rows written through the real ingest path pack in numeric order past a two-digit row count", async () => {
+  const doStorage = makeDurableObjectStorage();
+  const { env, r2 } = makeEnv(InboxWriter, { doStorage });
+  const writer = new InboxWriter({ storage: doStorage }, env);
+
+  // Every key here comes from the real write path (`ingest` -> `appendRows`
+  // -> `pendingRowStorageKey`), never hand-built — unlike the two tests
+  // above. 12 rows crosses the one-digit/two-digit boundary ("row:...9" vs
+  // "row:...10"), exactly where an un-padded key would sort lexicographically
+  // out of arrival order.
+  const rowCount = 12;
+  for (let i = 0; i < rowCount; i++) {
+    await writer.ingest("worker", 1000 + i, [{ hash: `h${i}`, record: record(`r${i}`, i) }]);
+  }
+
+  let iterations = 0;
+  do {
+    await writer.alarm();
+    iterations++;
+  } while ((await doStorage.getAlarm()) !== null && iterations < 200);
+
+  // No re-sort here: `decodeAllPackedBodies` returns bodies in the order the
+  // real `collectRowBatch` (native, ascending `storage.list()` order) fed
+  // them to `packTenant`, which is what a broken `pendingRowStorageKey`
+  // padding would corrupt.
+  const bodies = await decodeAllPackedBodies(r2);
+  const expected = Array.from({ length: rowCount }, (_, i) => `r${i}`);
+  assert.deepEqual(bodies, expected, "rows written through the real ingest path must drain in numeric arrival order, not lexicographic");
 });

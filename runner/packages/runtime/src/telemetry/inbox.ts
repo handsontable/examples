@@ -147,19 +147,11 @@ export const SEQ_STORAGE_KEY = "seq";
 export const DRAINS_PAUSED_STORAGE_KEY = "drainsPaused";
 export const HEARTBEAT_STORAGE_KEY = "heartbeat";
 
-/** Digits `pendingRowStorageKey` zero-pads `n` to (F2/G1 fix round, final
- *  review finding A-I2). The key used to be `row:${n}` un-padded — a plain
- *  `n.toString()` — which made `row:10` sort BEFORE `row:2` lexicographically
- *  and forced the pack alarm to load every pending row into memory just to
- *  sort them back into arrival order. Zero-padding makes native ascending
- *  key order equal arrival order, so a bounded `list({prefix, limit})` read
- *  is enough (`workers/o11y/src/inbox/pack.ts#collectRowBatch`). 12 digits
- *  matches the packed-object `<seq>` width (§8's `inboxKey`) — headroom far
- *  past any realistic pending-row count for one `InboxWriter`. Rows written
- *  before this fix deployed, under the un-padded shape, are migrated
- *  in-place (`pack.ts#migrateLegacyRows`) rather than requiring the pack
- *  alarm to understand two key shapes forever — see that function's doc
- *  comment for the compat path and contract §8 for both shapes. */
+/** Digits `pendingRowStorageKey` zero-pads `n` to. Zero-padding makes native
+ *  ascending key order equal arrival order, so a bounded `list({prefix,
+ *  limit})` read is enough (`workers/o11y/src/inbox/pack.ts#collectRowBatch`).
+ *  12 digits matches the packed-object `<seq>` width (§8's `inboxKey`) —
+ *  headroom far past any realistic pending-row count for one `InboxWriter`. */
 export const ROW_SEQ_DIGITS = 12;
 
 export function pendingRowStorageKey(n: number): string {
@@ -177,9 +169,6 @@ export function inboxKeyStorageKey(key: string): string {
  *  only consulted by a manual reopen of an old window. */
 export function doneKeyStorageKey(key: string): string {
   return `done:${key}`;
-}
-export function hashStorageKey(sha256Hex: string): string {
-  return `hash:${sha256Hex}`;
 }
 export function fingerprintStorageKey(fp: string): string {
   return `fp:${fp}`;

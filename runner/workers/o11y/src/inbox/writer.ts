@@ -52,7 +52,7 @@ import {
   takeReopenedFlag as ledgerTakeReopenedFlag,
   type InboxObjectInfo,
 } from "./ledger.js";
-import { appendRows, collectRowBatch, commitPackedObject, migrateLegacyRows, packTenant, ROW_SEQ_STORAGE_KEY } from "./pack.js";
+import { appendRows, collectRowBatch, commitPackedObject, packTenant, ROW_SEQ_STORAGE_KEY } from "./pack.js";
 import { putChunked } from "./storage.js";
 import { pruneHashBuckets } from "./dedupe.js";
 import { pruneFingerprintRegistry } from "./registry.js";
@@ -351,42 +351,22 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
   /** ADR §B.2 step 6: gzipped NDJSON objects per tenant, `seq`/`key:<key>`/
    *  row-deletion committed atomically per object (`pack.ts#commitPackedObject`).
    *
-   *  Fix round (finding R-A-I2, rereview.md "the pack alarm lists EVERY
-   *  pending row, with full content, into memory before the cap" — the F1
-   *  fix round only bounded the OBJECT's size, not this read): the old
-   *  `pendingRowsByTenant(storage)` call above loaded every pending row
-   *  across BOTH tenants into memory in one `list()`, unbounded by design —
-   *  a sustained ingest flood fills the pending set faster than 60 s alarms
-   *  can drain it, and this read grows right along with it, eventually
-   *  exceeding the DO's 128 MB memory and retrying forever against an
-   *  ever-larger set (pipeline's own flood test proves the old function's
-   *  read size instead).
+   *  Reads are bounded: an unbounded `list()` of every pending row, across
+   *  both tenants, would grow with a sustained ingest flood faster than 60 s
+   *  alarms can drain it, eventually exceeding the DO's 128 MB memory and
+   *  retrying forever against an ever-larger set (`pipeline`'s own flood
+   *  test pins this).
    *
-   *  Two bounded steps, in order:
-   *  1. `migrateLegacyRows` — rewrites any un-padded `row:<n>` key (written
-   *     before this fix deployed) into the new zero-padded shape, a small
-   *     batch at a time. Runs to COMPLETION (this alarm invocation reschedules
-   *     and returns without packing anything while any remain) before any
-   *     packing — a row written before the fix must never be packed AFTER
-   *     one written after it, which native key order alone cannot guarantee
-   *     while both shapes coexist (see `pack.ts`'s "bounded reads" header).
-   *  2. `collectRowBatch` — pages `row:` in small chunks, accumulated up to
-   *     one packed object's own byte budget, then packed/committed per
-   *     tenant present in that bounded batch. Looped until nothing remains
-   *     or `MAX_OBJECTS_PER_ALARM` objects have been packed this invocation
-   *     (a large backlog is packed over several alarm invocations, not one
-   *     unbounded loop competing with the Worker's own CPU limit),
-   *     rescheduling immediately (`setAlarm(Date.now())`) when objects
-   *     remain. */
+   *  `collectRowBatch` pages `row:` in small chunks, accumulated up to one
+   *  packed object's own byte budget, then packed/committed per tenant
+   *  present in that bounded batch. Looped until nothing remains or
+   *  `MAX_OBJECTS_PER_ALARM` objects have been packed this invocation (a
+   *  large backlog is packed over several alarm invocations, not one
+   *  unbounded loop competing with the Worker's own CPU limit), rescheduling
+   *  immediately (`setAlarm(Date.now())`) when objects remain. */
   async alarm(): Promise<void> {
     const MAX_OBJECTS_PER_ALARM = 25;
     const storage = adaptStorage(this.ctx.storage);
-
-    const migrated = await migrateLegacyRows(storage);
-    if (migrated > 0) {
-      await storage.setAlarm(Date.now());
-      return;
-    }
 
     let packedCount = 0;
     let more = false;
