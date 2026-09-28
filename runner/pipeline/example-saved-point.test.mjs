@@ -48,7 +48,7 @@ function setup(rows = [demoRow({ id: DEMO_ID, framework: "react", ht_version: "1
     await Promise.all(pending);
     return points.filter((p) => p.indexes[0] === "example.saved");
   };
-  return { env, ctx, saved };
+  return { env, ctx, saved, pending, points };
 }
 
 const patch = (body, { auth = true } = {}) =>
@@ -136,11 +136,50 @@ test("a metadata-only PATCH (the Edit info dialog) writes no example.saved point
   assert.equal((await saved()).length, 0);
 });
 
-test("a Save without a valid exampleHtMajor (API token, stale tab, closed telemetry gate) writes no point", async () => {
+test("a Save without a valid exampleHtMajor (closed telemetry gate, a caller that omits it) writes no point", async () => {
   for (const exampleHtMajor of [undefined, "", "20", 16, "latest"]) {
     const { env, ctx, saved } = setup();
     const res = await worker.fetch(patch({ files: FILES, exampleHtMajor }), env, ctx);
     assert.equal(res.status, 200, `status for ${JSON.stringify(exampleHtMajor)}`);
     assert.equal((await saved()).length, 0, `points for ${JSON.stringify(exampleHtMajor)}`);
   }
+});
+
+test("every rebuild response carries the exampleSaved marker, true only when the point is written", async () => {
+  for (const [exampleHtMajor, expected] of [["16", true], [undefined, false], ["20", false]]) {
+    const { env, ctx } = setup();
+    const res = await worker.fetch(patch({ files: FILES, exampleHtMajor }), env, ctx);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.exampleSaved, expected, `exampleSaved for ${JSON.stringify(exampleHtMajor)}`);
+  }
+});
+
+test("a metadata-only PATCH carries no exampleSaved marker", async () => {
+  const { env, ctx } = setup();
+  const res = await worker.fetch(patch({ title: "Renamed", exampleHtMajor: "16" }), env, ctx);
+  assert.equal(res.status, 200);
+  assert.equal("exampleSaved" in (await res.json()), false);
+});
+
+test("the rebuild and its point are handed to waitUntil, so a client disconnect cannot cancel them", async () => {
+  // The oracle is the D1 write and the point completing through `waitUntil`
+  // alone: the rebuild is held until the handler has registered its work.
+  const { env, ctx, pending, points } = setup();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const put = env.ARTIFACTS.put.bind(env.ARTIFACTS);
+  env.ARTIFACTS.put = async (...args) => { await gate; return put(...args); };
+  const writes = [];
+  const prepare = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (sql) => { if (/UPDATE demos SET ht_version=/.test(sql)) writes.push(sql); return prepare(sql); };
+
+  const response = worker.fetch(patch({ files: FILES, exampleHtMajor: "16" }), env, ctx);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.ok(pending.length >= 1, "the save must be registered with waitUntil before it settles");
+  release();
+  await Promise.all(pending);
+  assert.equal(writes.length, 1, "the waitUntil promise covers the D1 update");
+  assert.equal(points.filter((p) => p.indexes[0] === "example.saved").length, 1, "and the point");
+  assert.equal((await response).status, 200);
 });
