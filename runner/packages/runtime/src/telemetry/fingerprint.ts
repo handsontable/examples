@@ -26,6 +26,12 @@ function fnv1a64Hex(value: string): string {
   return hash.toString(16).padStart(16, "0");
 }
 
+// Every quantifier is capped: adjacent unbounded `[ \t]*` runs cost O(n²) on a
+// line of spaces (250k spaces measured at ~30 s), and a real Babel gutter
+// never pads past a few characters.
+const GUTTER_LINE = /^[ \t]{0,32}>?[ \t]{0,32}\d{1,9}[ \t]{0,32}\|.*$/;
+const CARET_LINE = /^[ \t]{0,32}\|[ \t]{0,4096}\^{1,4096}[ \t]{0,32}$/;
+
 /**
  * Strips a Babel code-frame (`@babel/standalone`'s `codeFrameColumns`, see
  * `transpile.ts`) out of a message, so authored source text does not survive
@@ -33,8 +39,6 @@ function fnv1a64Hex(value: string): string {
  * `normalizeMonitorMessage`, which collapses newlines this shape depends on.
  */
 export function stripCodeFrame(message: string): string {
-  const GUTTER_LINE = /^[ \t]*>?[ \t]*\d+[ \t]*\|.*$/;
-  const CARET_LINE = /^[ \t]*\|[ \t]*\^+[ \t]*$/;
   return message
     .split("\n")
     .filter((line) => !GUTTER_LINE.test(line) && !CARET_LINE.test(line))
@@ -53,6 +57,10 @@ export function fingerprint(context: string, message: string): string {
   return `${context}:${fnv1a64Hex(fingerprintShape(message))}`;
 }
 
+/** `normalizeMonitorMessage` keeps only its first 4096 characters anyway; cutting
+ *  here too keeps `stripCodeFrame` off the rest of a client-sized message. */
+const FINGERPRINT_INPUT_MAX_CHARS = 4096;
+
 /**
  * The normalised text `fingerprint()` hashes: code frame stripped, then
  * `normalizeMonitorMessage`. Also the only message text a demo-runtime Faro
@@ -61,7 +69,7 @@ export function fingerprint(context: string, message: string): string {
  * agrees with the metric point's.
  */
 export function fingerprintShape(message: string): string {
-  return normalizeMonitorMessage(stripCodeFrame(message));
+  return normalizeMonitorMessage(stripCodeFrame(message.slice(0, FINGERPRINT_INPUT_MAX_CHARS)));
 }
 
 /**

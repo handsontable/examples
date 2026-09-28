@@ -128,9 +128,24 @@ can promote them to labels.
 | `deployment.environment.name` | `production`, `local` | `deployment_environment_name` | `blob3` |
 | `hot.surface` | `authoring`, `share`, `embed`, `d`, `api`, `demo-runtime`, `o11y` | `hot_surface` | `blob4` |
 | `hot.tier` | `1`, `2`, `static`, `none` | `hot_tier` | `blob5` |
-| `hot.framework` | a key of `config/frameworks.json`, a docs-example framework, or `none` | `hot_framework` | `blob6` |
+| `hot.framework` | a key of `config/frameworks.json` (every docs-example framework is one), or `none` | `hot_framework` | `blob6` |
 | `hot.ht_major` | `15`…`19`, `next`, `none` | `hot_ht_major` | `blob7` |
-| `hot.outcome` | per metric, see §5 | `hot_outcome` | `blob8` |
+| `hot.outcome` | per metric, see §5; `none` on a record no metric describes | `hot_outcome` | `blob8` |
+
+Ingest bounds both open labels, since each distinct label tuple is a Loki stream
+(5000 per tenant): a `hot.framework` outside the list above, or a `hot.outcome`
+outside the set of the item's metric (`none` when there is none), becomes `other`.
+A stored browser record (exception, log, event) always carries `hot.outcome` =
+`none`; only a measurement's AE point keeps its metric outcome. That caps the
+browser tenant at 4410 label tuples (collect 7 × 4 × 21 × 7, lite 2 × 1 × 21 × 7).
+The box's Loki sets `max_global_streams_per_user` to 20000, over 4× that worst case;
+`pipeline/o11y-label-cardinality.test.mjs` reads the limit from the config and fails
+when the reachable tuples cross it.
+Ingester memory grows with the streams that actually receive lines and the bytes
+pushed, not with the limit, and a stream costs kilobytes (labels, index entry, head
+block), so 20000 fits easily in the box's 4 GiB `standard-1` container.
+`packages/runtime/src/telemetry/attrs.ts#KNOWN_FRAMEWORKS` mirrors
+`config/frameworks.json`.
 
 Structured metadata only — never a Loki label, never an Analytics Engine index:
 `hot.demo_id`, `session.id` (an in-memory page-load id), `cf.ray`, `hot.kind` (the Faro item
