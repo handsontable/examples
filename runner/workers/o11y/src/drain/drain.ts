@@ -4,8 +4,8 @@
 // Pure over injected dependencies (`DrainDeps`) — no `@cloudflare/containers`
 // or R2 import — so the whole batch/retry/rejection state machine is
 // unit-testable under `node --test` (`pipeline/o11y-drain.test.mjs`).
-// `box.ts` (T03's wake/stop parts) wires the real dependencies: R2 reads,
-// `containerFetch` pushes, `symbolicateResourceLogs`.
+// `box.ts` wires the real dependencies: R2 reads, `containerFetch` pushes,
+// `symbolicateResourceLogs`.
 
 import {
   decodeNdjson,
@@ -16,7 +16,7 @@ import {
 } from "@handsontable/demo-runtime/telemetry";
 import { sha256Hex } from "../gates/util.js";
 
-// ---- F1: drop records older than Loki's own reject window -----------------
+// ---- Drop records older than Loki's own reject window ----------------------
 //
 // `reject_old_samples_max_age: 7d` (containers/o11y/loki/loki-config*.yaml)
 // 400s the WHOLE push if even one record in it is older than 7 days — and
@@ -59,7 +59,7 @@ function isTooOld(timeUnixNano: string | undefined, nowMs: number): boolean {
  *  whole record for one old line among several (defensive: this codebase's
  *  own inbox always packs one record per `ResourceLogs`, §8, but the OTLP
  *  shape itself allows more). Counted via the returned `droppedOld`, never
- *  silent (task F1: "that loss must be counted, never silent"). */
+ *  silent. */
 export function dropOldRecords(
   records: readonly OtlpResourceLogs[],
   nowMs: number,
@@ -101,9 +101,9 @@ export interface DrainDeps {
   /** ADR §C.3 — exception records only; a no-op passthrough for everything
    *  else (`symbolicate.ts#symbolicateResourceLogs` already does this). */
   symbolicate(records: readonly OtlpResourceLogs[]): Promise<OtlpResourceLogs[]>;
-  /** Injectable clock for {@link dropOldRecords} (F1) — defaults to
-   *  `Date.now` when omitted, so every existing caller/test is unaffected
-   *  unless it deliberately wants a fixed "now". */
+  /** Injectable clock for {@link dropOldRecords} — defaults to `Date.now`
+   *  when omitted, so every existing caller/test is unaffected unless it
+   *  deliberately wants a fixed "now". */
   now?(): number;
 }
 
@@ -111,25 +111,20 @@ export interface KeyOutcome {
   key: string;
   tenant: Tenant;
   outcome: "provisional" | "rejected" | "error";
-  /** Set on `rejected` (why), and — row 19 fix — also on `provisional` when
-   *  at least one chunk 2xx'd but another permanently 400'd: the caller
+  /** Set on `rejected` (why), and also on `provisional` when at least one
+   *  chunk 2xx'd but another permanently 400'd: the caller
    *  (`box.ts#drainStep`) should still surface this via
    *  `InboxWriterApi#recordPartialReject` even though the key itself is
    *  durable. `undefined` on a fully clean `provisional`. */
   reason?: string;
   bytesPushed: number;
-  /** F1: records dropped by {@link dropOldRecords} before this key's push —
-   *  0 when nothing was too old. Never folds into `rejected`/`error`: a
-   *  key with only-too-old records still ends `provisional` here (nothing
-   *  left to push is not a failure, matching the existing all-duplicates
-   *  case) — this `outcome` field itself is unchanged by minor triage item
-   *  3. What changed is downstream, in `box.ts#drainStep`: a `provisional`
-   *  outcome with `bytesPushed === 0` (this all-dropped/all-duplicate case)
-   *  is now routed to `InboxWriterApi#commitKeys` instead of
-   *  `#markKeysProvisional`, committing it directly rather than entering
-   *  `provisional:<wakeId>` — see `ledger.ts#commitKeys`'s own doc comment
-   *  for why (the endless re-wake loop a zero-byte key stuck waiting on a
-   *  marker that will never exist used to cause). */
+  /** Records dropped by {@link dropOldRecords} before this key's push — 0
+   *  when nothing was too old. Never folds into `rejected`/`error`: a key
+   *  with only-too-old records still ends `provisional` here (nothing left
+   *  to push is not a failure). `box.ts#drainStep` routes a `provisional`
+   *  outcome with `bytesPushed === 0` to `InboxWriterApi#commitKeys`
+   *  instead of `#markKeysProvisional` — see `ledger.ts#commitKeys`'s doc
+   *  comment for the endless re-wake loop that avoids. */
   droppedOld: number;
 }
 
@@ -162,10 +157,10 @@ async function gunzip(bytes: Uint8Array): Promise<string> {
 
 /** The body Loki's `/otlp/v1/logs` actually decodes: ONE OTLP/HTTP JSON
  *  `ExportLogsServiceRequest`. The inbox stores NDJSON (one bare
- *  ResourceLogs per line), and pushing that as-is is the T03-D2 bug: Loki
- *  3.3.2 answers `204` to it and ingests nothing — no stream, no chunk, no
- *  TSDB table, so nothing is uploaded on SIGTERM and shutdown.sh (correctly)
- *  never writes the clean marker. */
+ *  ResourceLogs per line); pushing that as-is makes Loki 3.3.2 answer `204`
+ *  and ingest nothing — no stream, no chunk, no TSDB table, so nothing is
+ *  uploaded on SIGTERM and shutdown.sh (correctly) never writes the clean
+ *  marker. */
 function encodeLokiPush(records: readonly OtlpResourceLogs[]): string {
   return JSON.stringify({ resourceLogs: records });
 }
@@ -218,16 +213,14 @@ async function pushChunkWithRetry(
  *  `seenHashes` (mutated in place — shared across the whole wake, per ADR
  *  §B.3's "a per-record hash set guarantees no record is pushed twice"),
  *  push in ≤ 1 MB chunks. A key becomes eligible for `provisional` only
- *  after every one of its chunks returns `2xx` — including the
- *  zero-chunk case (every record in this object was already pushed earlier
- *  in the same wake, e.g. a retried step re-fetching the same key, OR every
- *  record was too old / already deduped, `bytesPushed` staying 0 either
- *  way): still provisional, nothing left to push is not a failure. Minor
- *  triage item 3: `box.ts#drainStep` treats the `bytesPushed === 0` case of
- *  THIS `provisional` outcome specially (commits it directly rather than
- *  marking it `provisional:<wakeId>`) — see {@link KeyOutcome.droppedOld}'s
- *  own doc comment. Nothing about that reclassification changes what this
- *  function itself returns. */
+ *  after every one of its chunks returns `2xx` — including the zero-chunk
+ *  case (every record already pushed earlier in the same wake, or too old
+ *  / already deduped, `bytesPushed` staying 0 either way): still
+ *  provisional, nothing left to push is not a failure. `box.ts#drainStep`
+ *  treats the `bytesPushed === 0` case of this `provisional` outcome
+ *  specially (commits it directly rather than marking it
+ *  `provisional:<wakeId>`) — see {@link KeyOutcome.droppedOld}'s doc
+ *  comment. */
 export async function drainKey(key: string, seenHashes: Set<string>, deps: DrainDeps): Promise<KeyOutcome> {
   const parsed = parseInboxKey(key);
   if (!parsed) return { key, tenant: "worker", outcome: "rejected", reason: "unparseable_key", bytesPushed: 0, droppedOld: 0 };
@@ -243,37 +236,26 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
     return { key, tenant, outcome: "rejected", reason: "undecodable_object", bytesPushed: 0, droppedOld: 0 };
   }
 
-  // F1: drop records older than Loki's own `reject_old_samples_max_age`
-  // BEFORE symbolication/push — a stale record must never turn an
-  // otherwise-good key into a whole-key `rejected` 400 (see this file's
-  // header comment on `dropOldRecords`).
+  // Drop records older than Loki's own `reject_old_samples_max_age` BEFORE
+  // symbolication/push — a stale record must never turn an otherwise-good
+  // key into a whole-key `rejected` 400 (see this file's header comment on
+  // `dropOldRecords`).
   const { kept, droppedOld } = dropOldRecords(records, (deps.now ?? Date.now)());
   records = kept;
 
-  // Z-B-C1 defense in depth: `symbolicate.ts#symbolicateResourceLogs` is
-  // now written to never throw (it isolates a per-frame and a per-record
-  // failure internally), but this is the THIRD, independent layer — a
-  // throw here must isolate only THIS key, not the whole batch. Before
-  // this fix, an uncaught throw here escaped `drainKey`, then `drainBatch`
-  // (whose loop only guards against an `"error"` *outcome*, never an
-  // exception), then `box.ts#drainStep`'s own catch, which recorded the
-  // whole wake as `outcome: "error"` and left every key in this batch
-  // `written` — including the one that poisoned it, so the NEXT wake
-  // fetched the identical batch (`nextWrittenKeys`'s deterministic
-  // ascending order) and threw again, forever. A non-transient failure
-  // here (a decode/parse throw, not a Loki/R2 outage — those never throw;
-  // they return a `LokiPushResult`/`null` the rest of this function already
-  // handles) means this ONE key's symbolication is unrecoverable, so it
-  // gets the same `outcome: "rejected"` SHAPE as `undecodable_object`
-  // above and the same `InboxWriterApi#rejectKey` metric/alert path
-  // (`box.ts#drainStep`) — never retried automatically, but no longer able
-  // to block every key after it. `drainBatch`'s loop only stops on an
-  // `"error"` outcome, so the next key in this batch (and every later one)
-  // still drains in the same call. The `reason` carries the underlying
-  // error's own message rather than a fixed token, same as the existing
-  // 400-rejection path a few lines below (`rejectedReason ??=
-  // result.message ?? "loki_400"`) — dynamic reason text already reaches
-  // `rejectedEvent:`/Slack alerts today, and `notify.ts` is what escapes it.
+  // `symbolicate.ts#symbolicateResourceLogs` never throws (it isolates a
+  // per-frame and a per-record failure internally), but this is a third,
+  // independent layer: a throw here must isolate only THIS key, not the
+  // whole batch — an uncaught throw would escape `drainKey`, then
+  // `drainBatch` (whose loop only guards an `"error"` *outcome*, never an
+  // exception), then `box.ts#drainStep`'s own catch, leaving every key in
+  // this batch `written` — including the one that poisoned it, so the next
+  // wake would fetch the identical batch and throw again, forever. A
+  // non-transient failure here (a decode/parse throw, not a Loki/R2
+  // outage — those never throw) gets the same `outcome: "rejected"` shape
+  // as `undecodable_object` above and the same
+  // `InboxWriterApi#rejectKey` metric/alert path — never retried
+  // automatically, but no longer able to block every key after it.
   try {
     records = await deps.symbolicate(records);
   } catch (err) {
@@ -295,55 +277,31 @@ export async function drainKey(key: string, seenHashes: Set<string>, deps: Drain
     fresh.push(record);
   }
 
-  // F2 fix (final review, B cross-note "a drain 400 skips the key's
-  // remaining chunks, and Loki accepts part of a 400 — don't lose valid
-  // records"): a 400 is a PERMANENT rejection of that one chunk (a 400 is
-  // never retried, above), but it says nothing about the chunks after it —
-  // the previous version `return`ed immediately on the first 400, so any
-  // later chunk of the SAME key (a >1 MB object splits into several) was
-  // never even attempted, silently dropping records that would otherwise
-  // have pushed cleanly. Every chunk is now always attempted; a 400 is
-  // remembered (the first one, for `reason`) but does not stop the loop. A
-  // genuine outage (429/5xx exhausted) still stops immediately and reports
-  // `error` — unlike a 400, an outage is evidence the REST of this key's
-  // chunks would fail too, and `error` already tells `drainBatch` to leave
-  // the rest of the WHOLE BATCH `written` for a later wake, which is the
-  // correct behaviour for a transient failure (a 400 is not transient).
+  // A 400 is a PERMANENT rejection of that one chunk (never retried, above)
+  // but says nothing about the chunks after it, so every chunk is always
+  // attempted rather than stopping at the first 400 — otherwise a >1 MB
+  // object split into several chunks would silently drop records that
+  // would have pushed cleanly. A genuine outage (429/5xx exhausted) still
+  // stops immediately and reports `error`: unlike a 400, that's evidence
+  // the rest of this key's chunks would fail too, and `error` tells
+  // `drainBatch` to leave the rest of the whole batch `written` for a
+  // later wake.
   //
-  // Chosen semantics for the "some chunks 2xx, one chunk 400" case — G1 fix
-  // round, rereview.md row 19, replacing F2's original choice (a key with
-  // any 400 ended `rejected` outright): F2's comment here claimed the
-  // already-pushed chunks "ARE durably in Loki … regardless," but `rejected`
-  // NEVER becomes `provisional`, so those chunks never pass the §B.3
-  // marker/commit check any wake's clean-stop confirms durability through —
-  // an unclean stop right after this push, before Loki's own local WAL/TSDB
-  // flush, could lose them with no automatic replay (a `rejected` key is
-  // never retried by a later wake, only by a manual reopen). That was the
-  // actual gap: not the claim itself, but that NOTHING was verifying it.
-  //
-  // Fixed by tracking whether ANY chunk landed 2xx (`acceptedAnyChunk`,
-  // via `bytesPushed`): if so, the key still ends `provisional` — its
-  // accepted content follows the exact same §B.3 durability path as a
-  // fully-clean key (an unclean stop reverts it to `written` for automatic
-  // replay; a clean stop's marker confirms it and moves it to `done:`).
-  // Only a key with ZERO accepted chunks (every chunk 400'd) still ends
-  // `rejected` — there is nothing to protect, so the existing "never
+  // A key with at least one chunk landing 2xx still ends `provisional`
+  // (tracked via `bytesPushed`): its accepted content follows the same
+  // §B.3 durability path as a fully-clean key (an unclean stop reverts it
+  // to `written` for automatic replay; a clean stop's marker confirms it).
+  // Only a key with ZERO accepted chunks (every chunk 400'd) ends
+  // `rejected` — nothing to protect there, so the existing "never
   // auto-retried, `POST /grafana/_o11y/reopen` is the manual escape hatch"
-  // behaviour is unchanged for that case.
-  //
-  // This does NOT invent per-chunk ledger state (`key:` stays one state per
-  // key, as F2's original comment already argued) and does NOT change what
-  // gets pushed: a replay (automatic, after an unclean stop, OR a manual
-  // reopen of an already-`done:` key) re-attempts every chunk of this key
-  // again, deterministically re-deriving the SAME classification — the
-  // permanently-bad chunk 400s again (harmless: `pushChunkWithRetry` never
-  // retries a 400, so this costs one request, not a loop) while the good
-  // chunk(s) are safely, redundantly re-confirmed (Loki's own partial-
-  // accept behaviour plus query-time dedup already make a duplicate push
-  // harmless, per ADR §B.3's "what an unclean stop costs"). `reason` still
-  // carries the 400 detail on the `provisional` outcome so the caller
-  // (`box.ts#drainStep`) can log/alert on the permanent loss even though
-  // the key itself is not `rejected` — see `InboxWriterApi#recordPartialReject`.
+  // behaviour applies. A replay re-attempts every chunk of this key again,
+  // deterministically re-deriving the same classification: the
+  // permanently-bad chunk 400s again (harmless, never retried) while good
+  // chunks are safely, redundantly re-confirmed (Loki's own partial-accept
+  // behaviour plus query-time dedup already make a duplicate push
+  // harmless). `reason` carries the 400 detail on the `provisional`
+  // outcome so the caller (`box.ts#drainStep`) can log/alert on the loss —
+  // see `InboxWriterApi#recordPartialReject`.
   let bytesPushed = 0;
   let rejectedReason: string | undefined;
   for (const chunk of chunkBySize(fresh)) {

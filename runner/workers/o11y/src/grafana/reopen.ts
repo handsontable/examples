@@ -1,23 +1,24 @@
 // `POST /grafana/_o11y/reopen` (ADR §B.3/§J, contract §1): manual ledger
-// re-open for a time window. Session-gated exactly like `/grafana/*` (K1:
-// the Worker's own cookie, not Cloudflare Access) — the contract's own gate
+// re-open for a time window. Session-gated exactly like `/grafana/*` (the
+// Worker's own cookie, not Cloudflare Access) — the contract's own gate
 // table lists it under the same row.
 //
-// F2 fix (final review, B-M9): this route used to call `req.json()`
-// regardless of `content-type`, which makes it reachable by a cross-site
-// "simple" request (`fetch(url, { mode: "no-cors", body: '{"fromMs":...}' })`
-// — the browser sends that with `content-type: text/plain`, no CORS
-// preflight). Requiring an exact `application/json` content-type forces a
-// real CORS preflight (which a cross-origin page cannot pass without an
-// explicit allow from this Worker, and none is granted), closing that path.
-// K1 adds an exact `Origin` check on top: `o11y_session` is `SameSite=Lax`,
-// which does not stop a same-SITE (not same-origin — another
-// `*.handsontable.com` host, e.g. a Tier-2 preview) caller from attaching
-// it — see `gates/session.ts#isSameOrigin`'s own doc comment. The window is
-// also capped to the 7-day retention (`ledger.ts`'s own `KEY_RETENTION_MS`)
-// — a wider window can never find anything (see `writer.ts#reopenWindow`'s
-// doc comment) and, pre-fix, made mass replay/extra-wake amplification
-// cheap for whoever could reach this route at all.
+// Requires an exact `application/json` content-type: this route calls
+// `req.json()`, and without the check it would be reachable by a
+// cross-site "simple" request (`fetch(url, { mode: "no-cors", body:
+// '{"fromMs":...}' })` — the browser sends that with
+// `content-type: text/plain`, no CORS preflight). Requiring
+// `application/json` forces a real CORS preflight (which a cross-origin
+// page cannot pass without an explicit allow from this Worker, and none is
+// granted), closing that path. An exact `Origin` check sits on top:
+// `o11y_session` is `SameSite=Lax`, which does not stop a same-SITE (not
+// same-origin — another `*.handsontable.com` host, e.g. a Tier-2 preview)
+// caller from attaching it — see `gates/session.ts#isSameOrigin`'s own doc
+// comment. The window is also capped to the 7-day retention (`ledger.ts`'s
+// own `KEY_RETENTION_MS`) — a wider window can never find anything (see
+// `writer.ts#reopenWindow`'s doc comment) and would otherwise make mass
+// replay/extra-wake amplification cheap for whoever could reach this route
+// at all.
 
 import { isSameOrigin, verifySession } from "../gates/session.js";
 import { inboxWriter } from "../inbox/accessor.js";

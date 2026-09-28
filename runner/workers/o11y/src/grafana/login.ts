@@ -2,34 +2,12 @@
 // `POST /grafana/_o11y/session`, `GET /grafana/_o11y/logout` (a same-origin
 // sign-out page), `POST /grafana/_o11y/logout` (the actual state-clearing
 // action) — the broker login round trip that replaces Cloudflare Access for
-// `/grafana/*` (controller decision K1 — the feasibility probe that
-// concluded no Cloudflare Access application is needed here; see
-// ADR-0041 §B.5/§H).
+// `/grafana/*` (ADR-0041 §B.5/§H).
 //
 // None of these routes ever calls `getGrafanaBoxStub` — an unauthenticated
 // visitor (login, callback, the logout page) or a not-yet-authenticated POST
 // (session) must never wake the box, the same "gate first, box second"
 // ordering `grafana/proxy.ts` already enforces for the proxy route itself.
-//
-// K1 fix round (security review of the broker login round trip):
-// - I3: the session TTL is capped at the broker token's own `exp`
-//   (`gates/session.ts#computeSessionTtlSeconds`), not a flat 12h.
-// - M3: `/login` refuses a missing/invalid secret or broker URL with a clear
-//   500 instead of building a broken redirect, and both `/login` and
-//   `/session` sit behind the existing `RATE_LIMITER` binding, keyed by IP —
-//   an anonymous caller replaying their own login cookie's nonce for 10
-//   minutes, or hammering `/login`, no longer gets an unbounded number of
-//   free `/broker/userinfo` round trips out of this Worker.
-// - M4: the callback page's CSP also refuses framing and form submission,
-//   plus `X-Content-Type-Options: nosniff`.
-// - M5: logout now clears BOTH cookies in one response, and a small
-//   same-origin page under `/grafana/_o11y/logout` (GET) gives a person an
-//   actual link to reach — the state-clearing request it fires is still the
-//   CSRF-protected `POST` this file already had.
-// - M7: `handleSession` refusing a request with no `o11y_login` cookie at
-//   all (not just a mismatched nonce) is the real login-CSRF shape the
-//   review's own test-gap note names — see the test file for the guard this
-//   protects.
 
 import {
   computeSessionTtlSeconds,
@@ -63,8 +41,8 @@ function contentTypeIsJson(req: Request): boolean {
   return raw.split(";")[0]?.trim().toLowerCase() === "application/json";
 }
 
-/** M3: keyed on `cf-connecting-ip` (the same header `gates/browser.ts` uses
- *  for `collect`/`lite`), prefixed per route so an attacker hammering one of
+/** Keyed on `cf-connecting-ip` (the same header `gates/browser.ts` uses for
+ *  `collect`/`lite`), prefixed per route so an attacker hammering one of
  *  these two routes cannot also exhaust the other's budget for the same IP.
  *  Shares `wrangler.jsonc`'s single `RATE_LIMITER` binding/namespace — a
  *  distinct key still gets its own counting bucket. */
@@ -76,7 +54,7 @@ async function rateLimited(req: Request, env: Env, prefix: string): Promise<bool
 
 /** `handleLogin`'s own pre-flight: a misconfigured secret or broker URL
  *  must answer a clear, static 500 — never a redirect built from a broken
- *  value (M3's probed failure: an empty `LOGIN_BROKER_URL` produced
+ *  value (a probed failure: an empty `LOGIN_BROKER_URL` produced
  *  `Location: /broker/login?...`, sending the browser at this Worker's own,
  *  nonexistent route). */
 function configurationError(env: Env): string | null {
@@ -101,9 +79,9 @@ export const handleLogin: RouteHandler = async (req, env) => {
   const loginCookie = await signLoginCookie(env, { nonce, next });
 
   // `next` rides ONLY inside the signed `o11y_login` cookie — never in
-  // `return_to` — so the broker round trip cannot influence it at all
-  // (feasibility report, "Open redirect"). `return_to` carries only the
-  // nonce, which the callback echoes back as `?n=`.
+  // `return_to` — so the broker round trip cannot influence it at all (an
+  // open-redirect risk otherwise). `return_to` carries only the nonce,
+  // which the callback echoes back as `?n=`.
   const returnTo = `${publicOrigin(env)}/grafana/_o11y/callback?n=${encodeURIComponent(nonce)}`;
   const location = `${env.LOGIN_BROKER_URL}/broker/login?return_to=${encodeURIComponent(returnTo)}`;
 
@@ -118,12 +96,11 @@ export const handleLogin: RouteHandler = async (req, env) => {
 /**
  * The callback page's own script, hash-pinned into the CSP below (no
  * `unsafe-inline`). Strips the URL fragment with `history.replaceState`
- * BEFORE anything else — the feasibility report's "Token-in-URL leakage"
- * risk requires this to be the very first thing the page does, ahead of the
- * `fetch` — then POSTs the token same-origin to `/grafana/_o11y/session`
- * and navigates only to whatever that endpoint returns (never to a
- * caller-controlled value: `sanitizeNext` runs server-side on `next` before
- * it is ever handed back here).
+ * BEFORE anything else, ahead of the `fetch`, so a token-in-URL never
+ * lingers in browser history — then POSTs the token same-origin to
+ * `/grafana/_o11y/session` and navigates only to whatever that endpoint
+ * returns (never to a caller-controlled value: `sanitizeNext` runs
+ * server-side on `next` before it is ever handed back here).
  */
 const CALLBACK_SCRIPT = `(function(){
   var hash = new URLSearchParams(location.hash.slice(1));
@@ -154,14 +131,14 @@ async function scriptSha256Base64(script: string): Promise<string> {
   return btoa(bin);
 }
 
-/** Shared by the callback page and the logout page (M5) — both are static,
- *  script-only pages with no form and no reason to ever be framed. M4: adds
- *  `frame-ancestors 'none'` (the review: "the callback page can be framed
- *  by any origin... a same-site preview host would even get the Lax cookie
- *  sent inside the frame") and `form-action 'none'` (defence in depth —
- *  neither page has a `<form>`, but nothing should ever be able to add
- *  one). `X-Content-Type-Options: nosniff` sits alongside it, not inside
- *  the CSP string — a separate header, not a CSP directive. */
+/** Shared by the callback page and the logout page — both are static,
+ *  script-only pages with no form and no reason to ever be framed. Adds
+ *  `frame-ancestors 'none'` (the callback page must not be framed by any
+ *  origin, or a same-site preview host would get the Lax cookie sent
+ *  inside the frame) and `form-action 'none'` (defence in depth — neither
+ *  page has a `<form>`, but nothing should ever be able to add one).
+ *  `X-Content-Type-Options: nosniff` sits alongside it, not inside the CSP
+ *  string — a separate header, not a CSP directive. */
 async function staticPageHeaders(script: string): Promise<HeadersInit> {
   const hash = await scriptSha256Base64(script);
   const csp = [
@@ -235,12 +212,12 @@ export const handleSession: RouteHandler = async (req, env) => {
   }
   if (!isSessionBody(body)) return jsonResponse({ error: "expected { token: string, n: string }" }, 400);
 
-  // Login-CSRF / fixation binding (feasibility report design): the state
-  // this browser itself minted at `/login` must still be present (M7: a
-  // request with NO `o11y_login` cookie at all is refused here too — the
-  // real shape a login-CSRF attempt takes, not merely a mismatched nonce)
-  // and must name the SAME nonce the callback's `?n=` carried — an attacker
-  // who tricks a victim into visiting a crafted
+  // Login-CSRF / fixation binding: the state this browser itself minted at
+  // `/login` must still be present (a request with NO `o11y_login` cookie
+  // at all is refused here too — the real shape a login-CSRF attempt
+  // takes, not merely a mismatched nonce) and must name the SAME nonce the
+  // callback's `?n=` carried — an attacker who tricks a victim into
+  // visiting a crafted
   // `/callback?n=<attacker's own nonce>#token=<attacker's own token>`
   // cannot complete this exchange without also forging the victim's signed
   // `o11y_login` cookie.
@@ -256,9 +233,9 @@ export const handleSession: RouteHandler = async (req, env) => {
   const identity = await resolveBrokerIdentity(env, body.token);
   if (!identity) return jsonResponse({ error: "not_authorized" }, 401);
 
-  // I3: capped at the broker token's own `exp`, not a flat 12h — see
+  // Capped at the broker token's own `exp`, not a flat 12h — see
   // `computeSessionTtlSeconds`'s own doc comment for why, and ADR-0041 §M's
-  // K1 delta for the DEV-3088 blast-radius reasoning.
+  // DEV-3088 blast-radius reasoning.
   const ttlSeconds = computeSessionTtlSeconds(identity.exp);
   const sessionToken = await signSessionCookie(env, identity.email, ttlSeconds);
   const headers = new Headers();
@@ -267,14 +244,12 @@ export const handleSession: RouteHandler = async (req, env) => {
   return jsonResponse({ next: sanitizeNext(state.next, env) }, 200, headers);
 };
 
-// ---- GET /grafana/_o11y/logout (a same-origin sign-out page, M5) --------
+// ---- GET /grafana/_o11y/logout (a same-origin sign-out page) ------------
 
 /** Fires the actual, CSRF-protected `POST /grafana/_o11y/logout` from a
  *  same-origin script (never a bare `<a href>`/GET — that would make
  *  logout forgeable by any cross-site top-level navigation under
- *  `SameSite=Lax`, which the review explicitly credited the existing route
- *  for NOT being: "The route is not CSRF-able... needs POST, an exact
- *  Origin and JSON"). This page exists only so a person has somewhere to
+ *  `SameSite=Lax`). This page exists only so a person has somewhere to
  *  click — Grafana's own sign-out menu item is disabled
  *  (`grafana.ini:23`). */
 const LOGOUT_SCRIPT = `(function(){
@@ -312,9 +287,8 @@ export const handleLogout: RouteHandler = async (req) => {
   if (!isSameOrigin(req)) return jsonResponse({ error: "bad_origin" }, 403);
   if (!contentTypeIsJson(req)) return jsonResponse({ error: "expected content-type: application/json" }, 415);
 
-  // M5: clears BOTH cookies — the old version left `o11y_login` behind
-  // (harmless on its own short TTL, but "logout clears state" should mean
-  // all of it).
+  // Clears BOTH cookies — leaving `o11y_login` behind would be harmless on
+  // its own short TTL, but "logout clears state" should mean all of it.
   const headers = new Headers({ Location: "/" });
   headers.append("Set-Cookie", sessionClearCookieHeader());
   headers.append("Set-Cookie", loginClearCookieHeader());

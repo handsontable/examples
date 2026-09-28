@@ -1,9 +1,8 @@
-// `/grafana/*` (ADR §B.5/§H, task "Grafana access" scope; gate replaced by
-// controller decision K1 — see gates/session.ts's own header): verify the
-// Worker's own session cookie, wake (idempotent), strip the cookie and any
-// client-supplied auth headers, set `x-o11y-grafana-user`, proxy to port
-// 3000, renew activity only once the request actually reaches this far —
-// never for a request served the waking page.
+// `/grafana/*` (ADR §B.5/§H — see gates/session.ts's own header): verify
+// the Worker's own session cookie, wake (idempotent), strip the cookie and
+// any client-supplied auth headers, set `x-o11y-grafana-user`, proxy to
+// port 3000, renew activity only once the request actually reaches this
+// far — never for a request served the waking page.
 
 import { isBrowserNavigation, sanitizeNext, verifySession } from "../gates/session.js";
 import { GRAFANA_PROXY_MAX_BYTES, contentLengthExceeds } from "../gates/limits.js";
@@ -24,25 +23,23 @@ import type { RouteHandler } from "../router.js";
  *  regresses. */
 const STRIPPED_HEADERS = ["cookie", "x-o11y-grafana-user", "cf-container-target-port"];
 
-/** F2 fix (final review, B-I3 "an open Grafana tab defeats the 4h cap"): a
- *  dashboard's own auto-refresh `fetch()`/XHR calls (every panel, on the
- *  `"refresh"` interval every dashboard JSON sets — 1m/5m) used to call
- *  `wake("visit")` exactly like a real page load, which MINTS A FRESH WAKE
- *  (and a fresh 4-hour hard cap) if the box has since stopped — an open tab
- *  left running past the cap re-starts the box within a minute of the cap
- *  firing, indefinitely, at the ADR §A cost model's full awake-hour rate.
- *  Modern browsers (everything Grafana 11 supports) tag every request with
- *  Fetch Metadata headers: a real top-level navigation — the address bar, a
- *  link, or the waking page's own `<meta http-equiv="refresh">` poll (ADR
- *  §A's own wording: that poll IS a real HTTP request and must still count
- *  as activity/be able to wake a booting box) — sends
+/** A dashboard's own auto-refresh `fetch()`/XHR calls (every panel, on the
+ *  `"refresh"` interval every dashboard JSON sets) must not call
+ *  `wake("visit")` the same way a real page load does: that mints a fresh
+ *  wake (and a fresh 4-hour hard cap) if the box has since stopped, so an
+ *  open tab left running past the cap would re-start the box within a
+ *  minute of the cap firing, indefinitely, at the ADR §A cost model's full
+ *  awake-hour rate. Modern browsers (everything Grafana 11 supports) tag
+ *  every request with Fetch Metadata headers: a real top-level navigation —
+ *  the address bar, a link, or the waking page's own
+ *  `<meta http-equiv="refresh">` poll (ADR §A's own wording: that poll IS a
+ *  real HTTP request and must still count as activity) — sends
  *  `sec-fetch-dest: document`; a background `fetch()`/XHR sends
  *  `sec-fetch-dest: empty`. Fails OPEN when the header is absent entirely
- *  (an old browser, `curl`, most test/tooling requests) rather than closed:
- *  the real attack/waste vector (a dashboard's own auto-refresh JS) always
- *  carries the header in every browser Grafana ships to, so treating an
- *  absent header as "assume navigation" costs nothing in practice while
- *  keeping this compatible with non-Fetch-Metadata callers. Only gates
+ *  (an old browser, `curl`, most test/tooling requests): the real
+ *  attack/waste vector (a dashboard's own auto-refresh JS) always carries
+ *  the header in every browser Grafana ships to, so treating an absent
+ *  header as "assume navigation" costs nothing in practice. Only gates
  *  STARTING a stopped box — once already awake, `wake()` stays safe
  *  (idempotent) to call from anything, which is what keeps "actively
  *  viewing a dashboard" renewing activity normally. */
@@ -59,15 +56,15 @@ function payloadTooLargeResponse(): Response {
   });
 }
 
-/** QA follow-up ("/grafana/* body cap"): reads `req`'s body verbatim (this route forwards it
- *  exactly as received — see the Z1 note below on why it is buffered rather
- *  than piped — so this never decompresses, unlike `normalise/read-body.ts`'s
+/** Reads `req`'s body verbatim (this route forwards it exactly as
+ *  received, buffered rather than piped — see the note below on why — so
+ *  this never decompresses, unlike `normalise/read-body.ts`'s
  *  `readCappedBytes`), refusing once the byte count crosses `maxBytes`.
  *  Reads only as much of the stream as it takes to detect the overflow, and
- *  CANCELS the reader (not merely releasing its lock) the moment it does, so
- *  nothing keeps pumping past the cap — the same `Content-Length` is only a
- *  hint" reasoning `read-body.ts` documents applies here too: an absent or
- *  wrong `Content-Length` must not bypass this. */
+ *  CANCELS the reader (not merely releasing its lock) the moment it does,
+ *  so nothing keeps pumping past the cap — the same "`Content-Length` is
+ *  only a hint" reasoning `read-body.ts` documents applies here too: an
+ *  absent or wrong `Content-Length` must not bypass this. */
 async function readCappedArrayBuffer(req: Request, maxBytes: number): Promise<ArrayBuffer> {
   if (!req.body) return new ArrayBuffer(0);
   const reader = req.body.getReader();
@@ -99,15 +96,16 @@ async function readCappedArrayBuffer(req: Request, maxBytes: number): Promise<Ar
 export const handleGrafana: RouteHandler = async (req, env) => {
   const identity = await verifySession(req, env);
   if (!identity) {
-    // K1: an unauthenticated request must NEVER wake the box — this branch
-    // returns before `getGrafanaBoxStub` is even called, below. A top-level
-    // navigation gets a real sign-in redirect; everything else (an XHR, a
-    // fetch, an asset request) gets 401 JSON, which is also what recovers a
-    // session that expired mid-use on one of Grafana's own background
-    // panel-refresh calls (see the session cookie's own doc comment on
-    // expiry) — Grafana's frontend surfaces that as a failed panel rather
-    // than navigating, and the person's next real navigation (reload, or a
-    // link) hits the branch below and gets a clean re-auth redirect instead.
+    // An unauthenticated request must NEVER wake the box — this branch
+    // returns before `getGrafanaBoxStub` is even called, below. A
+    // top-level navigation gets a real sign-in redirect; everything else
+    // (an XHR, a fetch, an asset request) gets 401 JSON, which is also
+    // what recovers a session that expired mid-use on one of Grafana's own
+    // background panel-refresh calls (see the session cookie's own doc
+    // comment on expiry) — Grafana's frontend surfaces that as a failed
+    // panel rather than navigating, and the person's next real navigation
+    // (reload, or a link) hits the branch below and gets a clean re-auth
+    // redirect instead.
     if (isBrowserNavigation(req)) {
       const url = new URL(req.url);
       const next = sanitizeNext(url.pathname + url.search, env);
@@ -122,10 +120,10 @@ export const handleGrafana: RouteHandler = async (req, env) => {
     });
   }
 
-  // QA follow-up ("/grafana/* body cap"): checked before the box is ever touched — an
-  // oversized request must not wake a stopped box or renew its activity
-  // timer. `Content-Length` is only a pre-check (a client can omit it or
-  // lie); `readCappedArrayBuffer` below is the real enforcement.
+  // Checked before the box is ever touched — an oversized request must not
+  // wake a stopped box or renew its activity timer. `Content-Length` is
+  // only a pre-check (a client can omit it or lie);
+  // `readCappedArrayBuffer` below is the real enforcement.
   if (contentLengthExceeds(req, GRAFANA_PROXY_MAX_BYTES)) return payloadTooLargeResponse();
 
   const box = getGrafanaBoxStub(env);
@@ -140,28 +138,25 @@ export const handleGrafana: RouteHandler = async (req, env) => {
 
   try {
     // Idempotent: an already-running box returns its existing wake record;
-    // `wake()` itself refuses (throws) only while `container is stopping`
-    // (T01 fix round C1) — the waking page's own meta-refresh retries. No
-    // activity is noted here: nothing actually started (or is still
-    // running from before), so there is no wake to keep alive yet.
+    // `wake()` itself refuses (throws) only while the container is
+    // stopping — the waking page's own meta-refresh retries. No activity
+    // is noted here: nothing actually started (or is still running from
+    // before), so there is no wake to keep alive yet.
     await box.wake("visit");
   } catch {
     return wakingPageResponse();
   }
 
   if (!(await box.isReady())) {
-    // F2 fix: a request that only ever saw the waking page still counts as
-    // visitor activity. Before this, a visit wake with an empty backlog
-    // SIGTERMed itself ~20s after boot: `#finishDrain`'s quiet check
-    // (box.ts) read `lastGrafanaActivityMs() === null` — nobody had ever
-    // "visited" — and stopped the box the person just opened, because this
-    // branch recorded nothing. The waking page's own `meta refresh` poll IS
-    // a real HTTP request to `/grafana/*` (ADR §A's own renewal wording),
-    // so it counts the same way a proxied request does. Called AFTER
-    // `wake()` (never before): `#doWake` resets this same storage key at
-    // wake-start (fix round I1), so noting activity before that call would
-    // just be wiped — this is what actually keeps it set on every
-    // subsequent poll while the box boots.
+    // A request that only ever saw the waking page still counts as
+    // visitor activity: a visit wake with an empty backlog would
+    // otherwise SIGTERM itself ~20s after boot (`#finishDrain`'s quiet
+    // check reads `lastGrafanaActivityMs() === null` — nobody had ever
+    // "visited"). The waking page's own `meta refresh` poll IS a real HTTP
+    // request to `/grafana/*` (ADR §A's own renewal wording), so it counts
+    // the same way a proxied request does. Called AFTER `wake()` (never
+    // before): `#doWake` resets this same storage key at wake-start, so
+    // noting activity before that call would just be wiped.
     await box.noteVisitorActivity();
     return wakingPageResponse();
   }
@@ -175,31 +170,30 @@ export const handleGrafana: RouteHandler = async (req, env) => {
   await box.noteVisitorActivity();
 
   // Reuse the ORIGINAL request's URL verbatim (Host, path, query
-  // untouched) — the task's own Trap: "Grafana behind a sub-path needs
-  // `Host` and path preserved exactly." `containerFetch`'s only URL
-  // transform is scheme (`https:` → `http:`); the destination TCP port is
-  // resolved by the Container binding itself, not by whatever hostname the
-  // URL string names, so there is no need (and no benefit) to rewrite it to
-  // a synthetic origin the way `isReady()`'s own `/ready`/`/grafana/api/health`
-  // probes do (those endpoints do not care about `Host` at all).
+  // untouched): Grafana behind a sub-path needs `Host` and path preserved
+  // exactly. `containerFetch`'s only URL transform is scheme (`https:` →
+  // `http:`); the destination TCP port is resolved by the Container
+  // binding itself, not by whatever hostname the URL string names, so
+  // there is no need to rewrite it to a synthetic origin the way
+  // `isReady()`'s own `/ready`/`/grafana/api/health` probes do.
   //
-  // Z1: the body is read in full HERE, before the box sees the request, and
+  // The body is read in full HERE, before the box sees the request, and
   // forwarded as a buffer rather than piped from `req.body`. When the box
   // answers without reading a piped body (the live-path/Loki-allowlist
-  // refusals, the not-running 503s), this Worker sends that response while
-  // the runtime is still pumping the incoming body into the DO subrequest.
-  // Every such request then printed `Uncaught TypeError: Can't read from
-  // request stream after response has been sent.` Under `wrangler dev`, a
-  // body of about 20 KB also made the dev proxy fail the request with a 500
-  // ("Network connection lost") instead of passing on the box's 404.
-  // Grafana's own request bodies are small JSON (panel queries, dashboard
-  // saves), and this route is reachable only with a verified session.
+  // refusals, the not-running 503s), this Worker would otherwise send that
+  // response while the runtime is still pumping the incoming body into the
+  // DO subrequest, printing `Uncaught TypeError: Can't read from request
+  // stream after response has been sent.` Under `wrangler dev`, a body of
+  // about 20 KB also made the dev proxy fail the request with a 500
+  // instead of passing on the box's 404. Grafana's own request bodies are
+  // small JSON (panel queries, dashboard saves), and this route is
+  // reachable only with a verified session.
   let body: ArrayBuffer | null = null;
   if (req.body) {
     try {
-      // QA follow-up ("/grafana/* body cap"): enforced again here, not just against the
-      // `Content-Length` hint above — an absent or wrong header must not
-      // let an oversized body reach the buffer at all.
+      // Enforced again here, not just against the `Content-Length` hint
+      // above — an absent or wrong header must not let an oversized body
+      // reach the buffer at all.
       body = await readCappedArrayBuffer(req, GRAFANA_PROXY_MAX_BYTES);
     } catch (err) {
       if (err instanceof BodyTooLargeError) return payloadTooLargeResponse();
@@ -211,9 +205,9 @@ export const handleGrafana: RouteHandler = async (req, env) => {
   for (const h of STRIPPED_HEADERS) upstream.headers.delete(h);
   upstream.headers.set("x-o11y-grafana-user", identity.email);
 
-  // Z1: the DO's `fetch()` handler, never the `containerFetch` RPC method.
-  // A `Request` passed to an RPC method has its body sent as an RPC stream,
-  // and every POST proxied that way (each panel query) printed
+  // The DO's `fetch()` handler, never the `containerFetch` RPC method: a
+  // `Request` passed to an RPC method has its body sent as an RPC stream,
+  // and every POST proxied that way (each panel query) would print
   // `ReadableStream received over RPC disconnected prematurely` in the box
   // DO. See `GrafanaBox.fetch`'s doc comment (box.ts), which also keeps
   // every gate (live-path block, Loki allowlists, not-running 503s) and

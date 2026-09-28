@@ -1,6 +1,6 @@
 // ADR §C.3 — symbolication in the Worker, at drain, for exception records
-// only. `convert.ts#faroBody` (T03 addition) renders a Faro exception's
-// stack as plain text in the record body, standard V8 shape:
+// only. `convert.ts#faroBody` renders a Faro exception's stack as plain
+// text in the record body, standard V8 shape:
 //
 //   TypeError: x is not a function
 //       at fn (https://demos.handsontable.com/assets/index-abc123.js:12:34)
@@ -8,27 +8,18 @@
 // This module parses that text back into frames, resolves app-chunk frames
 // with `@jridgewell/trace-mapping` against `sourcemaps/<service.version>/
 // <original asset path>.map` (the maps bucket), and rewrites resolved lines
-// in place.
+// in place. `trace-mapping`, not `source-map-js`: workerd forbids code
+// generation from strings, and `source-map-js`'s sort comparator uses
+// `new Function(...)`; `pipeline/o11y-symbolicate-drain.test.mjs` runs the
+// drain under `node --disallow-code-generation-from-strings` so that class
+// of dependency cannot come back unnoticed.
 //
-// F30 (why not `source-map-js`, which this module used until then): its
-// `lib/quick-sort.js` builds the comparator-specialised sort it runs on the
-// first `originalPositionFor` with `new Function(...)`. workerd forbids
-// code generation from strings, so inside the real Worker EVERY lookup
-// threw `EvalError: Code generation from strings disallowed for this
-// context`, the per-frame catch below swallowed it, and no frame was ever
-// resolved in production or under `wrangler dev`, while every Node unit
-// test (Node allows `new Function`) stayed green.
-// `pipeline/o11y-symbolicate-drain.test.mjs` runs the drain under
-// `node --disallow-code-generation-from-strings` so that class of
-// dependency cannot come back unnoticed. `trace-mapping` does no code
-// generation.
 // Frames it cannot or must not resolve (Babel-chunk, third-party, a missing
 // or unparseable map) are left byte-for-byte as rendered — never a
 // placeholder, never a partial guess — so drain-time symbolication produces
 // the exact same body text on every replay of the same source record
 // (exit criterion 2's "a log query equals a single clean replay" needs
-// this: a body that could come out differently on a re-drain after an
-// unclean stop would make the replay's line diverge from a clean run's).
+// this).
 
 import { ATTR_HOT_KIND, type OtlpResourceLogs } from "@handsontable/demo-runtime/telemetry";
 import { TraceMap, originalPositionFor } from "@jridgewell/trace-mapping";
@@ -44,26 +35,21 @@ import { TraceMap, originalPositionFor } from "@jridgewell/trace-mapping";
 const STACK_LINE_RE = /^( {4}at )(.+?) \((.+?)(?::(\d+):(\d+))?\)$/;
 
 /**
- * Advisor sweep finding (post-report, same Z-B-C1 file): `STACK_LINE_RE`'s
- * two lazy groups (`(.+?)`, `(.+?)`) separated by a required ` (` literal
- * are quadratic on a line shaped like `"    at a (a (a (…"` — no `/g`, so
- * it is only tried once per line (anchored `^…$`), but that ONE attempt
- * still backtracks catastrophically across every ambiguous split point.
- * Measured directly (`node -e`, the two-group regex alone): 5k chars 5ms,
- * 10k 20ms, 20k 74ms, 40k 305ms — roughly ×4 per ×2, i.e. quadratic.
- * Projected to `SCRUB_TEXT_MAX_CHARS` (256 KB, the cap Z-A-C1 truncates
- * every free-text string to, including an exception `value` that becomes
- * this body's first line): tens of seconds. A CPU-limit kill from this is
- * not a JS throw, so none of this module's three throw-shaped guards
- * (the `line < 1` check, the `originalPositionFor` try/catch,
- * `symbolicateResourceLogs`'s per-record try/catch) would catch it — the
- * regex call itself never returns. A real frame line
- * (`convert.ts#formatStackFrame`'s own output: a `"    at "` prefix, a
- * function name, and a scrubbed URL with its query already stripped) is
- * nowhere near this length; skipping anything longer costs no real frame
- * resolution and removes the attack surface at its cheapest point — before
- * the regex ever runs, matching this whole fix round's "truncate first"
- * approach (Z-A-C1).
+ * `STACK_LINE_RE`'s two lazy groups (`(.+?)`, `(.+?)`) separated by a
+ * required ` (` literal are quadratic on a line shaped like
+ * `"    at a (a (a (…"` — no `/g`, so it is only tried once per line
+ * (anchored `^…$`), but that ONE attempt still backtracks catastrophically
+ * across every ambiguous split point. Measured directly (the two-group
+ * regex alone): 5k chars 5ms, 10k 20ms, 20k 74ms, 40k 305ms — roughly ×4
+ * per ×2, i.e. quadratic. Projected to `SCRUB_TEXT_MAX_CHARS` (256 KB, the
+ * cap every free-text string is truncated to, including an exception
+ * `value` that becomes this body's first line): tens of seconds. A
+ * CPU-limit kill from this is not a JS throw, so none of this module's
+ * three throw-shaped guards would catch it — the regex call itself never
+ * returns. A real frame line (`convert.ts#formatStackFrame`'s own output)
+ * is nowhere near this length, so skipping anything longer costs no real
+ * frame resolution and removes the attack surface at its cheapest point,
+ * before the regex ever runs.
  */
 const MAX_STACK_LINE_LENGTH = 4096;
 
@@ -96,13 +82,12 @@ function renderLine(frame: ParsedFrame): string {
 }
 
 /** Chunks CI names for its Babel compiler bundle with a `babel-` filename
- *  prefix (confirmed real convention in this codebase's Vite output — see
- *  the DEV-2569 fix, "Workers Assets answers a deploy-rotated
- *  `babel-<hash>.js`"). Criterion 5 requires these frames be "left
- *  unparsed," not merely unresolved because no map happens to exist for
- *  them — an explicit skip, checked before ever attempting a map fetch, is
- *  what makes that true regardless of whether CI someday uploads a map for
- *  every chunk including this one. */
+ *  prefix (confirmed real convention in this codebase's Vite output — a
+ *  deploy-rotated chunk name like `babel-<hash>.js`). Criterion 5 requires
+ *  these frames be "left unparsed," not merely unresolved because no map
+ *  happens to exist for them — an explicit skip, checked before ever
+ *  attempting a map fetch, is what makes that true regardless of whether
+ *  CI someday uploads a map for every chunk including this one. */
 function isBabelChunk(filename: string): boolean {
   try {
     const path = new URL(filename).pathname;
@@ -122,10 +107,10 @@ function isBabelChunk(filename: string): boolean {
 function mapKeyFor(filename: string, serviceVersion: string): string | null {
   try {
     const url = new URL(filename);
-    // F30: a frame in the page itself (an inline `<script>`, e.g.
+    // A frame in the page itself (an inline `<script>`, e.g.
     // `at eval (http://host/:303:30)`) has no file to map. Without this the
-    // symbolicator fetched `sourcemaps/<sha>/.map` for every such frame and
-    // reported it as a missing map.
+    // symbolicator would fetch `sourcemaps/<sha>/.map` for every such frame
+    // and report it as a missing map.
     if (url.pathname.endsWith("/")) return null;
     return `sourcemaps/${serviceVersion}${url.pathname}.map`;
   } catch {
@@ -137,9 +122,9 @@ function mapKeyFor(filename: string, serviceVersion: string): string | null {
 const WORKSPACE_ROOTS: ReadonlySet<string> = new Set(["apps", "packages", "workers", "node_modules"]);
 
 /**
- * F30 (render-time source-path normalisation): turns a map `sources` entry
- * into a repo-relative path for the rendered frame. Rollup writes each
- * source relative to the map file, so a CI build (`apps/authoring/dist`)
+ * Render-time source-path normalisation: turns a map `sources` entry into a
+ * repo-relative path for the rendered frame. Rollup writes each source
+ * relative to the map file, so a CI build (`apps/authoring/dist`)
  * emits `../../src/sentry.ts` or `../../../../packages/runtime/dist/monitor.js`,
  * and a build into any other outDir climbs out of the checkout entirely
  * (`../../../../../../../../Users/<user>/Code/examples/runner/...`), which
@@ -171,9 +156,9 @@ export function normaliseSourcePath(source: string): string {
   return rest.join("/");
 }
 
-/** F30: why a map key's frames were left unresolved. `fetch_error` (the
- *  read threw) is kept apart from `no_map` (the object is absent) so a
- *  transient R2 failure is not read as a missing upload (B-M6). */
+/** Why a map key's frames were left unresolved. `fetch_error` (the read
+ *  threw) is kept apart from `no_map` (the object is absent) so a
+ *  transient R2 failure is not read as a missing upload. */
 export type SymbolicateSkipReason =
   | "no_map"
   | "fetch_error"
@@ -195,13 +180,13 @@ export interface SymbolicateSkip {
 
 export interface SymbolicateDeps {
   /** Reads one map object; `null` when absent (never fetches from the app
-   *  origin — the task's own Trap: "a rotated hash answers `200 text/html`"
-   *  is exactly why this must be the maps bucket, never a `fetch()` to
+   *  origin — a rotated deploy hash can answer `200 text/html`, so this
+   *  must be the maps bucket, never a `fetch()` to
    *  `demos.handsontable.com`). */
   getMap(key: string): Promise<string | null>;
-  /** F30: called at most once per {@link symbolicateResourceLogs} call when
-   *  any key had frames that were attempted and left unresolved, with at
-   *  most {@link MAX_SKIP_REPORTS} entries (one per key) and the number of
+  /** Called at most once per {@link symbolicateResourceLogs} call when any
+   *  key had frames that were attempted and left unresolved, with at most
+   *  {@link MAX_SKIP_REPORTS} entries (one per key) and the number of
    *  further keys left out. Defaults to {@link logSymbolicateSkips}. Never
    *  affects the rendered output. */
   onSkip?(skips: SymbolicateSkip[], suppressed: number): void;
@@ -243,15 +228,14 @@ interface KeyStats {
  */
 class DrainMapCache {
   #parsed = new Map<string, TraceMap | null>();
-  /** F30: why a key resolved to `null`, for the skip signal. */
+  /** Why a key resolved to `null`, for the skip signal. */
   #failures = new Map<string, { reason: SymbolicateSkipReason; detail?: string }>();
   #parsedBytes = 0;
   /** A generous per-invocation ceiling on total parsed map JSON, well under
    *  the 64 MB isolate-memory budget criterion 5 sets for ONE exception's
    *  resolution — this is a batch-wide safety cap against a pathological
    *  object with many distinct chunk files, not the per-record budget
-   *  itself (T03-D: exit criterion 5's own number is measured directly
-   *  against a single real exception, see the task Outcome). */
+   *  itself. */
   static readonly MAX_PARSED_BYTES = 48 * 1024 * 1024;
 
   readonly #deps: SymbolicateDeps;
@@ -260,8 +244,7 @@ class DrainMapCache {
   // shorthand: `node --experimental-strip-types` (this repo's own test
   // runner, package.json's `test` script) only strips types, it does not
   // transform TS-only syntax like `constructor(private readonly x: T)`
-  // (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` — caught running this task's own
-  // `pipeline/o11y-*.test.mjs` for real, not by reading docs).
+  // (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`).
   constructor(deps: SymbolicateDeps) {
     this.#deps = deps;
   }
@@ -302,20 +285,15 @@ class DrainMapCache {
  *  unchanged if there is nothing to resolve (no stack lines, or every frame
  *  is skipped/unresolvable).
  *
- *  Fix round (finding Z-B-C1): never throws. Two independent guards, both
- *  load-bearing on their own:
+ *  Never throws. Two independent guards, both load-bearing on their own:
  *
  *  1. A frame with `line < 1` (or a non-finite line/col — defensive; the
- *     regex above only ever captures digits, so this should be unreachable,
- *     but a *guaranteed* skip is cheap and this function's whole job is to
- *     never trust the input) is skipped before ever reaching
- *     the map library. `originalPositionFor({ line: 0, ... })` throws (in
- *     `source-map-js`, used until F30: `TypeError: Line must be greater
- *     than or equal to 1, got 0`; in `trace-mapping`: "`line` must be
- *     greater than 0") — a
- *     `lineno: 0` stack frame is valid, storable Faro input (ingest does
- *     not reject it), so this is reachable from one anonymous
- *     `POST /telemetry/collect` request, not a contrived shape.
+ *     regex above only ever captures digits, so this should be
+ *     unreachable) is skipped before ever reaching the map library.
+ *     `originalPositionFor({ line: 0, ... })` throws ("`line` must be
+ *     greater than 0") — a `lineno: 0` stack frame is valid, storable Faro
+ *     input (ingest does not reject it), so this is reachable from one
+ *     anonymous `POST /telemetry/collect` request, not a contrived shape.
  *  2. Even so, `originalPositionFor` is wrapped in its own try/catch,
  *     leaving the frame byte-for-byte unresolved on any other throw the
  *     library might raise — the same "resolve or leave exactly as
@@ -335,7 +313,7 @@ async function resolveBody(
     if (raw === undefined) continue;
     const frame = parseLine(raw);
     if (!frame || frame.line === undefined || frame.col === undefined) continue; // not a resolvable stack line
-    if (!Number.isFinite(frame.line) || !Number.isFinite(frame.col) || frame.line < 1) continue; // Z-B-C1: a line-0 (or otherwise invalid) frame is left unresolved, never passed to the map consumer
+    if (!Number.isFinite(frame.line) || !Number.isFinite(frame.col) || frame.line < 1) continue; // a line-0 (or otherwise invalid) frame is left unresolved, never passed to the map consumer
     if (isBabelChunk(frame.filename)) continue; // criterion 5: left unparsed, deliberately
 
     const mapKey = mapKeyFor(frame.filename, serviceVersion);
@@ -355,7 +333,7 @@ async function resolveBody(
     try {
       original = originalPositionFor(map, { line: frame.line, column: Math.max(0, frame.col - 1) });
     } catch (err) {
-      // Z-B-C1: a library throw on this one frame must not cost the rest of the body.
+      // A library throw on this one frame must not cost the rest of the body.
       keyStats.lookupErrors++;
       keyStats.lookupDetail ??= errorDetail(err);
       continue;
@@ -423,14 +401,13 @@ export async function symbolicateResourceLogs(
         logRecords: await Promise.all(
           scope.logRecords.map(async (log) => {
             if (!log.body?.stringValue) return log;
-            // Z-B-C1 "guard the record": `resolveBody` above is already
-            // written to never throw, but this is the second, independent
-            // layer the finding asks for — a throw here (from `resolveBody`
-            // itself, or from anything the map library does that this
-            // module did not anticipate) must leave THIS record's body
-            // exactly as it arrived, never escape and cost every record
-            // after it in the batch (`drain.ts#drainKey` is the third
-            // layer, isolating a whole KEY the same way).
+            // `resolveBody` above never throws, but this is a second,
+            // independent layer: a throw here (from `resolveBody` itself,
+            // or from anything the map library does that this module did
+            // not anticipate) must leave THIS record's body exactly as it
+            // arrived, never escape and cost every record after it in the
+            // batch (`drain.ts#drainKey` is the third layer, isolating a
+            // whole KEY the same way).
             let resolvedBody: string;
             try {
               resolvedBody = await resolveBody(log.body.stringValue, serviceVersion, cache, stats);
@@ -450,9 +427,9 @@ export async function symbolicateResourceLogs(
   return out;
 }
 
-/** F30: one entry per map key whose frames were attempted and not all
- *  resolved for a reason worth an operator's attention, in first-seen key
- *  order. A key with at least one resolved frame is only reported for a
+/** One entry per map key whose frames were attempted and not all resolved
+ *  for a reason worth an operator's attention, in first-seen key order. A
+ *  key with at least one resolved frame is only reported for a
  *  `lookup_error`: a frame the map has no mapping for is normal, a library
  *  throw is not. A reporter that throws is ignored, so the signal can never
  *  cost the drain. */
