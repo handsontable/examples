@@ -232,7 +232,7 @@ function compileHarness() {
   return { ...h, compileError };
 }
 
-test("R9C: a typed syntax-error ladder is one compile error and no runtime error, stale relays included", () => {
+test("a typed syntax-error ladder is one compile error and no runtime error, stale relays included", () => {
   const { clock, emitted, collapse, relay, compileError } = compileHarness();
   // `const X = ;` typed key by key. `c`..`cons` parse and run (and throw);
   // from `const` on, every prefix fails the pre-transpile.
@@ -255,7 +255,7 @@ test("R9C: a typed syntax-error ladder is one compile error and no runtime error
   assert.deepEqual(emitted, ["compile: Unexpected token (1:12)"], "the final state's compile error, alone");
 });
 
-test("R9C: a compile error replaces an earlier one of the same burst, so the final state's diagnostic is the one counted", () => {
+test("a compile error replaces an earlier one of the same burst, so the final state's diagnostic is the one counted", () => {
   const { clock, emitted, collapse, compileError } = compileHarness();
   collapse.noteEdit();
   compileError("stale diagnostic from the previous push");
@@ -264,7 +264,7 @@ test("R9C: a compile error replaces an earlier one of the same burst, so the fin
   assert.deepEqual(emitted, ["compile: the newest push's diagnostic"]);
 });
 
-test("R9C: a burst that ends compiling cleanly counts its run's runtime error, not the earlier compile error", () => {
+test("a burst that ends compiling cleanly counts its run's runtime error, not the earlier compile error", () => {
   const { clock, emitted, collapse, relay, compileError } = compileHarness();
   collapse.noteEdit();
   compileError("Unexpected token");
@@ -274,7 +274,7 @@ test("R9C: a burst that ends compiling cleanly counts its run's runtime error, n
   assert.deepEqual(emitted, [FINAL]);
 });
 
-test("R9C: a runtime SyntaxError (JSON.parse) stays a runtime error — only the compile signal replaces a run", () => {
+test("a runtime SyntaxError (JSON.parse) stays a runtime error — only the compile signal replaces a run", () => {
   const { clock, emitted, collapse, relay } = compileHarness();
   const jsonParse = "SyntaxError: Unexpected token } in JSON at position 1";
   collapse.noteEdit();
@@ -289,7 +289,7 @@ test("R9C: a runtime SyntaxError (JSON.parse) stays a runtime error — only the
   assert.deepEqual(emitted, [jsonParse, FINAL, "SyntaxError: Unexpected end of JSON input"]);
 });
 
-test("R9C: a first-load compile failure counts at once, and only once until the next edit", () => {
+test("a first-load compile failure counts at once, and only once until the next edit", () => {
   const { emitted, collapse, compileError } = compileHarness();
   compileError("Unexpected token");
   assert.deepEqual(emitted, ["compile: Unexpected token"], "no burst open: not held back");
@@ -300,7 +300,7 @@ test("R9C: a first-load compile failure counts at once, and only once until the 
   assert.equal(emitted.length, 2, "a new mount counts its own first-load failure");
 });
 
-test("R9C: the next edit re-arms runtime reports after a compile failure", () => {
+test("the next edit re-arms runtime reports after a compile failure", () => {
   const { clock, emitted, collapse, relay, compileError } = compileHarness();
   collapse.noteEdit();
   compileError("Unexpected token");
@@ -310,7 +310,7 @@ test("R9C: the next edit re-arms runtime reports after a compile failure", () =>
   assert.deepEqual(emitted, ["compile: Unexpected token", "stale preview click"]);
 });
 
-test("R9C: a stale relay held before the final keystroke's compile failure is dropped by it", () => {
+test("a stale relay held before the final keystroke's compile failure is dropped by it", () => {
   const { clock, emitted, collapse, relay, compileError } = compileHarness();
   collapse.noteEdit(); // the last keystroke of the line
   relay("cons is not defined"); // the previous run, still in flight
