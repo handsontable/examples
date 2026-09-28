@@ -1,18 +1,8 @@
-// The lint gate for every provisioned dashboard under
-// containers/o11y/grafana/dashboards/. Local ClickHouse accepts far more
-// SQL than Workers Analytics Engine does — this is the one place that
-// difference is enforced, so a panel that only works against the local
-// shim never reaches production silently broken. Five rules (proven to
-// fail on a real violation, see "the lint itself" below): (1) an AE panel
-// query uses only known contract columns (§4) and an allowlisted function
-// set; (2) a Loki panel/annotation query uses only the labels §3 promotes
-// and a real tenant uid, never an implicit default; (3) no dashboard
-// carries a legacy `alert` block (ADR-0041 §F.3: Grafana holds no alert
-// rules); (4) a `blobN` WHERE filter must be one the metric's §5 row
-// actually sets — the local shim accepts an out-of-set column the real
-// one would zero-row, so this needs its own rule; (5) no dashboard ships a
-// non-empty `refresh` (an open tab must never keep the box awake past the
-// idle-stop window).
+// Lint gate for every provisioned dashboard: local ClickHouse accepts far more SQL than
+// Workers Analytics Engine, so this is where that difference is enforced. Rules: AE queries
+// use only §4 columns and allowlisted functions; Loki queries use only §3 labels and a named
+// tenant; no alert blocks (ADR-0041 §F.3); a blobN filter is one its metric's §5 row sets;
+// no dashboard ships a non-empty `refresh`. Each rule is proven failing in "the lint itself".
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 
 import test from "node:test";

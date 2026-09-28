@@ -1076,13 +1076,10 @@ These are carried from the tasks that found them, not newly discovered here:
   caps every session at `min(now + 12h, brokerTokenExp)`, falling back to 1h when the
   token carries no readable `exp` — this narrows, but does not eliminate, DEV-3088's
   blast radius, which is still open and tracked separately.
-- **Accepted risk: logout cannot revoke a copied `__Host-o11y_session` cookie.**
-  Sessions are stateless, signed HMAC tokens with no server-side record, so `POST
-  /grafana/_o11y/logout` only clears the browser's own cookie — a copy taken before
-  logout stays valid until its `exp` (at most 12h, per the TTL cap above). The only
-  remedy is rotating `O11Y_SESSION_SECRET`, which signs every signed-in person out at
-  once. Accepted for launch given the small, `@handsontable.com`-only user base; revisit
-  if a deny-list (the `InboxWriter` DO already exists) is ever needed.
+- **Accepted risk: logout does not revoke a session.** Sessions are stateless, so
+  logout only clears the browser's cookie; a copied `__Host-o11y_session` stays valid
+  until its `exp` (at most 12h). The remedy is rotating `O11Y_SESSION_SECRET`, which
+  signs everyone out.
 - **The "no per-panel ClickHouse `database` field" decision has not been checked
   against the real Analytics Engine SQL API** — only local ClickHouse and AE's documented
   SQL surface were checked. If a query returns "unknown table" in production Grafana where

@@ -39,9 +39,7 @@ function contentTypeIsJson(req: Request): boolean {
 
 /** Keyed on `cf-connecting-ip`, prefixed per route so an attacker
  *  hammering one route cannot exhaust the other's budget for the same IP.
- *  Returns the `Retry-After` seconds to send when rate-limited, `null`
- *  otherwise — a scripted client hitting this 429 gets the same back-off
- *  signal `respond.ts#respondDrop` already gives the telemetry routes. */
+ *  Returns the `Retry-After` seconds to send when rate-limited, `null` otherwise. */
 async function rateLimited(req: Request, env: Env, prefix: string): Promise<number | null> {
   const ip = req.headers.get("cf-connecting-ip") ?? "unknown";
   const result = await checkRateLimit(env, `${prefix}:${ip}`);
