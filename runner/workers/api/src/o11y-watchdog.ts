@@ -79,7 +79,7 @@ async function fetchHeartbeat(env: Env, timeoutMs: number): Promise<HeartbeatRep
   } catch {
     return null;
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
