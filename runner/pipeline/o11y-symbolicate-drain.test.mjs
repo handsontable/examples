@@ -31,7 +31,8 @@ import vm from "node:vm";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { symbolicateResourceLogs, normaliseSourcePath, MAX_SKIP_REPORTS, MAX_MAP_KEYS_PER_CALL, MAX_FRAMES_PER_BODY } = await import(
+const { symbolicateResourceLogs, normaliseSourcePath, MAX_SKIP_REPORTS, MAX_MAP_KEYS_PER_CALL, MAX_FRAMES_PER_BODY, MAX_NEW_MAP_KEYS_PER_BODY } =
+  await import(
   "../workers/o11y/src/drain/symbolicate.ts"
 );
 const { drainBatch } = await import("../workers/o11y/src/drain/drain.ts");
@@ -359,15 +360,20 @@ function fanoutRecords(offset = 0) {
 
 const bodyOf = (record) => record.scopeLogs[0].logRecords[0].body.stringValue;
 
-test("a fan-out body reads at most MAX_MAP_KEYS_PER_CALL maps in the real drain, and leaves every frame past the cap as it was", async () => {
+test("a fan-out body reads at most MAX_MAP_KEYS_PER_CALL maps in the real drain, and leaves every frame past the caps as it was", async () => {
   const records = fanoutRecords();
-  const firstKeys = Array.from({ length: MAX_MAP_KEYS_PER_CALL + 8 }, (_, i) => `sourcemaps/x/${i.toString(36)}.js.map`);
+  const keyOf = (body, j) => `sourcemaps/x/${(body * 2980 + j).toString(36)}.js.map`;
+  const bodiesWithBudget = MAX_MAP_KEYS_PER_CALL / MAX_NEW_MAP_KEYS_PER_BODY;
+  const expectedReads = Array.from({ length: bodiesWithBudget }, (_, b) =>
+    Array.from({ length: MAX_NEW_MAP_KEYS_PER_BODY }, (_, j) => keyOf(b, j)),
+  ).flat();
   const workdir = await mkdtemp(path.join(tmpdir(), "o11y-fanout-drain-"));
   try {
     await writeFile(path.join(workdir, "inbox-key.txt"), inboxKey("browser", new Date(), 0));
     await writeFile(path.join(workdir, "inbox.ndjson.gz"), await gzip(encodeNdjson(records)));
-    // Maps exist past the cap too, so a capped frame stays unresolved because it was never read.
-    for (const key of firstKeys) {
+    // Maps exist past the caps too, so a capped frame stays unresolved because it was never read.
+    const pastCap = Array.from({ length: 8 }, (_, j) => keyOf(0, MAX_NEW_MAP_KEYS_PER_BODY + j));
+    for (const key of [...expectedReads, ...pastCap]) {
       await mkdir(path.dirname(path.join(workdir, "maps", key)), { recursive: true });
       await writeFile(path.join(workdir, "maps", key), ONE_MAPPING_MAP);
     }
@@ -375,21 +381,44 @@ test("a fan-out body reads at most MAX_MAP_KEYS_PER_CALL maps in the real drain,
     const out = await runChild(workdir);
 
     assert.equal(out.codegenBlocked, true);
-    assert.deepEqual(out.mapReads, firstKeys.slice(0, MAX_MAP_KEYS_PER_CALL), "the first-seen keys, each read once");
+    assert.deepEqual(out.mapReads, expectedReads, "each body's first-seen keys, each read once");
     assert.equal(out.result.outcomes[0].outcome, "provisional", JSON.stringify(out.result.outcomes));
     const pushed = out.pushes.flatMap((p) => p.body.resourceLogs).map(bodyOf);
     const sent = records.map(bodyOf);
     assert.equal(pushed.length, sent.length);
-    const pushedLines = pushed[0].split("\n");
-    const sentLines = sent[0].split("\n");
-    for (let i = 1; i <= MAX_MAP_KEYS_PER_CALL; i++) assert.match(pushedLines[i], /\(src\/a\.ts:1:1\)$/);
-    assert.deepEqual(pushedLines.slice(MAX_MAP_KEYS_PER_CALL + 1), sentLines.slice(MAX_MAP_KEYS_PER_CALL + 1), "capped frames are byte-for-byte");
-    assert.deepEqual(pushed.slice(1), sent.slice(1), "bodies whose every key is past the cap are unchanged");
+    for (let b = 0; b < sent.length; b++) {
+      const resolved = b < bodiesWithBudget ? MAX_NEW_MAP_KEYS_PER_BODY : 0;
+      const pushedLines = pushed[b].split("\n");
+      const sentLines = sent[b].split("\n");
+      for (let i = 1; i <= resolved; i++) assert.match(pushedLines[i], /\(src\/a\.ts:1:1\)$/);
+      assert.deepEqual(pushedLines.slice(resolved + 1), sentLines.slice(resolved + 1), `body ${b}: capped frames are byte-for-byte`);
+    }
+    const capped = sent.length * 2980 - MAX_MAP_KEYS_PER_CALL;
+    assert.deepEqual(out.skips.map((s) => s.overCap), [{ frames: capped, keys: capped }]);
     const reported = out.skips.flatMap((s) => s.reported);
     assert.ok(reported.length > 0 && reported.every((s) => s.reason === "over_cap"), JSON.stringify(reported.slice(0, 3)));
   } finally {
     await rm(workdir, { recursive: true, force: true });
   }
+});
+
+test("a forged item packed before a real exception cannot use up the object's map budget, and the capped count is always reported", async (t) => {
+  const forged = exceptionRecord(
+    Array.from({ length: MAX_MAP_KEYS_PER_CALL }, (_, i) => formatStackFrame({ filename: `http://a/${i}.js`, function: "f", lineno: 1, colno: 1 })),
+    "anything",
+  );
+  const real = exceptionRecord([frame("app.js", 1, 1)], "realsha");
+  const lines = [];
+  t.mock.method(console, "warn", (line) => lines.push(JSON.parse(line)));
+
+  const out = await symbolicateResourceLogs([forged, real], {
+    getMap: async (key) => (key === "sourcemaps/realsha/assets/app.js.map" ? ONE_MAPPING_MAP : null),
+  });
+
+  assert.equal(bodyOf(out[1]).split("\n")[1], "    at f (src/a.ts:1:1)");
+  const capped = MAX_MAP_KEYS_PER_CALL - MAX_NEW_MAP_KEYS_PER_BODY;
+  assert.ok(lines.some((l) => l.reason === "suppressed"), "the per-key lines overflow MAX_SKIP_REPORTS");
+  assert.deepEqual(lines.at(-1), { event: "o11y.symbolicate.skip", reason: "over_cap", frames: capped, keys: capped });
 });
 
 test("frames past MAX_FRAMES_PER_BODY in one body are left as they were and reported as over_cap", async () => {

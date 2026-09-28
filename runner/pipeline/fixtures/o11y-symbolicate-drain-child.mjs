@@ -59,7 +59,7 @@ const result = await drainBatch([inboxKey], new Set(), {
         const file = path.join(workdir, "maps", key);
         return existsSync(file) ? readFileSync(file, "utf8") : null;
       },
-      onSkip: (reported, suppressed) => skips.push({ reported, suppressed }),
+      onSkip: (reported, suppressed, overCap) => skips.push({ reported, suppressed, overCap }),
     }),
 });
 

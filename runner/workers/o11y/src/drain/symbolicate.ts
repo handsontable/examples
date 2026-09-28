@@ -121,6 +121,10 @@ export const MAX_MAP_KEYS_PER_CALL = 32;
  *  nothing in the runner raises it, so 128 leaves room for engines that
  *  report deeper stacks. */
 export const MAX_FRAMES_PER_BODY = 128;
+/** Map keys one body may add to the call's set: a V8 stack holds at most 10
+ *  frames and a build ships 7 JS chunks, so a real stack touches at most 7;
+ *  one forged body then cannot use up the whole object's budget. */
+export const MAX_NEW_MAP_KEYS_PER_BODY = 8;
 
 export interface SymbolicateSkip {
   /** The maps-bucket key, e.g. `sourcemaps/<sha>/assets/index-abc.js.map`. */
@@ -138,9 +142,10 @@ export interface SymbolicateDeps {
    *  app origin (a rotated deploy hash can answer `200 text/html`). */
   getMap(key: string): Promise<string | null>;
   /** Called at most once per call when any key had unresolved frames, up
-   *  to {@link MAX_SKIP_REPORTS} entries. Defaults to
+   *  to {@link MAX_SKIP_REPORTS} entries, plus the call's total of capped
+   *  frames and keys (never suppressed). Defaults to
    *  {@link logSymbolicateSkips}. Never affects the rendered output. */
-  onSkip?(skips: SymbolicateSkip[], suppressed: number): void;
+  onSkip?(skips: SymbolicateSkip[], suppressed: number, overCap: { frames: number; keys: number }): void;
 }
 
 /** Bounds the skip signal: a batch carrying many distinct, map-less chunk
@@ -152,9 +157,10 @@ const MAX_SKIP_DETAIL_CHARS = 200;
 /** The default {@link SymbolicateDeps.onSkip}: one structured
  *  `o11y.symbolicate.skip` line per key, the same JSON-line shape as the
  *  worker's other `o11y.*` events, plus one line for the suppressed count. */
-function logSymbolicateSkips(skips: SymbolicateSkip[], suppressed: number): void {
+function logSymbolicateSkips(skips: SymbolicateSkip[], suppressed: number, overCap: { frames: number; keys: number }): void {
   for (const skip of skips) console.warn(JSON.stringify({ event: "o11y.symbolicate.skip", ...skip }));
   if (suppressed > 0) console.warn(JSON.stringify({ event: "o11y.symbolicate.skip", reason: "suppressed", keys: suppressed }));
+  if (overCap.frames > 0) console.warn(JSON.stringify({ event: "o11y.symbolicate.skip", reason: "over_cap", ...overCap }));
 }
 
 function errorDetail(err: unknown): string {
@@ -165,7 +171,7 @@ function errorDetail(err: unknown): string {
 interface KeyStats {
   attempted: number;
   resolved: number;
-  /** Frames past {@link MAX_FRAMES_PER_BODY} or {@link MAX_MAP_KEYS_PER_CALL}, never looked up. */
+  /** Frames past one of the caps, never looked up. */
   capped: number;
   lookupErrors: number;
   lookupDetail?: string;
@@ -256,7 +262,8 @@ function statsFor(stats: Map<string, KeyStats>, mapKey: string): KeyStats {
 }
 
 /** Picks the frames of one body to look up, in line order, admitting map keys
- *  into `admitted` up to {@link MAX_MAP_KEYS_PER_CALL}. Synchronous and
+ *  into `admitted` up to {@link MAX_MAP_KEYS_PER_CALL} and
+ *  {@link MAX_NEW_MAP_KEYS_PER_BODY}. Synchronous and
  *  order-only, so which frames are capped never depends on R2 timing. A
  *  `line < 1` frame is skipped (`originalPositionFor({line:0})` throws, and a
  *  `lineno: 0` frame is valid Faro input). */
@@ -264,6 +271,7 @@ function planBody(body: string, serviceVersion: string, admitted: Set<string>, s
   const lines = body.split("\n");
   const frames: PlannedFrame[] = [];
   let candidates = 0;
+  let newKeys = 0;
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     if (raw === undefined) continue;
@@ -275,10 +283,12 @@ function planBody(body: string, serviceVersion: string, admitted: Set<string>, s
     if (!mapKey) continue;
     const keyStats = statsFor(stats, mapKey);
     candidates++;
-    if (candidates > MAX_FRAMES_PER_BODY || (!admitted.has(mapKey) && admitted.size >= MAX_MAP_KEYS_PER_CALL)) {
+    const isNew = !admitted.has(mapKey);
+    if (candidates > MAX_FRAMES_PER_BODY || (isNew && (admitted.size >= MAX_MAP_KEYS_PER_CALL || newKeys >= MAX_NEW_MAP_KEYS_PER_BODY))) {
       keyStats.capped++;
       continue;
     }
+    if (isNew) newKeys++;
     admitted.add(mapKey);
     frames.push({ index: i, frame: { ...frame, line: frame.line, col: frame.col }, mapKey });
   }
@@ -412,7 +422,12 @@ function reportSkips(
 ): void {
   const skips: SymbolicateSkip[] = [];
   let suppressed = 0;
+  const overCap = { frames: 0, keys: 0 };
   for (const [key, s] of stats) {
+    if (s.capped > 0) {
+      overCap.frames += s.capped;
+      overCap.keys++;
+    }
     const unresolved = s.attempted - s.resolved + s.capped;
     if (unresolved === 0) continue;
     const failure = cache.failureOf(key);
@@ -427,7 +442,7 @@ function reportSkips(
   }
   if (skips.length === 0) return;
   try {
-    onSkip(skips, suppressed);
+    onSkip(skips, suppressed, overCap);
   } catch {
     // the signal is best-effort; the resolved records are already built
   }

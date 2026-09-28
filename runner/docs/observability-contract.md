@@ -574,10 +574,13 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   throws defers only that key; the rest of the batch still pushes and commits. A batch
   of only deferred keys ends the wake's drain once no un-excluded tenant has keys left.
 - **Symbolication read caps.** One inbox object reads at most 32 distinct maps
-  (`MAX_MAP_KEYS_PER_CALL`, first-seen order) and looks up at most 128 frames per body
+  (`MAX_MAP_KEYS_PER_CALL`, first-seen order), one body adds at most 8 of them
+  (`MAX_NEW_MAP_KEYS_PER_BODY`), and at most 128 frames are looked up per body
   (`MAX_FRAMES_PER_BODY`), so a drain step of 10 objects stays at a few hundred of the
-  Workers limit of 10,000 subrequests. Frames past either cap stay byte-for-byte and are
-  reported as `o11y.symbolicate.skip` with reason `over_cap`.
+  Workers limit of 10,000 subrequests. Frames past a cap stay byte-for-byte and are
+  reported as `o11y.symbolicate.skip` with reason `over_cap`, plus one aggregate
+  `over_cap` line with the call's capped `frames` and `keys` that `MAX_SKIP_REPORTS`
+  never suppresses.
 
 ## 9. Lite beacon payload
 
