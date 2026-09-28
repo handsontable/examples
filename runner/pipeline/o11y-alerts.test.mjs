@@ -23,6 +23,7 @@ const {
   embedErrorRateRule,
   compileErrorDoublingRule,
   litellmErrorRateRule,
+  snapshotBuildFailedRateRule,
   backlogAgeRule,
   rejectedKeyRule,
   newFingerprintRule,
@@ -973,6 +974,49 @@ test("compileErrorDoublingRule: today >= 2x yesterday (floor met) fires; under t
   ]);
   const underResult = await compileErrorDoublingRule({}, under.queryFn);
   assert.equal(underResult.firing, false, underResult.detail);
+});
+
+test("snapshotBuildFailedRateRule: a framework-wide build break fires; one author's failing saves do not", async () => {
+  const systemic = makeFakeAeQuery([
+    { metric: "snapshot.build", framework: "next.js", outcome: "failed", count: 12 },
+    { metric: "snapshot.build", framework: "next.js", outcome: "ok", count: 1 },
+    { metric: "snapshot.build", framework: "react", outcome: "ok", count: 40 },
+  ]);
+  const fired = await snapshotBuildFailedRateRule({}, systemic.queryFn);
+  assert.equal(fired.firing, true, fired.detail);
+  assert.match(fired.detail, /next\.js: 92% failed \(12\/13\)/);
+  assert.doesNotMatch(fired.detail, /react/);
+  assert.ok(systemic.calls.some((sql) => sql.includes(`${AE_COLUMNS.outcome} = 'failed'`)), "SQL must filter outcome='failed'");
+  assert.ok(systemic.calls.every((sql) => sql.includes("INTERVAL '1800' SECOND")), "30-minute window");
+
+  const quiet = makeFakeAeQuery([
+    // One author retrying a broken Save, the only javascript builds in the window.
+    { metric: "snapshot.build", framework: "javascript", outcome: "failed", count: 6 },
+    // A busy framework with ordinary user failures: over the floor, under the ratio.
+    { metric: "snapshot.build", framework: "react", outcome: "failed", count: 15 },
+    { metric: "snapshot.build", framework: "react", outcome: "ok", count: 85 },
+    // A break older than the window.
+    { metric: "snapshot.build", framework: "vue", outcome: "failed", count: 20, ageMs: 31 * 60 * 1000 },
+  ]);
+  const silent = await snapshotBuildFailedRateRule({}, quiet.queryFn);
+  assert.equal(silent.firing, false, silent.detail);
+});
+
+test("snapshotBuildFailedRateRule fires once and resolves once through the notify machinery", async () => {
+  const writer = fakeInboxWriter();
+  const sink = fakeAeSink();
+  const slackCalls = [];
+  const deps = (nowMs) => ({ inboxWriter: writer, postSlack: async (t) => slackCalls.push(t), aeSink: sink, commonAttrs: COMMON_ATTRS, nowMs });
+  const broken = makeFakeAeQuery([{ metric: "snapshot.build", framework: "next.js", outcome: "failed", count: 10 }]);
+  const healthy = makeFakeAeQuery([{ metric: "snapshot.build", framework: "next.js", outcome: "ok", count: 10 }]);
+
+  assert.equal(await evaluateAndNotify(await snapshotBuildFailedRateRule({}, broken.queryFn), deps(1000)), "fired");
+  assert.equal(await evaluateAndNotify(await snapshotBuildFailedRateRule({}, broken.queryFn), deps(2000)), undefined);
+  assert.equal(await evaluateAndNotify(await snapshotBuildFailedRateRule({}, healthy.queryFn), deps(3000)), "resolved");
+  assert.equal(slackCalls.length, 2);
+  assert.match(slackCalls[0], /snapshot-build-failed-rate/);
+  assert.match(slackCalls[0], /next\.js: 100% failed \(10\/10\)/);
+  assert.match(slackCalls[1], /snapshot-build-failed-rate.*resolved|resolved.*snapshot-build-failed-rate/);
 });
 
 test("litellmErrorRateRule: chat.answer + theme.ai combined over 5% fires; under does not", async () => {
