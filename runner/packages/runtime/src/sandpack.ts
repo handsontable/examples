@@ -322,8 +322,6 @@ export class SandpackRuntime implements DemoRuntime {
    *  so a mount still in flight when we are disposed would resurrect a torn-down
    *  preview after the caller had already blanked it. */
   private disposed = false;
-  /** Our claim on the iframe, registered in `mount()` before the first await. */
-  private claim: object | null = null;
 
   // ---- T07 timing hooks ---------------------------------------------------
   private readonly compileTimingCbs = new Set<(e: SandpackCompileTimingEvent) => void>();
@@ -587,7 +585,6 @@ export class SandpackRuntime implements DemoRuntime {
     // Claim the iframe before the first await, so a successor mounting on the same frame
     // takes ownership synchronously and this instance can tell it has been superseded.
     const claim = {};
-    this.claim = claim;
     IFRAME_OWNER.set(this.opts.iframe, claim);
 
     let setup: SandboxSetup;
