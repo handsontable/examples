@@ -315,7 +315,7 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
       causeMessage: e instanceof Error && e.cause instanceof Error ? e.cause.message : null,
       replay: e instanceof Error && (e as { replay?: boolean }).replay === true,
       online: navigator.onLine,
-      // R3 F10: widened to the local leg so the compile-diagnostic branch's facade/Faro
+      // Widened to the local leg so the compile-diagnostic branch's facade/Faro
       // report reaches the local stack under `dev:full`. The Sentry gate just below stays
       // keyed on the real `monitorDemos` for this same branch, so nothing here changes what
       // reaches Sentry.
@@ -340,7 +340,7 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
       tier: (report.tags.tier as Tier | undefined) ?? "1",
       framework,
     });
-    // R3 F10: the compiler-asset branch (`report.tags.surface !== "demo-runtime"`) is
+    // The compiler-asset branch (`report.tags.surface !== "demo-runtime"`) is
     // unaffected — gated on `diagnosticsGoToSentry` alone, exactly as before. The
     // compile-diagnostic branch (`surface: "demo-runtime"`) is now reachable locally via
     // `previewMonitoring` above, so its own Sentry call needs the real `monitorDemos` back
@@ -1614,7 +1614,7 @@ function Authoring({
       exampleEngagedRef.current = false;
       if (!exampleOpen) {
         // The one caller that reaches here with no taxonomy at all: the
-        // starter effect's silent bare-`/` default (T12-D, see its call
+        // starter effect's silent bare-`/` default (see its call
         // site) — no `example.open`, and nothing to attribute a later edit
         // to either.
         currentExampleTaxonomyRef.current = null;
@@ -1857,7 +1857,7 @@ function Authoring({
   // Edit/share mode: load the saved demo's source + metadata into the workspace.
   useEffect(() => {
     if (!savedId) return;
-    // ADR-0042 T12-D2 fix: read + strip the one-shot fork marker BEFORE
+    // ADR-0042: read + strip the one-shot fork marker BEFORE
     // anything async runs, so a second render of this same effect (or a
     // manual reload of the now-stripped URL) never re-reads it —
     // `consumeForkMarker`'s own doc comment has the full reasoning for why
@@ -2664,7 +2664,7 @@ function Authoring({
             // Identifies the caller to the cost guardrail: at >=80% of the
             // monthly budget live sessions are signed-in-only (DEV-2030).
             authToken: getToken(),
-            // R3 F10: widened from `monitorDemos` to `previewMonitoring` so the in-preview
+            // Widened from `monitorDemos` to `previewMonitoring` so the in-preview
             // reporter is injected under the local leg too (Faro only — see `sentry.ts`).
             // Tier-2's own preview-host injection (`workers/api/src/monitor-inject.ts`) is a
             // separate, production-only gate this does not change.
@@ -2684,15 +2684,15 @@ function Authoring({
       htMajor: htMajorOf(v.value.ref),
       demoId: savedIdRef.current,
     });
-    // T07: §5 browser metric catalogue. `wireRuntimeMetrics` reads
+    // §5 browser metric catalogue. `wireRuntimeMetrics` reads
     // `runtime.onCompileTiming?`/`onSessionStart?`/etc through optional chains — it
     // is the same call for either engine, no `entry.engine` branch needed here.
     // `trackPreviewReady`'s `tier` reuses `demoContext()`'s own engine-derived value
     // (never `entry.tier`, the catalog tier — the two disagree for the five
     // UI-library starters, `react-js` and siblings: catalog tier 1, `engine:
-    // "container"`). `telemetry` is read here, live, not captured earlier — T06's
+    // "container"`). `telemetry` is read here, live, not captured earlier —
     // `initTelemetry()` reassigns the binding after init.
-    // R9C: compile errors go through the same edit-burst collapse as the preview's
+    // Compile errors go through the same edit-burst collapse as the preview's
     // runtime relays, so a typed syntax error is one `sandpack.compile_error` per burst.
     wireRuntimeMetrics(runtime, { framework: entry.framework, versionRef: v.value.ref }, telemetry, {
       collapseCompileError,
@@ -2767,7 +2767,7 @@ function Authoring({
       // `preview.ready_ms` outcome `abandoned`).
       previewTracker.abandon();
       window.removeEventListener("message", onPreviewMessage);
-      // F26: count this preview's last run now, and let the next preview's first
+      // Count this preview's last run now, and let the next preview's first
       // load count afresh (see `DemoEventCollapse.reset`).
       resetDemoEventCollapse();
       runtime.dispose();
@@ -2838,7 +2838,7 @@ function Authoring({
       // A quiet write reaches no dev server yet, so there is nothing to wait for. The
       // rebuild it is eventually flushed by reports its own progress (`flushQuietEdits`).
       if (opts?.quiet) return;
-      // F26: the preview re-runs on this write — open/extend the edit burst, so the
+      // The preview re-runs on this write — open/extend the edit burst, so the
       // keystroke-prefix ladder it relays collapses to the last run's errors.
       noteDemoEdit();
       showSyncing();
@@ -2972,7 +2972,7 @@ function Authoring({
     // no generic "flush" source in the trail's vocabulary because nothing
     // else calls this yet.
     recordEditorEvent({ kind: "flush-quiet", source: "style", path: "", quiet: false, size: 0 });
-    noteDemoEdit(); // F26: the flush re-runs the preview, same as an edit
+    noteDemoEdit(); // the flush re-runs the preview, same as an edit
     try {
       runtimeRef.current?.flushQuiet?.();
       showSyncing();
@@ -2990,7 +2990,7 @@ function Authoring({
       filesRef.current = next;
       setFiles(next);
       markDirty(path);
-      noteDemoEdit(); // F26
+      noteDemoEdit();
       try { runtimeRef.current?.writeFile(path, ""); } catch { /* not mounted */ }
     },
     [markDirty],
@@ -3014,7 +3014,7 @@ function Authoring({
       setFiles(next);
       // Variadic on purpose (see its definition): one call dots every dropped tab.
       markDirty(...dropped.map((file) => file.path));
-      noteDemoEdit(); // F26
+      noteDemoEdit();
       for (const { path, contents } of dropped) {
         try { runtimeRef.current?.writeFile(path, contents); } catch { /* not mounted */ }
       }
@@ -3044,7 +3044,7 @@ function Authoring({
         rest.delete(path);
         return rest;
       });
-      noteDemoEdit(); // F26
+      noteDemoEdit();
       try { runtimeRef.current?.deleteFile?.(path); } catch { /* not mounted */ }
     },
     [markDirty],
@@ -3069,7 +3069,7 @@ function Authoring({
         rest.delete(oldPath);
         return rest;
       });
-      noteDemoEdit(); // F26
+      noteDemoEdit();
       try {
         runtimeRef.current?.writeFile(newPath, content);
         runtimeRef.current?.deleteFile?.(oldPath);
@@ -3146,7 +3146,7 @@ function Authoring({
       });
       const { id } = await readApiJson<{ id: string }>(res, `fork failed (${res.status})`);
       noteExampleAction("example.forked"); // ADR-0042 §2, before navigating away
-      // ADR-0042 T12-D2 fix: a one-shot URL marker for the new demo's own
+      // ADR-0042: a one-shot URL marker for the new demo's own
       // `example.open`, since this is a full reload — no in-memory flag
       // survives it (`exampleAnalytics.ts#consumeForkMarker`'s own doc
       // comment has the full reasoning). The saved-demo load effect reads
