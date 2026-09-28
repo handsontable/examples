@@ -289,8 +289,7 @@ function describeRuntimeError(
  * or stack parsing, which is exactly what putting it in the message got wrong.
  */
 function reportRuntimeError(e: unknown, engine: string, framework: string): void {
-  // No blanket gate: each branch reports through the facade unconditionally
-  // and reaches Sentry only when `diagnosticsGoToSentry` (contract §11 / ADR §E.3).
+  // No blanket gate: each branch reaches Sentry only when `diagnosticsGoToSentry` (§11/ADR §E.3).
   // Tier-1 compile and runtime errors are the "product output" case above — dropped
   // by default, reported while demo monitoring is on (DEV-2527). They arrive as
   // ordinary app-surface events rather than through `reportDemoEvent`, because this
@@ -312,8 +311,7 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
       causeMessage: e instanceof Error && e.cause instanceof Error ? e.cause.message : null,
       replay: e instanceof Error && (e as { replay?: boolean }).replay === true,
       online: navigator.onLine,
-      // Widened to the local leg so this branch's facade/Faro report reaches
-      // the local stack under `dev:full`; the Sentry gate below stays keyed on `monitorDemos`.
+      // Widened to the local leg (`dev:full`); the Sentry gate below stays keyed on `monitorDemos`.
       monitorDemos: previewMonitoring,
     });
     if (!report) return;
@@ -326,15 +324,13 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
     // rather than at the failure.
     const titled = new Error(report.synthesizeAs.message, { cause: e });
     titled.name = report.synthesizeAs.name;
-    // Facade first, unconditional — its context/title pair matches what
-    // Sentry's own `report.fingerprint` groups on below.
+    // Facade first — its context/title pair matches `report.fingerprint` below.
     telemetry.error(titled, report.tags.context ?? "tier1-runtime", {
       surface: (report.tags.surface as Surface | undefined) ?? "authoring",
       tier: (report.tags.tier as Tier | undefined) ?? "1",
       framework,
     });
-    // The compile-diagnostic branch is reachable locally via `previewMonitoring`
-    // above, so its Sentry call needs `monitorDemos` as a second conjunct too.
+    // Reachable locally via `previewMonitoring` above, so this Sentry call needs `monitorDemos` too.
     if (diagnosticsGoToSentry && (report.tags.surface !== "demo-runtime" || monitorDemos)) {
       Sentry.captureException(titled, {
         tags: report.tags,
@@ -1415,10 +1411,8 @@ function Authoring({
     }
   }, []);
   const docsPathRef = useRef<string | null>(docsPath);
-  // ADR-0042: dedup key for the last `example.open` fired, so an effect
-  // re-run for an unrelated reason doesn't re-fire it.
-  // `currentExampleTaxonomyRef` is that open's taxonomy, reused by later
-  // `example.*` events.
+  // ADR-0042: dedup key for the last `example.open` fired; `currentExampleTaxonomyRef`
+  // is that open's taxonomy, reused by later `example.*` events.
   const lastExampleOpenKeyRef = useRef<string | null>(null);
   const currentExampleTaxonomyRef = useRef<ExampleTaxonomy | null>(null);
   const exampleEngagedRef = useRef(false);
@@ -2112,8 +2106,7 @@ function Authoring({
 
     let cancelled = false;
     const manifestPromise = fetchDocsManifest(candidate);
-    // §5 `bucket.resolve_ms`: a separate `.then(ok, err)` on the raw promise
-    // so a downstream throw in the app-logic chain can't double-report it.
+    // §5 `bucket.resolve_ms`: a separate `.then` on the raw promise so a downstream throw can't double-report it.
     const stopBucketClock = startClock();
     manifestPromise.then(
       () => emitBucketResolve(telemetry, { bucket: candidate, outcome: "ok", durationMs: stopBucketClock() }),
@@ -2329,8 +2322,7 @@ function Authoring({
 
     let cancelled = false;
     const starterPromise = loadStarterExample(bucket, framework);
-    // §5 `bucket.resolve_ms`: a SEPARATE `.then(ok, err)`, not chained onto
-    // the pipeline below, whose own `.catch` would otherwise double-report.
+    // §5 `bucket.resolve_ms`: a SEPARATE `.then`, not chained onto the pipeline's own `.catch` below.
     const stopBucketClock = startClock();
     starterPromise.then(
       () => emitBucketResolve(telemetry, { bucket, outcome: "ok", durationMs: stopBucketClock() }),
@@ -2676,8 +2668,7 @@ function Authoring({
       // `preview.ready_ms` outcome `abandoned`).
       previewTracker.abandon();
       window.removeEventListener("message", onPreviewMessage);
-      // Count this preview's last run now, and let the next preview's first
-      // load count afresh (see `DemoEventCollapse.reset`).
+      // Count this preview's last run, then let the next one's first load count afresh.
       resetDemoEventCollapse();
       runtime.dispose();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
@@ -2747,8 +2738,7 @@ function Authoring({
       // A quiet write reaches no dev server yet, so there is nothing to wait for. The
       // rebuild it is eventually flushed by reports its own progress (`flushQuietEdits`).
       if (opts?.quiet) return;
-      // The preview re-runs on this write — open/extend the edit burst, so the
-      // keystroke-prefix ladder it relays collapses to the last run's errors.
+      // Opens/extends the edit burst, so a keystroke-prefix ladder collapses to the last run's errors.
       noteDemoEdit();
       showSyncing();
     },
@@ -3055,8 +3045,7 @@ function Authoring({
       });
       const { id } = await readApiJson<{ id: string }>(res, `fork failed (${res.status})`);
       noteExampleAction("example.forked"); // ADR-0042 §2, before navigating away
-      // ADR-0042: a one-shot URL marker for the new demo's own `example.open`
-      // (a full reload, so no in-memory flag survives); read + stripped there.
+      // ADR-0042: one-shot URL marker for the new demo's own `example.open`, read + stripped there.
       location.href = `/edit/${id}?${FORK_LANDING_PARAM}=1`; // boot into the edit page for the new demo
     } catch (e) {
       // First statement, before any branch. There is no `finally` here on
@@ -3288,8 +3277,7 @@ function Authoring({
       suggestion={docsNotFoundSuggestion ?? null}
     />
   );
-  // Ordered before the splash check: without this, EditorShell would mount
-  // against the still-empty placeholder state and throw its own error.
+  // Ordered before the splash check, else EditorShell mounts against the still-empty placeholder.
   if (savedId && demoNotFound) return <DemoNotFound kind={demoNotFound} />;
   if (savedId && !sourceLoaded) return <Splash text="Loading data …" />;
 
