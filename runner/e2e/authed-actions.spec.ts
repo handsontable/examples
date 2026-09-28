@@ -601,7 +601,7 @@ test("a Save whose code does not build shows the build error and keeps the edit 
   await signIn(page);
   await stubProfile(page);
   const detail = 'error during build: src/App.tsx:1:10: ERROR: Unexpected ";"';
-  await failWrite(page, "PATCH", 422, { error: "build_failed", detail });
+  await failWrite(page, "PATCH", 422, { error: `build failed: ${detail}`, code: "build_failed", detail });
 
   await page.goto(`/edit/${DEMO_ID}`);
   await expect(accountAvatar(page)).toBeVisible();
@@ -612,7 +612,7 @@ test("a Save whose code does not build shows the build error and keeps the edit 
   const dialog = page.getByRole("dialog", { name: "Couldn't save" });
   await expect(dialog).toContainText(detail);
   await expect(dialog).toContainText("nothing was saved");
-  await expect(page.getByText(/build_failed/)).toHaveCount(0);
+  await expect(page.getByText(/build_failed|build failed:/)).toHaveCount(0);
   await expect(saveButton(page)).toHaveText("Save •");
   await dialog.getByRole("button", { name: "OK" }).click();
   await expect(dialog).toHaveCount(0);
@@ -624,7 +624,9 @@ for (const action of ["Fork", "Share"] as const) {
     await signIn(page);
     await stubProfile(page);
     const detail = 'error during build: src/App.tsx:1:10: ERROR: Unexpected ";"';
-    await page.route("**/api/demos", (route) => route.fulfill({ status: 422, json: { error: "build_failed", detail } }));
+    await page.route("**/api/demos", (route) =>
+      route.fulfill({ status: 422, json: { error: `build failed: ${detail}`, code: "build_failed", detail } }),
+    );
 
     await page.goto("/?example=react");
     await expect(accountAvatar(page)).toBeVisible();
@@ -632,7 +634,7 @@ for (const action of ["Fork", "Share"] as const) {
 
     const dialog = page.getByRole("dialog", { name: "Couldn't save" });
     await expect(dialog).toContainText(detail);
-    await expect(page.getByText(/build_failed/)).toHaveCount(0);
+    await expect(page.getByText(/build_failed|build failed:/)).toHaveCount(0);
     await expect(forkButton(page)).toBeEnabled();
   });
 }
