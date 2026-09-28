@@ -159,7 +159,7 @@ export interface WireRuntimeMetricsOptions {
  *
  * `sandpack.compile_ms`: the first compile (the mount) is sent at once; after
  * it, each compile replaces the held one and the last of a burst is sent once
- * no compile follows for `COMPILE_TIMING_SETTLE_MS` (contract §5).
+ * no compile or compile error follows for `COMPILE_TIMING_SETTLE_MS` (§5).
  *
  * A compile error is deduped by fingerprint for the life of `runtime`,
  * unless `opts.collapseCompileError` (the edit-burst collapse) is given,
@@ -207,6 +207,11 @@ export function wireRuntimeMetrics(
   });
 
   runtime.onCompileError?.((event) => {
+    // A keystroke that fails the pre-transpile dispatches no compile, but it is still part of the burst.
+    if (held) {
+      clearTimer(held.timer);
+      held.timer = setTimer(sendHeld, COMPILE_TIMING_SETTLE_MS);
+    }
     const fp = fingerprint("sandpack.compile_error", event.message);
     const emit = () =>
       telemetry.metric(

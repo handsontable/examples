@@ -281,6 +281,24 @@ test("sandpack.compile_ms: the compiles of one edit burst send one point, the bu
   assert.equal(compileTimes(telemetry).length, 3);
 });
 
+test("sandpack.compile_ms: keystrokes that fail to transpile keep the burst open", () => {
+  const telemetry = recordingTelemetry();
+  const runtime = fakeSandpackRuntime();
+  const clock = manualTimers();
+  wireRuntimeMetrics(runtime, SANDPACK_CTX, telemetry, clock);
+
+  runtime.fireCompileTiming({ durationMs: 900, outcome: "ok" });
+  runtime.fireCompileTiming({ durationMs: 31, outcome: "ok" });
+  for (let i = 0; i < 5; i += 1) {
+    clock.advance(1500);
+    runtime.fireCompileError({ message: "Unexpected token (1:7)", origin: "transpile" });
+  }
+  clock.advance(1500);
+  runtime.fireCompileTiming({ durationMs: 42, outcome: "ok" });
+  clock.advance(COMPILE_TIMING_SETTLE_MS);
+  assert.deepEqual(compileTimes(telemetry), [[900, "ok"], [42, "ok"]]);
+});
+
 test("sandpack.compile_ms: a held point is sent at once when the page is hidden, and only once", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeSandpackRuntime();
