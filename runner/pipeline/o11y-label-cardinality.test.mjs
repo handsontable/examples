@@ -1,12 +1,14 @@
 // Contract §3: `hot.framework` and `hot.outcome` are Loki labels, so every
 // ingest path must map a client-sent value into a known set. Each distinct label
-// tuple is a Loki stream, and one inbox object with more than 5000 streams
-// (Loki's default per-tenant limit) is refused on every drain.
+// tuple is a Loki stream, and an inbox object with more streams than the box's
+// per-tenant limit is refused by Loki.
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
@@ -99,11 +101,23 @@ test("Faro: a metric outcome on a log is stored as none", async () => {
 const COLLECT_TUPLES = SURFACES.length * TIERS.length * (KNOWN_FRAMEWORKS.length + 1) * HT_MAJORS.length;
 const LITE_TUPLES = LITE_SURFACES.length * (KNOWN_FRAMEWORKS.length + 1) * HT_MAJORS.length;
 
-test("the browser tenant's reachable label tuples stay under Loki's 5000-stream limit", () => {
-  assert.ok(
-    COLLECT_TUPLES + LITE_TUPLES < 5000,
-    `${COLLECT_TUPLES} + ${LITE_TUPLES} tuples: a new surface, tier, framework or major needs a higher Loki stream limit`,
-  );
+/** The box's configured per-tenant stream limit; the config files are JSON with
+ *  `${VAR}` placeholders, some unquoted. */
+function lokiStreamLimit(file) {
+  const raw = readFileSync(fileURLToPath(new URL(`../containers/o11y/loki/${file}`, import.meta.url)), "utf8");
+  const config = JSON.parse(raw.replace(/"\$\{[A-Z0-9_]+\}"/g, '""').replace(/\$\{[A-Z0-9_]+\}/g, "null"));
+  return config.limits_config.max_global_streams_per_user;
+}
+
+test("the browser tenant's reachable label tuples stay under the box's configured Loki stream limit", () => {
+  for (const file of ["loki-config.yaml", "loki-config.filesystem.yaml"]) {
+    const limit = lokiStreamLimit(file);
+    assert.equal(typeof limit, "number", `${file}: max_global_streams_per_user is set`);
+    assert.ok(
+      COLLECT_TUPLES + LITE_TUPLES < limit,
+      `${file}: ${COLLECT_TUPLES} + ${LITE_TUPLES} tuples reach max_global_streams_per_user (${limit}); raise it with the new label value`,
+    );
+  }
 });
 
 test(`Faro: ${DISTINCT} logs with distinct label combinations add no outcome dimension`, async () => {

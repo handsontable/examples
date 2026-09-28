@@ -136,7 +136,14 @@ Ingest bounds both open labels, since each distinct label tuple is a Loki stream
 (5000 per tenant): a `hot.framework` outside the list above, or a `hot.outcome`
 outside the set of the item's metric (`none` when there is none), becomes `other`.
 A stored browser record (exception, log, event) always carries `hot.outcome` =
-`none`; only a measurement's AE point keeps its metric outcome.
+`none`; only a measurement's AE point keeps its metric outcome. That caps the
+browser tenant at 4410 label tuples (collect 7 × 4 × 21 × 7, lite 2 × 1 × 21 × 7).
+The box's Loki sets `max_global_streams_per_user` to 20000, over 4× that worst case;
+`pipeline/o11y-label-cardinality.test.mjs` reads the limit from the config and fails
+when the reachable tuples cross it.
+Ingester memory grows with the streams that actually receive lines and the bytes
+pushed, not with the limit, and a stream costs kilobytes (labels, index entry, head
+block), so 20000 fits easily in the box's 4 GiB `standard-1` container.
 `packages/runtime/src/telemetry/attrs.ts#KNOWN_FRAMEWORKS` mirrors
 `config/frameworks.json`.
 
