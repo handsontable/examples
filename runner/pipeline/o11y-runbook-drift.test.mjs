@@ -5,16 +5,16 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-// T10 — the runbook drift gate (task acceptance criterion: "every secret and
-// var declared in workers/o11y/src/env.ts appears in the runbook; a renamed
-// binding fails the test"). Parses `workers/o11y/src/env.ts`'s `Env`
+// The runbook drift gate: every secret and var declared in
+// workers/o11y/src/env.ts must appear in the runbook, and a renamed
+// binding must fail this test. Parses `workers/o11y/src/env.ts`'s `Env`
 // interface from disk — never a hand-copied list — so editing either side
 // alone (renaming a field, or dropping its runbook line) fails this file,
 // the same "contract" pattern `pipeline/telemetry-contract.test.mjs` and
-// `pipeline/api-telemetry-config.test.mjs` already use for their own sources
-// of truth.
+// `pipeline/api-telemetry-config.test.mjs` use for their own sources of
+// truth.
 //
-// Scope: only the *configuration surface* — fields typed as a plain string
+// Scope: only the configuration surface — fields typed as a plain string
 // (optionally optional, optionally a string-literal union) — not the
 // resource bindings (`DurableObjectNamespace<...>`, `R2Bucket`,
 // `AnalyticsEngineDataset`, `Fetcher`, `RateLimit`). A binding is provisioned
@@ -86,7 +86,7 @@ const configNames = configFieldNames(envInterfaceBody);
 test("env.ts's Env interface still has a configuration surface to check", () => {
   // A broken interface-slice or field regex must not silently pass on an
   // empty set — pin a floor well under the current real count (19 at the
-  // time this test was written, K1: O11Y_ENV, LOGIN_BROKER_URL,
+  // time this test was written: O11Y_ENV, LOGIN_BROKER_URL,
   // GITHUB_OIDC_REPOSITORY, GITHUB_OIDC_WORKFLOW_REF, SERVICE_VERSION,
   // CLOUDFLARE_ACCOUNT_ID, LOKI_S3_BUCKET, RUNNER_EVENTS_CLICKHOUSE_URL,
   // O11Y_LOCAL_MINIO_PORT, O11Y_LOCAL_CLICKHOUSE_PORT,
@@ -109,16 +109,16 @@ test("every o11y config name in env.ts is documented in run-and-deploy.md", () =
   assert.deepEqual(missing, [], `not documented as a backtick-wrapped name in docs/run-and-deploy.md: ${missing.join(", ")}`);
 });
 
-// Fix round (review finding I1): the source-map upload authenticates with a
-// dedicated R2 S3 credential, scoped to the maps bucket only, instead of the
-// account-wide CLOUDFLARE_API_TOKEN. Those two secret names live in
-// master.yml's `secrets.*` context and GitHub's own repo-secrets store —
-// never in workers/o11y/src/env.ts, since the o11y Worker itself never reads
-// them (only the CI job's `aws s3 cp` step does). `configFieldNames` above
-// therefore cannot see them, so they need their own small, explicit list
-// here rather than falling out of the Env-interface parse — the same
-// "a renamed/dropped name must fail this test" guarantee, extended to the
-// one pair of secrets that sits outside the Worker's own config surface.
+// The source-map upload authenticates with a dedicated R2 S3 credential,
+// scoped to the maps bucket only, instead of the account-wide
+// CLOUDFLARE_API_TOKEN. Those two secret names live in master.yml's
+// `secrets.*` context and GitHub's own repo-secrets store — never in
+// workers/o11y/src/env.ts, since the o11y Worker itself never reads them
+// (only the CI job's `aws s3 cp` step does). `configFieldNames` above
+// cannot see them, so they need their own small, explicit list here rather
+// than falling out of the Env-interface parse — the same "a
+// renamed/dropped name must fail this test" guarantee, extended to the one
+// pair of secrets that sits outside the Worker's own config surface.
 const CI_ONLY_SECRET_NAMES = ["R2_MAPS_ACCESS_KEY_ID", "R2_MAPS_SECRET_ACCESS_KEY"];
 
 test("the CI-only R2 maps-upload secrets are documented in run-and-deploy.md", () => {
@@ -126,15 +126,15 @@ test("the CI-only R2 maps-upload secrets are documented in run-and-deploy.md", (
   assert.deepEqual(missing, [], `not documented as a backtick-wrapped name in docs/run-and-deploy.md: ${missing.join(", ")}`);
 });
 
-// Re-review 2, NB9 (merge blocker): repo docs/code must never point a
-// reader at the gitignored planning/report directory this feature's fix
-// rounds were tracked in (its own nested .gitignore is `*`, so any such
-// reference is a dead link for anyone else who clones this repo). `git
-// ls-files` scopes this to TRACKED files only — a gitignored scratch file
-// legitimately mentioning it is not this test's concern. The banned
-// substring is assembled at runtime, and deliberately never spelled out
-// contiguously anywhere in THIS file either (comments included), so this
-// test cannot trip over its own source describing what it checks for.
+// Repo docs/code must never point a reader at the gitignored planning
+// directory this feature's fix rounds were tracked in (its own nested
+// .gitignore is `*`, so any such reference is a dead link for anyone else
+// who clones this repo). `git ls-files` scopes this to tracked files only
+// — a gitignored scratch file legitimately mentioning it is not this
+// test's concern. The banned substring is assembled at runtime, and
+// deliberately never spelled out contiguously anywhere in this file either
+// (comments included), so this test cannot trip over its own source
+// describing what it checks for.
 const BANNED_DIR_NAME = ["s", "uperpower", "s"].join("");
 const BANNED_SUBSTRING = "." + BANNED_DIR_NAME;
 

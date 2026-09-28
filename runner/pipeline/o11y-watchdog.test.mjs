@@ -1,9 +1,8 @@
-// T04 — ADR-0041 §F.3's fourth alerting row: "The o11y stack itself stale
-// (no cron tick or ingest for 30 min) — the API worker's `*/5` cron reads
-// the o11y heartbeat over a service binding and sends `captureMessage` to
-// Sentry." One message on the transition into stale, one on recovery, never
+// ADR-0041 §F.3's fourth alerting row: the o11y stack itself stale (no
+// cron tick or ingest for 30 min) — the API worker's `*/5` cron reads the
+// o11y heartbeat over a service binding and sends `captureMessage` to
+// Sentry. One message on the transition into stale, one on recovery, never
 // on every tick.
-//
 // Run: node --experimental-strip-types --test pipeline/o11y-watchdog.test.mjs
 
 import test from "node:test";
@@ -17,16 +16,12 @@ const { checkO11yHeartbeat } = await import("../workers/api/src/o11y-watchdog.ts
 
 const FRESH_MS = 30 * 60 * 1000;
 
-// A-C1 fix: the fake `O11Y` binding below deliberately exposes ONLY
-// `heartbeat()` — no `fetch()` at all — mirroring the real RPC-entrypoint
-// shape (`entrypoint: "O11yHeartbeat"` in workers/api/wrangler.jsonc, see
-// that file's comment). If `o11y-watchdog.ts` ever regresses to calling
-// `env.O11Y.fetch(...)` (the pre-fix shape, which silently 404s in
-// production once the o11y worker's default export stopped answering
-// `/_internal/heartbeat`), every test below fails with a real
-// "o11y.fetch is not a function" TypeError instead of passing — so this
-// file cannot go green against that regression the way the old
-// fetch-shaped fake could.
+// The fake `O11Y` binding below deliberately exposes only `heartbeat()` —
+// no `fetch()` at all — mirroring the real RPC-entrypoint shape
+// (`entrypoint: "O11yHeartbeat"` in workers/api/wrangler.jsonc, see that
+// file's comment). If `o11y-watchdog.ts` ever regresses to calling
+// `env.O11Y.fetch(...)`, every test below fails with a real "o11y.fetch is
+// not a function" TypeError instead of passing.
 function makeEnv(heartbeatResponder) {
   return {
     CACHE: fakeKV(),

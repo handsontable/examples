@@ -1,10 +1,8 @@
-// GrafanaBox's T03 additions (wake/drain/stop orchestration, ADR-0041 §A) —
-// driven through the REAL class, same pattern `o11y-box.test.mjs` (T01) uses.
-// `schedule()` is monkey-patched per instance (the stub Container class has
-// no scheduling machinery at all, and this suite only needs to prove WHAT
-// GrafanaBox schedules and WHEN it decides to stop — not re-test
-// Cloudflare's own alarm dispatch).
-//
+// GrafanaBox's wake/drain/stop orchestration (ADR-0041 §A) — driven through
+// the real class. `schedule()` is monkey-patched per instance (the stub
+// Container class has no scheduling machinery, and this suite only needs
+// to prove what GrafanaBox schedules and when it decides to stop — not
+// re-test Cloudflare's own alarm dispatch).
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -28,7 +26,7 @@ function outcomeOf(point) {
   return point.blobs[Number(slot[1]) - 1];
 }
 
-// Fix round (finding B-M5): same pattern as outcomeOf, for the `reason` blob.
+// Same pattern as outcomeOf, for the `reason` blob.
 function reasonOf(point) {
   const slot = /^blob(\d+)$/.exec(AE_COLUMNS.reason);
   return point.blobs[Number(slot[1]) - 1];
@@ -64,7 +62,7 @@ function makeInboxWriterStub(overrides = {}) {
   };
   return {
     async recordWake() {},
-    // F8: the box reports its wake-to-ready time on the first successful isReady().
+    // The box reports its wake-to-ready time on the first successful isReady().
     async recordWakeReady(wakeId, readyMs) {
       if (overrides.recordWakeReady) return overrides.recordWakeReady(wakeId, readyMs);
       calls.recordWakeReady.push({ wakeId, readyMs });
@@ -72,7 +70,7 @@ function makeInboxWriterStub(overrides = {}) {
     async resolveWakes() {
       calls.resolveWakes++;
     },
-    // F37: the o11y spend cap's pause flag, read at the top of every drainStep.
+    // The o11y spend cap's pause flag, read at the top of every drainStep.
     async drainsPaused() {
       return overrides.drainsPaused ?? false;
     },
@@ -80,10 +78,9 @@ function makeInboxWriterStub(overrides = {}) {
       calls.nextWrittenKeys = (calls.nextWrittenKeys ?? 0) + 1;
       return overrides.writtenKeys ?? [];
     },
-    // Fix round (finding B-M5): defaults to "no reopened keys in this
-    // batch" — a test proving the `reason: "reopen"` emission overrides
-    // this via `overrides.reopenedFlag` (or its own `inboxWriterStub`
-    // override, the same pattern `nextWrittenKeys` above uses).
+    // Defaults to "no reopened keys in this batch" — a test proving the
+    // `reason: "reopen"` emission overrides this via `overrides.reopenedFlag`
+    // (the same pattern `nextWrittenKeys` above uses).
     async takeReopenedFlag(inboxKeys) {
       calls.takeReopenedFlag.push(inboxKeys);
       return overrides.reopenedFlag ?? false;
@@ -91,8 +88,8 @@ function makeInboxWriterStub(overrides = {}) {
     async markKeysProvisional(wakeId, keys) {
       calls.markKeysProvisional.push({ wakeId, keys });
     },
-    // B-M4 fix (minor triage item 3): see box.ts#drainStep and
-    // ledger.ts#commitKeys — a zero-bytes-pushed key commits directly.
+    // See box.ts#drainStep and ledger.ts#commitKeys — a zero-bytes-pushed
+    // key commits directly.
     async commitKeys(keys) {
       calls.commitKeys.push(keys);
     },
@@ -171,9 +168,8 @@ test.beforeEach(() => {
   Object.assign(hooks, defaultHooks());
   // The stub's own default `start` hook only sets state — the real
   // `Container.start()` also calls `onStart()` (`blockConcurrencyWhile`),
-  // which GrafanaBox's own T03 addition relies on to kick off the drain.
-  // Every test below needs that real contract, not just the stub's
-  // state-only default.
+  // which GrafanaBox relies on to kick off the drain. Every test below
+  // needs that real contract, not just the stub's state-only default.
   hooks.start = async (self, _startOptions) => {
     self._state = { status: "running", lastChange: Date.now() };
     await self.onStart();
@@ -220,11 +216,10 @@ test("drainStep is a no-op once a newer wake has superseded the payload's wakeId
   const { box, inboxWriterStub, scheduled } = makeBox();
   await box.wake("backlog");
   const staleWakeId = (await box.ctx.storage.get("wake")).wakeId;
-  // Simulate the OLD wake having fully stopped by now (not merely
-  // "running"/"healthy" mid-SIGTERM — wake() is idempotent during THAT
-  // window, C1, fix round B-M5: see box.ts's own comment on the deleted
-  // "stopping" branch) so the next wake() call actually mints a fresh id,
-  // the real shape a superseded step sees in production.
+  // Simulate the old wake having fully stopped by now (not merely
+  // "running"/"healthy" mid-SIGTERM — wake() is idempotent during that
+  // window; see box.ts's own comment) so the next wake() call actually
+  // mints a fresh id, the real shape a superseded step sees in production.
   box._state = { status: "stopped", lastChange: Date.now() };
   await box.wake("backlog"); // a fresh wakeId now in storage
   scheduled.length = 0;
@@ -242,7 +237,7 @@ test("drainStep pushes drained records and marks the key provisional on 2xx", as
   const gz = await (async () => {
     const record = {
       resource: { attributes: [] },
-      // F1's drain-time age filter drops anything older than ~7 days — a
+      // The drain-time age filter drops anything older than ~7 days — a
       // recent timestamp here so this test still exercises a real push,
       // not a silently-filtered-to-nothing one.
       scopeLogs: [{ logRecords: [{ timeUnixNano: String(BigInt(Date.now()) * 1_000_000n), body: { stringValue: "hello" } }] }],
@@ -267,9 +262,9 @@ test("drainStep pushes drained records and marks the key provisional on 2xx", as
 
 test("drainStep rejects a key on a 400 from Loki, with the message, and does not mark it provisional", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
-  // An IN-WINDOW record — F1's own age filter must not remove it before the
+  // An in-window record — the age filter must not remove it before the
   // (mocked) 400 has a chance to fire; this test is about a genuine
-  // Loki-side rejection, not F1's 7-day age drop.
+  // Loki-side rejection, not the 7-day age drop.
   const record = {
     resource: { attributes: [] },
     scopeLogs: [{ logRecords: [{ timeUnixNano: String(BigInt(Date.now()) * 1_000_000n), body: { stringValue: "x" } }] }],
@@ -292,16 +287,15 @@ test("drainStep rejects a key on a 400 from Loki, with the message, and does not
   assert.match(inboxWriterStub.calls.rejectKey[0].reason, /too_far_behind/);
 });
 
-// Row 19 (drain partial-400 durability, final review rereview.md): a key
-// whose object splits into multiple ~1 MB Loki pushes (ADR §B.3's own
-// per-request cap) can have ONE chunk permanently 400 while another lands
-// 2xx. `drain.ts#drainKey` reclassifies this as `provisional` (its accepted
-// content must still follow the normal §B.3 durability path — an unclean
-// stop before Loki's local flush must still trigger an automatic replay,
-// which only happens for `provisional` keys, never `rejected` ones). This
-// proves the WIRING: `box.ts#drainStep` must route such an outcome through
-// `markKeysProvisional` (not `rejectKey`) while STILL surfacing the
-// permanent loss via `recordPartialReject`, so it stays operator-visible.
+// A key whose object splits into multiple ~1 MB Loki pushes (ADR §B.3's own
+// per-request cap) can have one chunk permanently 400 while another lands
+// 2xx. `drain.ts#drainKey` reclassifies this as `provisional`: its accepted
+// content must still follow the normal §B.3 durability path, since an
+// unclean stop before Loki's local flush triggers an automatic replay only
+// for `provisional` keys, never `rejected` ones. `box.ts#drainStep` must
+// route such an outcome through `markKeysProvisional` (not `rejectKey`)
+// while still surfacing the permanent loss via `recordPartialReject`, so
+// it stays operator-visible.
 test("drainStep: a key with one accepted chunk and one permanently-400 chunk stays provisional AND logs a partial-reject event (row 19)", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000002.ndjson.gz";
   const nowNano = String(BigInt(Date.now()) * 1_000_000n);
@@ -337,18 +331,17 @@ test("drainStep: a key with one accepted chunk and one permanently-400 chunk sta
   assert.equal(inboxWriterStub.calls.recordPartialReject[0].key, key);
   assert.match(inboxWriterStub.calls.recordPartialReject[0].reason, /too_far_behind/);
 
-  // NB4 (re-review 2): `rejectedKeys` alone missed this case entirely
-  // (the key stays `provisional`, never `rejected`), so the drain point
-  // used to report `outcome: "ok"` even though a chunk was permanently
-  // lost. Must be `partial`, the same outcome a fully-rejected key gets.
+  // `rejectedKeys` alone misses this case (the key stays `provisional`,
+  // never `rejected`), so the drain point must report `partial`, the same
+  // outcome a fully-rejected key gets, never `ok`.
   const drainPoint = ae.points.find((p) => p.indexes?.[0] === "o11y.drain");
   assert.ok(drainPoint, "an o11y.drain point must be written");
   assert.equal(outcomeOf(drainPoint), "partial", "a partial-400 key must not report outcome: ok");
 });
 
-/** One real, in-window (F1's age filter) gzipped-ndjson inbox object — the
- *  same fixture shape `drainStep pushes drained records...` above builds
- *  inline, factored out so the two B-M5 tests below don't repeat it. */
+/** One real, in-window gzipped-ndjson inbox object — the same fixture
+ *  shape `drainStep pushes drained records...` above builds inline,
+ *  factored out so the tests below don't repeat it. */
 async function makeInboxObjectGz() {
   const record = {
     resource: { attributes: [] },
@@ -359,12 +352,10 @@ async function makeInboxObjectGz() {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-// Fix round (finding B-M5): `o11y.drain` must emit `reason: "reopen"`
-// (already a contract-allowed value) when the batch it just pushed replayed
-// reopened keys — instead of silently reporting the wake's own
-// `backlog`/`visit` reason, which loses the fact entirely. Fails without
-// the fix: reverting box.ts's `replayedReopenedKeys` read (or its use in
-// the point below) leaves `reasonOf(drainPoint)` as `"backlog"`.
+// `o11y.drain` must emit `reason: "reopen"` (already a contract-allowed
+// value) when the batch it just pushed replayed reopened keys — instead of
+// silently reporting the wake's own `backlog`/`visit` reason, which loses
+// the fact entirely.
 test("B-M5: o11y.drain reports reason: \"reopen\" when the batch replays a reopened key, even on a backlog wake", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000001.ndjson.gz";
   const r2Objects = new Map([[key, await makeInboxObjectGz()]]);
@@ -402,14 +393,11 @@ test("B-M5 (revert check / positive control): o11y.drain still reports the wake'
   assert.equal(reasonOf(drainPoint), "backlog");
 });
 
-// QA follow-up ("reopen reason on the drain error path"): `takeReopenedFlag`
-// consumes the reopen markers before `drainBatch` runs, so a batch that
-// replays reopened keys and then throws used to report the wake's own
-// backlog/visit reason on the `outcome: "error"` point instead of "reopen" —
-// the same B-M5 fix above, but for the error path `drainStep`'s outer catch
-// takes (B-M2, minor triage item 4). Fails without the fix: reverting
-// box.ts's `reopenState` threading (back to the outer catch reading only
-// `current.reason`) makes `reasonOf(drainPoint)` read "backlog".
+// `takeReopenedFlag` consumes the reopen markers before `drainBatch` runs,
+// so a batch that replays reopened keys and then throws must still report
+// "reopen" on the `outcome: "error"` point — the same path as the drain
+// error path `drainStep`'s outer catch takes, not the wake's own
+// backlog/visit reason.
 test('QA follow-up (reopen reason on the drain error path): a batch that replays a reopened key and then throws still reports reason: "reopen" on the o11y.drain error point', async () => {
   const key = "inbox/worker/2026-01-01/00/000000000010.ndjson.gz";
   const r2Objects = new Map([[key, await makeInboxObjectGz()]]);
@@ -440,23 +428,18 @@ test('QA follow-up (reopen reason on the drain error path): a batch that replays
   );
 });
 
-// B-M4 fix (minor triage item 3): a key whose only record is too old
-// (dropped by F1's `dropOldRecords` before any push is even attempted) ends
-// `provisional` with `bytesPushed: 0` — `drainKey`'s own zero-chunk case.
-// Before this fix, `drainStep` routed EVERY `provisional` outcome through
-// `markKeysProvisional`, which requires the wake's own Loki marker to ever
-// resolve to `done:`. A wake whose only provisional keys are all zero-byte
-// never gets that marker (nothing was pushed), so `resolveOverWakes` reads
-// it as unclean and bounces the key back to `written` — re-adding it to the
-// backlog and re-waking the box roughly every 10 minutes, forever, even
-// though nothing was ever at risk of being lost. Reverting the `zeroByteKeys`
-// split in box.ts (routing this case back through `markKeysProvisional`
-// alone) makes this test fail: `commitKeys` would never be called and
-// `markKeysProvisional` would be called instead.
+// A key whose only record is too old (dropped by `dropOldRecords` before
+// any push is even attempted) ends `provisional` with `bytesPushed: 0` —
+// `drainKey`'s own zero-chunk case. Routing every `provisional` outcome
+// through `markKeysProvisional` requires the wake's own Loki marker to
+// resolve to `done:`; a wake whose only provisional keys are zero-byte
+// never gets that marker, so `resolveOverWakes` bounces the key back to
+// `written` — re-waking the box roughly every 10 minutes forever, even
+// though nothing was at risk of being lost.
 test("drainStep commits a zero-bytes-pushed key directly, never marking it provisional (no re-wake loop)", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000003.ndjson.gz";
   // Older than Loki's `reject_old_samples_max_age` (7d) minus the drain's
-  // own safety margin — F1's `dropOldRecords` drops it before any push is
+  // own safety margin — `dropOldRecords` drops it before any push is
   // attempted, so `drainKey` never even calls `pushToLoki` for this key.
   const ancientNano = String(BigInt(Date.now() - 8 * 24 * 60 * 60 * 1000) * 1_000_000n);
   const record = {
@@ -485,15 +468,12 @@ test("drainStep commits a zero-bytes-pushed key directly, never marking it provi
   assert.equal(inboxWriterStub.calls.rejectKey.length, 0);
 });
 
-// B-M2 fix (minor triage item 4): before this fix, `drainStep` had no
-// try/finally around its body — a throw from `InboxWriter.nextWrittenKeys`
-// (or any other RPC, or `fetchObject`, or symbolication) propagated straight
-// out of `drainStep`, silently ending the drain for the rest of this wake:
-// nothing rescheduled it, nothing was recorded, and the box just sat there
-// idle-timer-bound having quietly given up mid-drain. Reverting the
-// try/catch in box.ts (back to calling `#drainStepBody`'s logic inline, with
-// no handler) makes this test fail: the `await box.drainStep(...)` call
-// itself rejects instead of resolving.
+// `drainStep` needs a try/finally around its body — a throw from
+// `InboxWriter.nextWrittenKeys` (or any other RPC, or `fetchObject`, or
+// symbolication) must not propagate out of `drainStep` and silently end
+// the drain for the rest of this wake: nothing would reschedule it, nothing
+// would be recorded, and the box would sit there idle-timer-bound having
+// quietly given up mid-drain.
 test("drainStep records an o11y.drain error point and still runs the post-drain stop decision when a step throws (B-M2)", async () => {
   const inboxWriterStub = makeInboxWriterStub({ writtenKeys: ["inbox/worker/2026-01-01/00/000000000004.ndjson.gz"] });
   inboxWriterStub.nextWrittenKeys = async () => {
@@ -517,13 +497,11 @@ test("drainStep records an o11y.drain error point and still runs the post-drain 
   assert.ok(stopped, "the post-drain stop decision must still run after a throw (idle backlog wake -> stop())");
 });
 
-// Advisor follow-up on B-M2: the catch handler's OWN work (`writeBoxPoint`,
-// then `#finishDrain`) can itself throw — most plausibly the very same
-// outage that took down `#drainStepBody` in the first place (a DO
-// storage/RPC failure affects every call in the isolate, not just one).
-// "always reschedule or finish" must hold even then. Reverting the nested
-// try/catch in `drainStep` (back to calling `#finishDrain` unguarded inside
-// the outer catch) makes this test fail: `drainStep` itself would reject.
+// The catch handler's own work (`writeBoxPoint`, then `#finishDrain`) can
+// itself throw — most plausibly the very same outage that took down
+// `#drainStepBody` in the first place (a DO storage/RPC failure affects
+// every call in the isolate, not just one). "always reschedule or finish"
+// must hold even then.
 test("drainStep falls back to a plain reschedule when the error-handling path ITSELF throws (#finishDrain failing too)", async () => {
   const inboxWriterStub = makeInboxWriterStub({ writtenKeys: ["inbox/worker/2026-01-01/00/000000000005.ndjson.gz"] });
   inboxWriterStub.nextWrittenKeys = async () => {
@@ -576,8 +554,7 @@ test("fix round I1: a fresh backlog wake with no visitors self-stops, even right
   // #finishDrain reads wake 1's still-recent timestamp and wrongly treats
   // itself as "not quiet," refusing to self-stop a backlog wake nobody is
   // visiting — exactly ADR §A's quiet-stop rule broken, and awake-time
-  // wasted (exit criterion 7). Reverting the `ctx.storage.delete(...)` in
-  // #doWake (box.ts, fix round I1) makes this fail: `stopped` stays false.
+  // wasted (exit criterion 7).
   const { box } = makeBox({ inboxWriter: { writtenKeys: [] } });
   installContainerFetchRouter();
 
@@ -589,8 +566,8 @@ test("fix round I1: a fresh backlog wake with no visitors self-stops, even right
   assert.equal((await box.getState()).status, "healthy", "wake 1 must still be running (active visitor)");
 
   // Wake 1 fully stops (simulating its own eventual idle/hard-cap stop) —
-  // not merely "running"/"healthy" mid-SIGTERM (which stays idempotent, C1),
-  // so wake() mints a genuinely new id next.
+  // not merely "running"/"healthy" mid-SIGTERM (which stays idempotent), so
+  // wake() mints a genuinely new id next.
   box._state = { status: "stopped", lastChange: Date.now() };
 
   // Wake 2: backlog-triggered, no visitor of its own.
@@ -609,9 +586,8 @@ test("fix round I1: a fresh backlog wake with no visitors self-stops, even right
   assert.ok(stopped, "a fresh backlog wake with no visitors of its own must self-stop, regardless of the PREVIOUS wake's visitor activity");
 });
 
-// F37 (round 10): over the spend cap, a backlog wake drained 69 objects and a
-// later Grafana visit drained 70 more. ADR §G: "drains pause, visit wakes still
-// work". A paused drainStep must push nothing, whatever woke the box.
+// ADR §G: "drains pause, visit wakes still work". A paused drainStep must
+// push nothing, whatever woke the box.
 test("drainStep pushes nothing while drainsPaused: a visit wake keeps serving (no stop), a quiet backlog wake stops", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000007.ndjson.gz";
   for (const [reason, visitor, expectStop] of [["visit", true, false], ["backlog", false, true]]) {
@@ -661,14 +637,11 @@ test("a drain wake with an active Grafana user does not call stop()", async () =
   assert.equal(stopped, false, "an active Grafana user must not be SIGTERMed by a drain finishing");
 });
 
-// F2: T03-D2's other finding — a visit wake with an empty backlog SIGTERMs
-// itself ~20s after boot, because `handleGrafana` (grafana/proxy.ts) used
-// to record no activity at all for a request that only ever saw the
-// waking page (the box was still booting). Driven through the REAL
-// `handleGrafana` handler (not `box.noteVisitorActivity()` called
-// directly) — calling the box method directly would pass even with the
-// proxy-level ordering bug this fix addresses; only exercising the actual
-// route handler proves it.
+// A visit wake with an empty backlog SIGTERMs itself ~20s after boot unless
+// `handleGrafana` (grafana/proxy.ts) records activity for a request that
+// only ever saw the waking page (the box was still booting). Driven
+// through the real `handleGrafana` handler, not `box.noteVisitorActivity()`
+// called directly, so the proxy-level ordering is actually exercised.
 test("F2: a waking-page request (box not yet ready) still counts as visitor activity, so an empty-backlog visit wake stays up past the first drain-finish", async () => {
   const { box, env, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [] }, env: { O11Y_ENV: "local", DEV_ADMIN: "dev@handsontable.com" } });
   // `getGrafanaBoxStub`/`inboxWriterStub` (box.ts) both resolve their
@@ -702,16 +675,13 @@ test("F2: a waking-page request (box not yet ready) still counts as visitor acti
   assert.equal(stopped, false, "a visit wake whose only activity was a waking-page poll must not self-stop on the first drain-finish");
 });
 
-// ---- F6: every container response body is released ------------------------
-//
-// V-triage F6: `@cloudflare/containers` counts a `containerFetch` as in
-// flight until its response body is consumed or cancelled, and never runs
-// the `sleepAfter` idle stop while that count is above zero. `isReady()`
-// read only `.status`, so each probe pinned the count up by two and a visit
-// wake ran to the 4-hour cap. The stub now models that accounting
-// (`cloudflare-containers-stub.mjs`, "in-flight accounting"); these tests
-// answer with REAL bodies, as Loki (`ready\n`) and Grafana (JSON) do —
-// `installContainerFetchRouter`'s `null` bodies could never leak.
+// ---- every container response body is released -----------------------------
+// `@cloudflare/containers` counts a `containerFetch` as in flight until its
+// body is consumed or cancelled, and never runs `sleepAfter` while that
+// count is above zero. The stub models that accounting
+// (`cloudflare-containers-stub.mjs`); these tests answer with real bodies,
+// as Loki and Grafana do — `installContainerFetchRouter`'s `null` bodies
+// could never leak.
 
 /** Lets the stub's `pipeTo(...).finally(decrementInflight)` chains run. */
 async function settle() {
@@ -794,7 +764,7 @@ test("F6: drainStep's Loki push releases a 2xx response body (not only a >=400 o
   assert.equal(box.inflightRequests, 0, "a 2xx push body must be released too");
 });
 
-// ---- F8: wake-to-ready time ------------------------------------------------
+// ---- wake-to-ready time -----------------------------------------------------
 
 test("F8: the first successful isReady() of a wake reports wake-to-ready, once", async () => {
   const { box, inboxWriterStub } = makeBox();
@@ -901,17 +871,12 @@ test("noteVisitorActivity persists a timestamp lastGrafanaActivityMs reads back"
   assert.ok(after >= before);
 });
 
-// ---- F13: no await on the container is unbounded ---------------------------
-//
-// F13 (local verification): after the box container was SIGKILLed while a
-// dashboard was open, the library's `start()` for the next wake never
-// settled (the new container itself booted fine). `wake()` shares one
-// in-flight promise between callers, so every later `/grafana/*` request and
-// the cron's backlog wake waited on it forever. VA measured the second half
-// in workerd: a container port that accepts and never answers held every
-// `isReady()` caller forever. Each test below would hang on the old code, so
-// each one races its subject against `within()`, which fails the test
-// instead of letting it hang.
+// ---- no await on the container is unbounded ---------------------------------
+// A SIGKILLed box container can leave the library's `start()` for the next
+// wake never settling. `wake()` shares one in-flight promise between
+// callers, so every later `/grafana/*` request and the cron's backlog wake
+// would wait on it forever. Each test below races its subject against
+// `within()`, which fails the test instead of letting it hang.
 
 /** Rejects if `promise` has not settled within `ms`: a hang fails the test. */
 function within(promise, ms, what) {
@@ -1069,8 +1034,8 @@ test("F13: drainStep finishes when Loki's push port never answers, instead of fr
   assert.equal(outcomeOf(drainPoints[0]), "error", "the stalled push must be reported, and the key left for the next wake");
 });
 
-// F13, the reload path: a fresh instance (hot reload, deploy or eviction
-// while the container kept running) never calls start() itself, so only the
+// The reload path: a fresh instance (hot reload, deploy or eviction while
+// the container kept running) never calls start() itself, so only the
 // probes can notice a wedged library start. Both probes here never settle.
 function installSilentProbes() {
   hooks.containerFetch = () => new Promise(() => {});
@@ -1120,9 +1085,9 @@ test("F13 (positive control): a probe that answers in between restarts the stuck
   assert.equal(aborts.length, 0, "80 ms of timeouts, split by a settled probe, is never a 60 ms stuck window");
 });
 
-// ---- QA follow-up: isReady() skips its probes while a stop is in ---
-// flight (the SIGTERM->exit window `getState()` cannot see — see
-// STOPPING_FOR_STORAGE_KEY's own doc comment in box.ts).
+// ---- isReady() skips its probes while a stop is in flight (the
+// SIGTERM->exit window `getState()` cannot see — see
+// STOPPING_FOR_STORAGE_KEY's own doc comment in box.ts) ----------------------
 
 test("item 2: isReady() skips its probes once THIS instance has requested a stop, even while getState() still reports running/healthy (the SIGTERM window)", async () => {
   const { box } = makeBox();

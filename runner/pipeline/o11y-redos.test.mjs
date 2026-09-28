@@ -1,20 +1,17 @@
-// Finding Z-A-C1: the ingest scrub/normalise/fingerprint path had several
-// quadratic ("ReDoS") regexes reachable from an anonymous
-// `POST /telemetry/collect` request — an attacker-controlled string with no
-// closing delimiter made the engine backtrack character-by-character at
-// every start position, O(n) work at each of O(n) positions, O(n²) total.
-// Measured on the unfixed code: `redactEmailInText` alone cost 4.3s at 80k
-// characters and projected ~36s at the 256 KB record cap, well past the
-// Worker's 120s `cpu_ms` budget for a handful of concurrent requests.
+// The ingest scrub/normalise/fingerprint path must not carry a quadratic
+// ("ReDoS") regex reachable from an anonymous `POST /telemetry/collect`
+// request — an attacker-controlled string with no closing delimiter makes
+// a backtracking engine work O(n) at each of O(n) start positions, O(n²)
+// total. Measured on an unfixed pattern: `redactEmailInText` alone cost
+// 4.3s at 80k characters and projected ~36s at the 256 KB record cap, well
+// past the Worker's 120s `cpu_ms` budget for a handful of concurrent
+// requests.
 //
 // These tests assert a wall-clock budget on adversarial input for each
-// fixed pattern, plus the full `processFaroBody` pipeline and a real
-// `worker.fetch` route call with a gzip body — the exact shape the finding
-// used to reproduce the CPU-exhaustion route. Every test here was seen
-// FAILING (timing out its budget, not merely slow) against the pre-fix
-// regexes — see the task report for the revert evidence — and passes now
-// that every pattern is linear-time plus the pre-scrub truncation
-// (`SCRUB_TEXT_MAX_CHARS`) is in place.
+// pattern, plus the full `processFaroBody` pipeline and a real
+// `worker.fetch` route call with a gzip body — the shape that reproduces
+// the CPU-exhaustion route. Every pattern here is linear-time, backed by
+// the pre-scrub truncation (`SCRUB_TEXT_MAX_CHARS`).
 //
 // Build prerequisite: `pnpm --filter @handsontable/demo-runtime build` (this
 // file imports the runtime's dist, same as `telemetry-fingerprint.test.mjs`).
@@ -55,24 +52,19 @@ async function assertUnderBudget(label, budgetMs, fn) {
   return result;
 }
 
-// ---- Individual pattern budgets (a shared budget, comfortably under both bars) -
+// ---- individual pattern budgets (a shared budget, comfortably under both bars)
 
-// `INDIVIDUAL_PATTERN_BUDGET_MS` replaces a hard-coded 100ms that was too
-// tight for `pnpm test`'s full worker pool on a loaded machine: on a real
-// run at load average 50, four of these tests missed their 100ms budget on
-// the FIXED (linear) code alone — redactEmailInText 297ms/268ms,
+// `INDIVIDUAL_PATTERN_BUDGET_MS` must not be a tight, hard-coded 100ms: on
+// a real run at load average 50, four of these tests missed a 100ms budget
+// on the fixed (linear) code alone — redactEmailInText 297ms/268ms,
 // redactUserAgentInText 502ms, redactPreviewHosts 148ms — with no code
-// regression; the same file run alone passed 10/10. 3000ms was chosen to
-// sit far above both:
+// regression; the same file run alone passed 10/10. 3000ms sits far above
+// both:
 //  - at least 5x the worst fixed-code time observed under that load
 //    (~500ms), so ordinary scheduler contention can't trip it; and
-//  - at least 3x (in practice ~4-5x, measured below) under every pre-fix
-//    (quadratic) pattern's time on its own adversarial input, so a
-//    reintroduced unbounded quantifier still fails loudly.
-// Each test's own comment gives the pre-fix timing this was checked
-// against (measured directly against the pre-fix regex from before commit
-// 1e376b4c7, not through this test file — see the task report for the
-// revert-evidence runs of this file itself).
+//  - at least 3x (in practice ~4-5x, measured below) under every quadratic
+//    pattern's time on its own adversarial input, so a reintroduced
+//    unbounded quantifier still fails loudly.
 const INDIVIDUAL_PATTERN_BUDGET_MS = 3000;
 
 // Sized at 150k, not 100k: at 100k the pre-fix EMAIL_PATTERN only cost
@@ -105,17 +97,15 @@ test(`redactPreviewHosts: 65k 'a-'-repeats with no '.demos.handsontable.com' suf
   await assertUnderBudget("redactPreviewHosts", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactPreviewHosts(input));
 });
 
-// R3 F17c: `redactIpInText` (IPv4 + IPv6) is bounded from the start — every
-// quantifier is a small fixed alternation or a `{1,4}`/`{1,7}` cap, so
-// there is no unbounded run to backtrack over. These adversarial inputs are
-// shaped to stress an IP-pattern implementation that DID have an unbounded
-// quantifier (a run of digits/dots, or hex/colons, with no valid IP ever
-// completing) — measured directly against the fixed code at 150k/260k
-// chars: 1-3ms, nowhere near this budget. There is no "pre-fix" timing to
-// cite (this pattern never shipped an unbounded version), so this is a
-// regression guard, not a revert-evidence timing the way the others above
-// are — reverting `IPV4_PATTERN`/`IPV6_PATTERN` to an unbounded shape (e.g.
-// `[\d.]+` for the octet run) is what this test would catch.
+// `redactIpInText` (IPv4 + IPv6) must be bounded: every quantifier is a
+// small fixed alternation or a `{1,4}`/`{1,7}` cap, so there is no
+// unbounded run to backtrack over. These adversarial inputs are shaped to
+// stress an IP-pattern implementation with an unbounded quantifier (a run
+// of digits/dots, or hex/colons, with no valid IP ever completing) —
+// measured directly against the fixed code at 150k/260k chars: 1-3ms,
+// nowhere near this budget. This is a regression guard: reverting
+// `IPV4_PATTERN`/`IPV6_PATTERN` to an unbounded shape (e.g. `[\d.]+` for
+// the octet run) is what this test would catch.
 test(`redactIpInText: 150k '1' characters (no valid IPv4/IPv6 ever completes) completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
   const input = "1".repeat(150_000);
   await assertUnderBudget("redactIpInText (digits)", INDIVIDUAL_PATTERN_BUDGET_MS, () => redactIpInText(input));
@@ -148,19 +138,19 @@ test(`fingerprint (the real monitor.ts shape, via normalizeMonitorMessage + stri
   await assertUnderBudget("fingerprint", INDIVIDUAL_PATTERN_BUDGET_MS, () => fingerprint("demo-runtime", input));
 });
 
-// ---- The combined server-side pass (text-scrub.ts's own extra scrub) -----------
+// ---- the combined server-side pass (text-scrub.ts's own extra scrub) -------
 
 // Sized at 150k to match redactEmailInText's own bump above: scrubBodyText's
-// dominant cost on this all-'a' input is its chained (pre-fix) email pass,
-// which measured ~12.8s at 150k, well over 3x the shared budget; the fixed
-// chain (truncate + URL-strip + UA + email + IP passes, R3 F17c added the
-// last one) measured comfortably under budget.
+// dominant cost on this all-'a' input is its chained email pass, which
+// measured ~12.8s at 150k on a quadratic implementation, well over 3x the
+// shared budget; the linear chain (truncate + URL-strip + UA + email + IP
+// passes) measures comfortably under budget.
 test(`scrubBodyText: 150k 'a' characters (email + UA + URL + IP passes chained) completes well under ${INDIVIDUAL_PATTERN_BUDGET_MS}ms`, async () => {
   const input = "a".repeat(150_000);
   await assertUnderBudget("scrubBodyText", INDIVIDUAL_PATTERN_BUDGET_MS, () => scrubBodyText(input));
 });
 
-// ---- The full normalise pipeline, the shape Z-A-C1 actually measured -----------
+// ---- the full normalise pipeline --------------------------------------------
 
 test("processFaroBody: a Faro log item with an 80k-character adversarial message completes well under budget (Z-A-C1's own measured shape)", async () => {
   const body = {
@@ -180,9 +170,9 @@ test("processFaroBody: a Faro log item with an 80k-character adversarial message
   assert.equal(item.invalid, undefined);
 });
 
-// ---- End to end: the real route, a real gzip body, the exact reproduction ------
-// Z-A-C1 used to reproduce this over the real `worker.fetch` with a ~1KB
-// gzip upload that expanded to a ~1MB adversarial JSON body.
+// ---- end to end: the real route, a real gzip body, the exact reproduction --
+// Reproduced over the real `worker.fetch` with a ~1KB gzip upload that
+// expands to a ~1MB adversarial JSON body.
 
 async function gzip(text) {
   const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
@@ -220,23 +210,22 @@ test("POST /telemetry/collect: a gzip body carrying an adversarial 160k-characte
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
 });
 
-// ---- Advisor sweep finding: STACK_LINE_RE (symbolicate.ts), the same class --
+// ---- STACK_LINE_RE (symbolicate.ts), the same class -------------------------
 //
 // `workers/o11y/src/drain/symbolicate.ts#STACK_LINE_RE` has two lazy
 // groups (`(.+?)`) separated by a required ` (` literal, with a required
 // `)` at the very end — catastrophic on a line shaped like
 // `"    at a (a (a (…"` with no closing paren, even though the regex has
-// no `/g` (it is anchored `^…$` and tried once per line, but that ONE
+// no `/g` (it is anchored `^…$` and tried once per line, but that one
 // attempt still backtracks quadratically across every ambiguous split
-// point). Measured directly against the bare regex (not through this
-// test): 5k chars 5ms, 10k 20ms, 20k 74ms, 40k 305ms — roughly quadratic.
-// An exception's `value` field is free text that becomes the FIRST line of
-// the stored body (`convert.ts#faroBody`) and is bounded only by
-// `SCRUB_TEXT_MAX_CHARS` (256 KB, Z-A-C1) before it ever reaches drain —
-// nothing stops it from starting with `"    at "` and containing many
-// `" ("` sequences. Fixed with a length guard in `parseLine` (`MAX_STACK_LINE_LENGTH`
-// = 4096) that skips the regex entirely for any line longer than a real
-// rendered frame could ever be.
+// point). Measured directly against the bare regex: 5k chars 5ms, 10k
+// 20ms, 20k 74ms, 40k 305ms — roughly quadratic. An exception's `value`
+// field is free text that becomes the first line of the stored body
+// (`convert.ts#faroBody`) and is bounded only by `SCRUB_TEXT_MAX_CHARS`
+// (256 KB) before it ever reaches drain — nothing stops it from starting
+// with `"    at "` and containing many `" ("` sequences. A length guard in
+// `parseLine` (`MAX_STACK_LINE_LENGTH` = 4096) skips the regex entirely for
+// any line longer than a real rendered frame could ever be.
 test("symbolicateResourceLogs: a pathological '    at a (a (a (…' line with no closing paren completes well under budget, not quadratic on STACK_LINE_RE", async () => {
   const poisonLine = "    at " + "a (".repeat(30_000); // ~90k chars, well past MAX_STACK_LINE_LENGTH
   const record = {

@@ -1,9 +1,8 @@
 // Symbolication (workers/o11y/src/drain/symbolicate.ts, ADR-0041 §C.3).
 // Unit cases against hand-built maps; a real `vite build` case (exit
-// criterion 5, F4) builds its OWN tiny fixture into a fresh temp dir below
-// — see that section's own header comment for why (it used to read
-// whatever apps/authoring/dist happened to exist on disk).
-//
+// criterion 5) builds its own tiny fixture into a fresh temp dir below —
+// see that section's own header comment for why (never reads whatever
+// apps/authoring/dist happens to exist on disk).
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -165,24 +164,24 @@ test("symbolicateResourceLogs is deterministic: two independent calls over the s
   assert.deepEqual(first, second);
 });
 
-// ---- Z-B-C1: a line-0 stack frame must not throw out of symbolication -----
+// ---- a line-0 stack frame must not throw out of symbolication --------------
 //
 // `source-map-js#originalPositionFor({ line: 0, ... })` throws
 // `TypeError: Line must be greater than or equal to 1, got 0` — reachable
 // from one anonymous `POST /telemetry/collect` request with a crafted
-// `lineno: 0` exception frame (ingest does not reject it). Before this fix,
-// that throw escaped `resolveBody`, then `symbolicateResourceLogs`, then
+// `lineno: 0` exception frame (ingest does not reject it). That throw must
+// not escape `resolveBody`, then `symbolicateResourceLogs`, then
 // `drain.ts#drainKey`, then `drainBatch` — poisoning the whole drain queue
-// (see `pipeline/o11y-drain.test.mjs`'s own Z-B-C1 tests for the
-// batch/key-isolation half of this fix).
+// (see `pipeline/o11y-drain.test.mjs`'s own tests for the batch/key-
+// isolation half of this).
 //
 // The raw stack line is built by hand here, not through `formatStackFrame`
-// — `convert.ts#formatStackFrame` now has its own optional ingest-side
-// guard (Z-B-C1) that omits the position for a `lineno < 1`, which would
-// hide the very shape this test needs to construct. A record ingested
-// before that guard existed (or any other path that reaches `resolveBody`
-// with this exact text) must still be handled safely — that is what this
-// module's own guard is for, independent of the ingest-side fix.
+// — `convert.ts#formatStackFrame` has its own optional ingest-side guard
+// that omits the position for a `lineno < 1`, which would hide the very
+// shape this test needs to construct. A record ingested before that guard
+// existed (or any other path that reaches `resolveBody` with this exact
+// text) must still be handled safely — that is what this module's own
+// guard is for, independent of the ingest-side fix.
 test("Z-B-C1: symbolicateResourceLogs leaves a lineno: 0 frame's body byte-for-byte unchanged, and does not throw, even when a valid map exists", async () => {
   const poisonedLine = "    at f (https://demos.handsontable.com/assets/index-abc123.js:0:5)";
   const record = exceptionRecord(["TypeError: boom", poisonedLine]);
@@ -212,21 +211,19 @@ test("Z-B-C1: a lineno: 0 frame is left alone even alongside a genuinely resolva
   assert.match(body, /src\/app\.ts:5:3/, "a sibling resolvable frame in the SAME body must still resolve");
 });
 
-// ---- F4 / Exit criterion 5: a real `vite build` of a self-built fixture --
+// ---- exit criterion 5: a real `vite build` of a self-built fixture ---------
 //
-// This used to read whatever `apps/authoring/dist` happened to exist on
-// disk: it FAILED (not skipped) when that dist existed but had no chunk
-// whose map resolved back to first-party `src/` code, and it SKIPPED
-// silently when there was no dist at all — neither is deterministic, and a
-// skip reads as green in a summary. This builds its own tiny, throwaway
-// fixture with a REAL `vite build --sourcemap` (the same `vite` the
-// authoring app itself depends on — resolved by walking its manifest,
-// `pipeline/vite-allowed-hosts.test.mjs`'s own established pattern, since
-// vite's `exports` map does not expose `./bin/vite.js` directly) into a
-// fresh temp dir, every run, never touching `apps/authoring/dist`. The
+// Reading whatever `apps/authoring/dist` happens to exist on disk is not
+// deterministic (fails unpredictably when that dist has no chunk whose map
+// resolves back to first-party `src/` code, and skips silently — reading
+// as green — when there is no dist at all). This builds its own tiny,
+// throwaway fixture with a real `vite build --sourcemap` (the same `vite`
+// the authoring app itself depends on — resolved by walking its manifest,
+// since vite's `exports` map does not expose `./bin/vite.js` directly) into
+// a fresh temp dir, every run, never touching `apps/authoring/dist`. The
 // evidence stays real — a real bundler, real esbuild minification, a real
-// source map — just never dependent on another task's own build artifact
-// existing (or not) on disk.
+// source map — just never dependent on a build artifact existing (or not)
+// on disk.
 
 const require = createRequire(import.meta.url);
 const VITE_BIN = path.join(
@@ -316,7 +313,7 @@ test("exit criterion 5: an exception from a real vite build (self-built fixture)
     );
     // Wall time as a CPU proxy — Worker CPU time cannot be read from inside
     // the isolate; the sandbox probe's platform-reported CPU is the real
-    // evidence for the 500ms budget itself (see the task Outcome).
+    // evidence for the 500ms budget itself.
     assert.ok(elapsedMs < 500, `resolution took ${elapsedMs}ms wall time, expected well under 500ms`);
   } finally {
     await rm(dir, { recursive: true, force: true });

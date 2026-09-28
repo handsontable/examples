@@ -1,12 +1,9 @@
 // ADR §B.5 gate tests — one per row, run against the real gate functions
 // under plain `node --test` via `o11y-worker-hooks.mjs` (`.js`→`.ts` remap,
 // `cloudflare:workers`/`@cloudflare/containers` stubs). Each gate is tested
-// for both directions: it must reject the bad input and accept the good one
-// — "Each gate test fails when its gate is bypassed" (task acceptance
-// criteria) means the accept-side assertion has nothing else standing
-// between it and a pass, so disabling the gate's own check (not just this
-// test) is exactly what turns the reject-side case red.
-//
+// for both directions: it must reject the bad input and accept the good
+// one, so disabling the gate's own check is what turns the reject-side
+// case red.
 // Run: node --experimental-strip-types --test pipeline/o11y-gates.test.mjs
 
 import test from "node:test";
@@ -29,7 +26,7 @@ const { checkDeployGate, O11Y_GITHUB_OIDC_AUDIENCE, _resetGithubJwksCacheForTest
 );
 const { hmacSha256Hex } = await import("../workers/o11y/src/gates/util.ts");
 
-// K1: the `/grafana/*` session gate (`gates/session.ts`, replacing
+// The `/grafana/*` session gate (`gates/session.ts`, replacing
 // `gates/access.ts`'s Cloudflare Access JWT verification) has its own file,
 // `o11y-session.test.mjs` — its cookie mechanics (HMAC signing, nonce
 // binding, the broker call) are a different shape of test than the

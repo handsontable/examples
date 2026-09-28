@@ -26,11 +26,11 @@ function makeStorage() {
     async put(key, value) {
       map.set(key, value);
     },
-    // T03 fix round I1: `#doWake` now resets `LAST_GRAFANA_STORAGE_KEY` via
+    // `#doWake` resets `LAST_GRAFANA_STORAGE_KEY` via
     // `ctx.storage.delete()` on every wake — this fake needed the method
     // added so every existing `wake()` test here (which all go through
     // `#doWake`) keeps working, the same class of shared-fixture addition
-    // T03 already made to `cloudflare-containers-stub.mjs#schedule` for
+    // the change already made to `cloudflare-containers-stub.mjs#schedule` for
     // its own hard-cap scheduling.
     async delete(key) {
       return map.delete(key);
@@ -134,23 +134,17 @@ test("wake(): idempotent while already running/healthy — no second recordWake,
   assert.equal(inboxWriterCalls.length, 1, "recordWake is called exactly once");
 });
 
-// Fix round (finding B-M1): this test used to assert `wake()` REJECTS while
-// a dedicated `state.status === "stopping"` branch in `box.ts` was hit — a
-// status the real `@cloudflare/containers` library's `stop()` never actually
-// sets (it only signals SIGTERM; `getState()` keeps reporting
-// "running"/"healthy" until the process actually exits). That branch was
-// deleted as dead code. What actually still guards against a second wakeId
-// during the real SIGTERM-pending window is the ALREADY-EXISTING
-// "running"/"healthy" branch returning the persisted wake record — this test
-// now proves THAT: `wake()` called right after `stop()` (still
-// "running"/"healthy" here, exactly like the real library mid-shutdown)
-// returns the SAME first wake record, with no second `recordWake` and no
-// second `start()`. Deliberately uses the STUB'S OWN DEFAULT `stop()` hook
-// (only wrapped for a call count, never replaced) rather than a per-test
-// override, so this test is sensitive to both halves of the fix together:
-// fails if `box.ts`'s dead branch is restored AND the stub is reverted to
-// fabricate `"stopping"` (the exact combination the finding describes) —
-// `wake()` then throws instead of returning the first record.
+// `state.status === "stopping"` is not a status the real
+// `@cloudflare/containers` library's `stop()` ever sets: it only signals
+// SIGTERM, and `getState()` keeps reporting "running"/"healthy" until the
+// process actually exits. What guards against a second wakeId during the
+// real SIGTERM-pending window is the existing "running"/"healthy" branch
+// returning the persisted wake record: `wake()` called right after
+// `stop()` (still "running"/"healthy" here, exactly like the real library
+// mid-shutdown) must return the same first wake record, with no second
+// `recordWake` and no second `start()`. Deliberately uses the stub's own
+// default `stop()` hook (only wrapped for a call count, never replaced),
+// so this test is sensitive to both halves together.
 test("wake(): idempotent while a stop() SIGTERM is in flight — never mints a second wakeId over a draining one (C1)", async () => {
   const { box, inboxWriterCalls } = makeBox();
   let startCalls = 0;
@@ -230,10 +224,10 @@ test("wake(): missing LOKI_S3_* credentials refuses to start, and never calls re
   };
   await assert.rejects(() => box.wake("visit"), /LOKI_S3_ACCESS_KEY_ID/);
   assert.equal(startCalls, 0);
-  // Fix round I2: envVars are built and validated BEFORE the storage write
+  // envVars are built and validated before the storage write
   // and the recordWake call, so a missing-secret throw must leave the
   // ledger untouched — no wake was ever recorded that will never start.
-  // Reverting the fix (validating inside/after the recordWake call, the
+  // Validating inside/after the recordWake call (the
   // original order) makes this assertion fail: recordWake fires once
   // before buildEnvVars ever gets a chance to throw.
   assert.equal(inboxWriterCalls.length, 0, "recordWake must not be called when envVars validation fails");
@@ -381,17 +375,15 @@ test("containerFetch(): a requestOrUrl argument that cannot even be constructed 
   assert.equal(containerFetchCalls, 0, "an uninspectable request must never reach the container");
 });
 
-// --- containerFetch(): the Loki datasource-proxy block (minor triage item 2) ---
+// --- containerFetch(): the Loki datasource-proxy block ----------------------
 //
 // `/api/datasources/proxy/...` forwards its trailing subpath verbatim to
-// whichever datasource the uid/numeric-id selector names — for BOTH Loki
+// whichever datasource the uid/numeric-id selector names — for both Loki
 // datasources (loki-browser, loki-worker), that datasource's own `url` is
-// Loki's bare root, so the subpath IS Loki's real HTTP path, including its
-// ingest and admin endpoints. Reverting `box.ts`'s `isBlockedLokiProxyPath`
-// (dropping the `isBlockedLokiProxyPath(normalized)` disjunct from
-// `isBlockedContainerRequest`, back to only `LIVE_PATH_RE.test(normalized)`)
-// makes every "refused" assertion below fail: each would come back 200
-// instead of 404.
+// Loki's bare root, so the subpath is Loki's real HTTP path, including its
+// ingest and admin endpoints. `box.ts`'s `isBlockedLokiProxyPath` disjunct
+// in `isBlockedContainerRequest` must refuse these, not just
+// `LIVE_PATH_RE.test(normalized)`.
 
 test("containerFetch(): Loki push/flush/shutdown/delete/config/otlp-ingest are refused through the uid-form datasource proxy", async () => {
   const { box } = makeBox();
@@ -501,26 +493,22 @@ test("containerFetch(): percent-encoding and case variants are blocked the same 
   }
 });
 
-// --- containerFetch(): the Loki datasource-RESOURCE block (A-I2) ----------
+// --- containerFetch(): the Loki datasource-resource block --------------------
 //
 // `/api/datasources/uid/<uid>/resources/<rest>` (and the numeric-id form)
-// is Grafana's MODERN route. Live-verified against a real Grafana 11.4 +
-// Loki plugin (COMMON.md port block, project o11y-x1, see the task
-// report and box.ts's own doc comment on `DATASOURCE_RESOURCE_RE` for the
-// full write-up): reading the box's container logs shows the plugin
-// forwards `<rest>` to REAL Loki as `/loki/api/v1/<rest>` — a genuine,
-// working proxy into that URL namespace, not a small fixed set of
-// "registered handlers" the way an earlier draft of this comment claimed.
-// `resources/flush`/`resources/shutdown` fail only because Loki's real
-// admin endpoints live OUTSIDE `/loki/api/v1/`, and `resources/push`
-// independently 405s from Loki itself; a `--path-as-is` `../` traversal at
-// the drain's own ingest path did not escape that prefix either (Loki's
-// own router doesn't resolve `..` segments). None of that makes this
-// gate optional — it is the real boundary, symmetric with the legacy
-// proxy route above. Reverting the `DATASOURCE_RESOURCE_RE`/
-// `LOKI_ALLOWED_RESOURCE_RE` wiring in `isBlockedLokiProxyPath` makes every
-// "refused" assertion below fail (200 instead of 403/404) — this test file
-// had no coverage of `/resources/` at all before A-I2.
+// is Grafana's modern route. Live-verified against a real Grafana 11.4 +
+// Loki plugin: reading the box's container logs shows the plugin forwards
+// `<rest>` to real Loki as `/loki/api/v1/<rest>` — a genuine, working
+// proxy into that URL namespace. `resources/flush`/`resources/shutdown`
+// fail only because Loki's real admin endpoints live outside
+// `/loki/api/v1/`, and `resources/push` independently 405s from Loki
+// itself; a `--path-as-is` `../` traversal at the drain's own ingest path
+// does not escape that prefix either (Loki's own router doesn't resolve
+// `..` segments). None of that makes this gate optional — it is the real
+// boundary, symmetric with the legacy proxy route above. The
+// `DATASOURCE_RESOURCE_RE`/`LOKI_ALLOWED_RESOURCE_RE` wiring in
+// `isBlockedLokiProxyPath` must refuse every case below (403/404, never
+// 200).
 
 test("containerFetch(): Loki push/flush/shutdown/config/otlp-ingest are refused through the modern uid-form resource route", async () => {
   const { box } = makeBox();
@@ -660,7 +648,7 @@ test("F2 fix (B-I4): a STALE persisted status (healthy) with the REAL container 
   };
   await box.wake("visit"); // wake() itself is a no-op here (already "running"/"healthy") — just re-asserts state
 
-  // Model exactly the B-I4 scenario: `getState()` still says "healthy" (a
+  // Model the scenario: `getState()` still says "healthy" (a
   // host loss the persisted status has not caught up with yet — its own
   // doc comment says this can lag "a few minutes"), but the REAL container
   // process is gone. Deliberately desyncs `ctx.container.running` from
@@ -686,13 +674,13 @@ test("F2 fix (B-I4): a STALE persisted status (healthy) with the REAL container 
   );
 });
 
-// --- fetch(): the /grafana/* proxy's entry point (Z1) ----------------------
+// --- fetch(): the /grafana/* proxy's entry point -----------------------------
 //
-// `grafana/proxy.ts` now calls `stub.fetch(request)` instead of the
-// `containerFetch` RPC method (JS RPC sent each POST body as an RPC stream,
-// and every proxied POST printed "ReadableStream received over RPC
-// disconnected prematurely"). These prove the new entry point keeps every
-// gate the RPC path had, and cannot be steered to Loki's port.
+// `grafana/proxy.ts` calls `stub.fetch(request)`, not the `containerFetch`
+// RPC method (JS RPC sends each POST body as an RPC stream, and every
+// proxied POST would print "ReadableStream received over RPC disconnected
+// prematurely"). These prove this entry point keeps every gate the RPC
+// path had, and cannot be steered to Loki's port.
 
 test("Z1 fetch(): proxies to Grafana's port 3000 through the gated override once running, body intact", async () => {
   const { box } = makeBox();

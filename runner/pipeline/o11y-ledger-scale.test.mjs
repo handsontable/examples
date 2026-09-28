@@ -1,18 +1,15 @@
-// B-C1 (must-fix, final review): "Add a scale test with 10k keys × 500
-// wakes that asserts a bounded number of reads per call." The finding's own
-// failure estimate: the OLD `resolveOverWakes` did one full `key:` scan
-// PER WAKE inside a loop over every `wake:` entry ever recorded — O(wakes ×
-// keys) — "~22-65M storage rows read per call" at 30 days of traffic.
+// A scale test with 10k keys × 500 wakes that asserts a bounded number of
+// reads per call. A `resolveOverWakes` that does one full `key:` scan per
+// wake inside a loop over every `wake:` entry ever recorded is O(wakes ×
+// keys) — ~22-65M storage rows read per call at 30 days of traffic.
 //
-// This wraps a real `memoryStorage()` to COUNT every row a `list`/`get`/
+// This wraps a real `memoryStorage()` to count every row a `list`/`get`/
 // `getMany` call actually yields/looks up (not the number of calls — the
-// billing/CPU concern is rows read, not round-trips — see the advisor
-// review this fix round recorded). It then proves the fix is linear in
-// (wakes + keys), never their product, and that once wakes are resolved
-// (and committed keys pruned, per the B-C1/A-I1 fix's `done:` split —
-// ledger.ts's header), a STEADY-STATE call reads a small, bounded number of
-// rows regardless of how much history has accumulated.
-//
+// billing/CPU concern is rows read, not round-trips). It then proves the
+// implementation is linear in (wakes + keys), never their product, and
+// that once wakes are resolved (and committed keys pruned, per the `done:`
+// split — ledger.ts's header), a steady-state call reads a small, bounded
+// number of rows regardless of how much history has accumulated.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -32,8 +29,7 @@ const { wakeStorageKey, inboxKeyStorageKey, doneKeyStorageKey, inboxKey } = awai
 /** Wraps a real `memoryStorage()` so every row a `list`/`get`/`getMany` call
  *  actually returns/looks up is tallied into `rowReads` — reset with
  *  `resetRowReads()` between calls under test. `put`/`delete` aren't
- *  counted: this test is about READ amplification (the billing/CPU concern
- *  B-C1 describes), not write cost. */
+ *  counted: this test is about read amplification, not write cost. */
 function countingStorage() {
   const inner = memoryStorage();
   let rowReads = 0;
@@ -70,10 +66,10 @@ const KEYS_PER_WAKE = 20; // 500 * 20 = 10,000 keys, matching the finding's own 
 const TOTAL_KEYS = WAKE_COUNT * KEYS_PER_WAKE;
 
 /** Seeds `WAKE_COUNT` already-`over` wakes, each with `KEYS_PER_WAKE`
- *  `provisional:<wakeId>` keys — the exact shape B-C1 measured its O(W×K)
- *  estimate against (every wake still holding unresolved provisional keys
- *  at once). Real day-spread timestamps so `pruneLedger`'s later date-range
- *  reads are exercised meaningfully too. */
+ *  `provisional:<wakeId>` keys — the shape an O(W×K) estimate assumes
+ *  (every wake still holding unresolved provisional keys at once). Real
+ *  day-spread timestamps so `pruneLedger`'s later date-range reads are
+ *  exercised meaningfully too. */
 async function seedScale(storage) {
   const writes = {};
   const baseMs = Date.UTC(2026, 5, 1, 0, 0, 0);
@@ -88,7 +84,7 @@ async function seedScale(storage) {
       writes[inboxKeyStorageKey(key)] = `provisional:${wakeId}`;
     }
   }
-  // F2/G1 fix round (N2): a real SQLite-backed DO storage `put()` caps at
+  // A real SQLite-backed DO storage `put()` caps at
   // 128 key-value pairs per call — this fixture seeds 10,500+ at once, so
   // it must chunk like any other production multi-key write (never loosen
   // `memoryStorage()`'s own enforcement of that limit to make a TEST fit).
@@ -185,7 +181,7 @@ test("scale: pruneLedger deletes done: history in bounded batches, never in one 
 
   // The batch limit (ledger.ts's own PRUNE_BATCH_LIMIT) bounds how much ONE
   // call can read/delete — it must NOT have scanned all 10,000 rows in one
-  // pass (that would be exactly the unbounded full-prefix scan this fixes).
+  // pass (that would be an unbounded full-prefix scan).
   assert.ok(result.doneDeleted > 0, "at least some stale done: entries must be deleted");
   assert.ok(
     result.doneDeleted < 10_000,

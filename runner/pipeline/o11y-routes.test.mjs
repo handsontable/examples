@@ -1,9 +1,7 @@
-// Route-level proof for the o11y worker (the `mcp-routes.test.mjs` pattern,
-// TESTING.md "the untested router" anti-pattern): driven through the REAL
-// router — the default export of `workers/o11y/src/index.ts` — not through
+// Route-level proof for the o11y worker: driven through the real router —
+// the default export of `workers/o11y/src/index.ts` — not through
 // re-declared copies of its gates. Status codes, 2xx-after-commit, and the
 // gate-bypass proofs live here.
-//
 // Run: node --experimental-strip-types --test pipeline/o11y-routes.test.mjs
 
 import test from "node:test";
@@ -69,8 +67,8 @@ test("POST /telemetry/collect: an accepted Faro batch answers 2xx after the stor
   // durably persists BEFORE this route ever answers (ADR §B.2 "2xx only
   // after commit") — the same DO-storage-key check the bot-user-agent test
   // just below already uses to prove the NEGATIVE case (no row: written).
-  // Fails without the fix: deleting the `appendRows`/`putChunked` write
-  // inside `InboxWriter.ingest` still leaves this test green under the old
+  // Deleting the `appendRows`/`putChunked` write inside
+  // `InboxWriter.ingest` must not leave this test green
   // status-code-only assertion, but not under this one.
   assert.ok(
     [...doStorage._data.keys()].some((k) => k.startsWith("row:")),
@@ -132,17 +130,15 @@ test("POST /telemetry/collect: a batch over MAX_FARO_ITEMS_PER_BODY is refused o
   );
 });
 
-// N2 (merge blocker, final review): the real SQLite-backed DO storage API
-// caps get/put/delete at 128 keys/pairs per call. 65 UNIQUE log messages
-// (still under the 200-item A-I4 cap) already need 130 lookup keys in
-// `dedupe.ts#checkDuplicates`'s single `getMany` (2 day-buckets per unique
-// hash) — well over 128. Before this fix round chunked every such call,
-// this would either throw inside `InboxWriter.ingest`'s transaction (and
-// the route's own catch would then answer a MISLEADING 204 with nothing
-// stored — finding N3) or, if `memoryStorage`/the harness didn't enforce
-// the real limit, silently pass locally while throwing in production.
-// Per the advisor review this fix round recorded: assert the records
-// actually LANDED in storage, not just the response status code.
+// The real SQLite-backed DO storage API caps get/put/delete at 128
+// keys/pairs per call. 65 unique log messages (still under the 200-item
+// cap) already need 130 lookup keys in `dedupe.ts#checkDuplicates`'s
+// single `getMany` (2 day-buckets per unique hash) — well over 128, so
+// every such call must be chunked, or it either throws inside
+// `InboxWriter.ingest`'s transaction (with the route's own catch then
+// answering a misleading 204 with nothing stored) or silently passes
+// locally while throwing in production. Assert the records actually
+// landed in storage, not just the response status code.
 test("POST /telemetry/collect: a batch of 65 unique log records (over the DO storage 128-key limit once bucketed) is fully accepted and stored (finding N2)", async () => {
   const { env, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("log.json"));
@@ -160,7 +156,7 @@ test("POST /telemetry/collect: a batch of 65 unique log records (over the DO sto
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
 
   // Assert the records actually reached storage — not just a 2xx, which
-  // `handleCollect`'s own catch (N3) can answer even when `ingest` threw
+  // `handleCollect`'s own catch can answer even when `ingest` threw
   // and stored nothing.
   const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
   assert.ok(rowKeys.length > 0, "at least one row: entry must exist after a 65-unique-item batch");
@@ -209,10 +205,10 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
   assert.equal(errorPoints.length, 1, "a redelivered batch must write exactly one error.uncaught point, not two");
 });
 
-// F5-batch (V-triage): two identical exceptions in ONE Faro batch. Before the
-// fix, InboxWriter dropped both copies (filtering by hash) and index.ts's
-// `outcomeByHash` Map let the later "duplicate" overwrite the first copy's
-// "accepted" — no record, no error.uncaught point, and the hash marked seen.
+// Two identical exceptions in one Faro batch: InboxWriter must not drop
+// both copies (filtering by hash) while index.ts's `outcomeByHash` Map
+// lets the later "duplicate" overwrite the first copy's "accepted" — that
+// would leave no record, no error.uncaught point, with the hash marked seen.
 test("POST /telemetry/collect: an in-batch repeat stores one copy and writes its points once (F5-batch)", async () => {
   const { env, ae, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("exception-code-frame.json"));
@@ -243,13 +239,12 @@ test("POST /telemetry/collect: an in-batch repeat stores one copy and writes its
   assert.equal(ae.points.filter((p) => p.indexes[0] === "error.uncaught").length, 1);
 });
 
-// A-I4 remainder (closed, second wave): `example.*` events used to bypass
-// InboxWriter.ingest's dedupe transaction entirely (no ingestItem at all),
-// so a retried/redelivered batch inflated ADR-0042's analytics counts on
-// every replay — unlike every other item type, which A-I4's original fix
-// already protected. `normalise/faro.ts` now gives an example.* event a
+// `example.*` events must not bypass InboxWriter.ingest's dedupe
+// transaction (no ingestItem at all), or a retried/redelivered batch
+// inflates ADR-0042's analytics counts on every replay — unlike every
+// other item type. `normalise/faro.ts` gives an example.* event a
 // hash-only ingestItem (no `record`, so it is still never stored, §6)
-// purely so it flows through the SAME dedupe-gated point-write logic
+// purely so it flows through the same dedupe-gated point-write logic
 // `index.ts#handleCollect` already has for everything else.
 test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count an example.* analytics point (A-I4 remainder)", async () => {
   const { env, ae, doStorage } = freshEnv();
@@ -277,14 +272,11 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
   assert.equal(rowKeys.length, 0, "an example.* event must never produce a row: entry");
 });
 
-// F28 fix (Round 6): an `example.*` event carries a hash-only `ingestItem`
-// (A-I4 remainder, above) purely so InboxWriter's dedupe transaction covers
-// it too — and it IS a record the pipeline accepted, so it now counts
-// toward the route's own `o11y.ingest accepted` self-metric the same as a
-// stored record (see the F28 comment at the call site, index.ts). This test
-// used to assert the opposite (the old "NB3" gate excluded an AE-only item
-// from this count) — flipped as part of the F28 fix, not a new behaviour
-// this test merely documents.
+// An `example.*` event carries a hash-only `ingestItem` (above) purely so
+// InboxWriter's dedupe transaction covers it too — and it is a record the
+// pipeline accepted, so it counts toward the route's own `o11y.ingest
+// accepted` self-metric the same as a stored record (see the comment at
+// the call site, index.ts).
 test("POST /telemetry/collect: an example.* event counts toward the o11y.ingest 'accepted' self-metric, same as a stored record (F28)", async () => {
   const { env, ae } = freshEnv();
   const exampleBody = withFreshTimestamp(faroFixture("example-open.json"));
@@ -314,10 +306,9 @@ test("POST /telemetry/collect: an example.* event counts toward the o11y.ingest 
   );
 });
 
-// R3 F18: the same double-counting protection A-I4's remainder gave
-// example.* events (above) must also hold for a Faro measurement now that
-// it carries the identical hash-only ingestItem shape (`storeRecord =
-// false`, faro.ts).
+// The same double-counting protection example.* events get (above) must
+// also hold for a Faro measurement, which carries the identical hash-only
+// ingestItem shape (`storeRecord = false`, faro.ts).
 test("POST /telemetry/collect: a retried batch (identical body, redelivered) does not double-count a measurement's analytics point (F18)", async () => {
   const { env, ae, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("measurement.json"));
@@ -344,14 +335,12 @@ test("POST /telemetry/collect: a retried batch (identical body, redelivered) doe
   assert.equal(rowKeys.length, 0, "a measurement must never produce a row: entry");
 });
 
-// F28 (advisor follow-up): the old NB3 gate excluded an AE-only item from
-// BOTH counters, not just `accepted` — a redelivered measurement-only batch
-// used to write no `o11y.ingest` point at all on its second delivery, the
-// same blind spot as the first-delivery `accepted` case above, just for
-// `duplicate`. The task's "duplicates … still counted as before" line only
-// holds for a STORED duplicate (the exception in the mixed-outcome test
-// below); an AE-only duplicate is a genuinely new, intended behaviour
-// change from this fix, not something that was already correct.
+// An AE-only item must not be excluded from either counter, not just
+// `accepted` — a redelivered measurement-only batch must still write an
+// `o11y.ingest` point on its second delivery (`duplicate`), the same as
+// the first-delivery `accepted` case above. An AE-only duplicate is
+// distinct from a stored duplicate (the exception in the mixed-outcome
+// test below).
 test("POST /telemetry/collect: a redelivered measurement-only batch writes an o11y.ingest duplicate point (F28)", async () => {
   const { env, ae } = freshEnv();
   const body = withFreshTimestamp(faroFixture("measurement.json"));
@@ -379,15 +368,13 @@ test("POST /telemetry/collect: a redelivered measurement-only batch writes an o1
   assert.equal(metricValue(duplicatePoint, "count"), 1);
 });
 
-// R3 F18 acceptance criterion, at the ROUTE level — the o11y-normalise.test.mjs
-// version of this scenario only calls `processFaroBody`, one layer below
+// At the route level — the o11y-normalise.test.mjs version of this
+// scenario only calls `processFaroBody`, one layer below
 // `InboxWriter`/`writePoint`/the route's own accounting; this is the layer
 // the acceptance criterion ("only the log and exception records reach the
 // inbox, and all AE points are written") and the `o11y.ingest` self-metric
-// actually live at. F28 fix (Round 6): the self-metric now counts the
-// AE-only measurement too, alongside the two stored records — updated from
-// this test's earlier expectation of 2 (see the F28 comment at the call
-// site, index.ts).
+// actually live at. The self-metric counts the AE-only measurement too,
+// alongside the two stored records.
 test("POST /telemetry/collect: a mixed batch (measurement + log + exception) stores exactly 2 records, writes all AE points, and counts all 3 toward o11y.ingest accepted (F18, F28)", async () => {
   const { env, ae, doStorage } = freshEnv();
   const measurementBody = withFreshTimestamp(faroFixture("measurement.json"));
@@ -412,7 +399,7 @@ test("POST /telemetry/collect: a mixed batch (measurement + log + exception) sto
   await ctx.drain();
   assert.ok(res.status >= 200 && res.status < 300);
 
-  // Only the log and the exception ever reach the inbox (F18) — the
+  // Only the log and the exception ever reach the inbox — the
   // measurement's hash-only ingestItem never produces a stored record.
   // `appendRows` (pack.ts) batches every accepted record from one `ingest()`
   // call into as few `row:<n>` entries as fit under `INBOX_ROW_MAX_BYTES`
@@ -427,7 +414,7 @@ test("POST /telemetry/collect: a mixed batch (measurement + log + exception) sto
   assert.equal(ae.points.filter((p) => p.indexes[0] === "error.uncaught").length, 1);
 
   // The o11y.ingest self-metric now counts every accepted record, stored or
-  // AE-only (F28): the log, the exception, and the measurement — 3, not 2.
+  // AE-only: the log, the exception, and the measurement — 3, not 2.
   const ingestAccepted = ae.points.find(
     (p) => p.indexes[0] === "o11y.ingest" && p.blobs?.includes("collect") && p.blobs?.includes("accepted"),
   );
@@ -439,11 +426,10 @@ test("POST /telemetry/collect: a mixed batch (measurement + log + exception) sto
   );
 });
 
-// F28: a batch that is ENTIRELY measurements (no stored record at all) must
-// still produce an `o11y.ingest accepted` point — the bug this fix closes
-// was exactly this shape (a collect request "carrying only measurements"),
-// and it is the shape Round 6's real traffic run hit almost every time
-// (1,946 collect 204s, only 6 accepted points).
+// A batch that is entirely measurements (no stored record at all) must
+// still produce an `o11y.ingest accepted` point — a collect request
+// "carrying only measurements" is the shape real traffic hits almost every
+// time (1,946 collect 204s, only 6 accepted points).
 test("POST /telemetry/collect: a measurement-only Faro batch produces the correct o11y.ingest accepted count (F28)", async () => {
   const { env, ae, doStorage } = freshEnv();
   const body = withFreshTimestamp(faroFixture("measurement.json"));
@@ -472,14 +458,14 @@ test("POST /telemetry/collect: a measurement-only Faro batch produces the correc
   assert.equal(metricValue(ingestAccepted, "count"), 1);
 });
 
-// F28: duplicates and oversize records must still be counted exactly as
-// before this fix — only the "accepted" gate on `record !== undefined` was
-// removed; oversize handling (`recordOversizeDrop`) and dedupe outcomes
-// (`InboxWriter.ingest`'s own per-hash result) are untouched code paths. One
-// batch: a brand-new AE-only measurement (accepted), a brand-new stored log
-// (accepted), a redelivered exception (duplicate — accepted on a prior
-// request), and an oversize log (dropped, reason=size, never reaches
-// `withItem`/the accepted-duplicate counters at all).
+// Duplicates and oversize records must be counted the same regardless of
+// the "accepted" gate on `record !== undefined`; oversize handling
+// (`recordOversizeDrop`) and dedupe outcomes (`InboxWriter.ingest`'s own
+// per-hash result) are untouched code paths. One batch: a brand-new
+// AE-only measurement (accepted), a brand-new stored log (accepted), a
+// redelivered exception (duplicate — accepted on a prior request), and an
+// oversize log (dropped, reason=size, never reaches `withItem`/the
+// accepted-duplicate counters at all).
 test("POST /telemetry/collect: a batch mixing an AE-only accept, a stored accept, a duplicate, and an oversize record counts each outcome correctly (F28)", async () => {
   const { env, ae, doStorage } = freshEnv();
 
@@ -554,11 +540,11 @@ test("POST /telemetry/collect: a batch mixing an AE-only accept, a stored accept
   assert.equal(sizeDrops.length, 1, "the oversize log is still recorded with reason=size, never folded into accepted/duplicate");
 });
 
-// N3 (re-review 2): `handleCollect` answered 2xx even when `InboxWriter.ingest`
-// threw and nothing was committed — a batch that gets dropped on the floor
-// must not tell the client it succeeded (ADR §B.2: 2xx only after commit),
-// and Faro's own client only retries a non-2xx, so a 2xx here also means
-// the batch is gone for good, not just mis-reported.
+// `handleCollect` must not answer 2xx when `InboxWriter.ingest` threw and
+// nothing was committed — a batch that gets dropped on the floor must not
+// tell the client it succeeded (ADR §B.2: 2xx only after commit), and
+// Faro's own client only retries a non-2xx, so a 2xx here also means the
+// batch is gone for good, not just mis-reported.
 test("POST /telemetry/collect: answers 5xx (not 2xx) when InboxWriter.ingest throws, and commits nothing (N3)", async () => {
   const { env, doStorage, inboxWriterInstance, ae } = freshEnv();
   const originalIngest = inboxWriterInstance.ingest.bind(inboxWriterInstance);
@@ -832,16 +818,14 @@ test("POST /telemetry/hooks/sentry: a correct HMAC signature passes, a wrong one
   assert.equal(bad.status, 401);
 });
 
-// Fix round (finding A-M7): a route-level proof that `index.ts#handleSentryHook`
-// actually THREADS the `sentry-hook-timestamp` header through to
-// `processSentryPayload`'s `rawEventTime` — the direct-call tests in
-// `o11y-normalise.test.mjs` only prove `processSentryPayload` itself hashes
-// differently given different `rawEventTime` values; they pass unchanged
-// even if the call site silently drops the 4th argument. Two identically
-// signed, byte-identical bodies (same action/title/issueId — the exact
-// "issue regresses twice in a day" collision shape) with different
-// `sentry-hook-timestamp` header values must both land as distinct stored
-// records, not dedupe into one.
+// A route-level proof that `index.ts#handleSentryHook` actually threads the
+// `sentry-hook-timestamp` header through to `processSentryPayload`'s
+// `rawEventTime` — the direct-call tests in `o11y-normalise.test.mjs` only
+// prove `processSentryPayload` itself hashes differently given different
+// `rawEventTime` values; they pass unchanged even if the call site
+// silently drops the 4th argument. Two identically signed, byte-identical
+// bodies with different `sentry-hook-timestamp` header values must both
+// land as distinct stored records, not dedupe into one.
 test("POST /telemetry/hooks/sentry: two identical-body hooks with different Sentry-Hook-Timestamp headers both land as distinct stored records (A-M7, route-level)", async () => {
   const { env, r2 } = freshEnv();
   const payload = {

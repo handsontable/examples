@@ -1,18 +1,14 @@
-// pipeline/o11y-dashboards.test.mjs
+// The lint gate for every provisioned dashboard under
+// containers/o11y/grafana/dashboards/. Local ClickHouse accepts far more
+// SQL than Workers Analytics Engine does — this is the one place that
+// difference is enforced, so a panel that only happens to work against the
+// local shim never reaches production silently broken.
 //
-// The lint gate for every
-// provisioned dashboard under containers/o11y/grafana/dashboards/. Local
-// ClickHouse accepts far more SQL than Workers Analytics Engine does (T09's
-// own "Traps" section) — this is the one place that difference is enforced,
-// so a panel that only happens to work against the local shim never reaches
-// production silently broken.
-//
-// Four rules, each proven to fail on a real violation (not just asserted to
-// pass on clean input — see the `test()`s under "the lint itself"
-// below, and the revert-evidence note in this task's Outcome):
+// Four rules, each proven to fail on a real violation (see the `test()`s
+// under "the lint itself" below):
 //
 //   1. Every Analytics Engine (vertamedia-clickhouse-datasource) panel query
-//      uses only known contract columns (§4: index1, the ASSIGNED blob/double
+//      uses only known contract columns (§4: index1, the assigned blob/double
 //      slots, `timestamp`/`_sample_interval` — the local-only columns §10
 //      adds) and only an allowlisted function set; any bare use of `double1`
 //      (the count slot) must sit inside the `SUM(_sample_interval * double1)`
@@ -26,19 +22,16 @@
 //      dashboard-level `alerting` rule list (ADR-0041 §F.3: Grafana holds no
 //      alert rules, only the built-in "Annotations & Alerts" query, which is
 //      not a rule).
-//   4. (F24, fix round R4) Every `blobN` a query's WHERE clause filters on
-//      (`blobN = ...` / `blobN IN (...)`) must be one `index1`'s referenced
-//      metric(s) actually set (§5's own "Blobs used" cell, plus the three
-//      universal resource attrs every point carries) — `bucket.resolve_ms`'s
-//      two Tier-1 panels filtered on `blob6`/`blob7` (framework/ht_major),
-//      which that metric's §5 row never lists, so the filter matched zero
-//      rows on every real point (empty panel, not a query error — the local
-//      shim accepts the column same as the real one, so this needed its own
-//      rule rather than falling out of rule 1's column-existence check).
+//   4. Every `blobN` a query's WHERE clause filters on (`blobN = ...` /
+//      `blobN IN (...)`) must be one `index1`'s referenced metric(s)
+//      actually set (§5's own "Blobs used" cell, plus the three universal
+//      resource attrs every point carries) — a filter on a blob outside
+//      that set matches zero rows on every real point (empty panel, not a
+//      query error — the local shim accepts the column same as the real
+//      one, so this needed its own rule rather than falling out of rule 1's
+//      column-existence check).
 //
-// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build` (see
-// telemetry-contract.test.mjs's header for why).
-//
+// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
 // Run: node --experimental-strip-types --test pipeline/*.test.mjs
 
 import test from "node:test";
@@ -47,12 +40,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { LOKI_LABELS, HT_MAJORS, METRICS, AE_COLUMNS } from "../packages/runtime/dist/telemetry/index.js";
-// T04: one allowlist of Cloudflare's documented Analytics Engine SQL
-// functions, shared with `workers/o11y/src/alerts/ae-query.ts` (the alert
-// rules' own query helper) instead of two diverging copies — see that
-// file's header for the doc pages/date this set was read from. A pure,
-// import-free module, so no `o11y-worker-hooks.mjs` registration is needed
-// to load it here.
+// One allowlist of Cloudflare's documented Analytics Engine SQL functions,
+// shared with `workers/o11y/src/alerts/ae-query.ts` (the alert rules' own
+// query helper) instead of two diverging copies — see that file's header
+// for the doc pages/date this set was read from. A pure, import-free
+// module, so no `o11y-worker-hooks.mjs` registration is needed to load it
+// here.
 const { ALLOWED_AE_FUNCTIONS } = await import("../workers/o11y/src/alerts/ae-query.ts");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -75,22 +68,19 @@ const KNOWN_AE_COLUMNS = new Set([
   ...Array.from({ length: ASSIGNED_DOUBLE_COUNT }, (_, i) => `double${i + 1}`),
 ]);
 
-// Cloudflare's *documented* Analytics Engine SQL API functions (T09-D5: read
-// against developers.cloudflare.com/analytics/analytics-engine/
-// sql-reference/{aggregate,date-time,type-conversion}-functions/,
-// 2026-09-23) — never a wider "whatever local ClickHouse happens to accept"
-// set, which is the whole point of this lint (the task's own "Traps"
-// section). Casing matches the docs' own signatures exactly: lowercase
-// `sum`/`avg`, exact-case `quantileExactWeighted`/`toStartOfInterval`/
-// `toUInt32` — a stray `SUM` or `COUNT` is rejected the same way an
-// undocumented function would be. `quantileExactWeighted` is the documented
-// weighted-percentile aggregate; `quantileTDigestWeighted` (this file's own
-// first draft) is a real ClickHouse function but does not appear on AE's
-// aggregate-functions page — exactly the local-accepts-more trap this lint
-// exists to catch, caught against itself once real docs were read.
+// Cloudflare's documented Analytics Engine SQL API functions (read against
+// developers.cloudflare.com/analytics/analytics-engine/sql-reference/
+// {aggregate,date-time,type-conversion}-functions/, 2026-09-23) — never a
+// wider "whatever local ClickHouse happens to accept" set, which is the
+// whole point of this lint. Casing matches the docs' own signatures
+// exactly: lowercase `sum`/`avg`, exact-case
+// `quantileExactWeighted`/`toStartOfInterval`/`toUInt32` — a stray `SUM` or
+// `COUNT` is rejected the same way an undocumented function would be.
+// `quantileExactWeighted` is the documented weighted-percentile aggregate;
+// `quantileTDigestWeighted` is a real ClickHouse function but does not
+// appear on AE's aggregate-functions page.
 //
-// T04 (fix round, controller note "don't keep two diverging allowlists"):
-// imported from `alerts/ae-query.ts` above instead of a second literal Set
+// Imported from `alerts/ae-query.ts` above instead of a second literal Set
 // here. That module's own set adds one function this task's dashboards
 // never call (`now`) for the alert rules' time-window queries — a superset
 // is safe for a lint that only rejects what a query actually uses.
@@ -178,7 +168,7 @@ function validateAeQuery(query) {
   return violations;
 }
 
-// ---- Rule 4 (F24): a panel may not filter on a blob its metric never sets --
+// ---- a panel may not filter on a blob its metric never sets ---------------
 
 // Every point carries these three regardless of what its own §5 row lists
 // (§4's "Analytics Engine layout" — `commonAttrs()` sets them unconditionally).
@@ -221,14 +211,12 @@ function metricNamesFromWhere(whereClause) {
 }
 
 /** Every `blobN` violation found in an AE query's WHERE clause — empty means
- *  clean. Scoped to WHERE only (not the full query text), so a SELECT-list
- *  expression like `sum(... * (blob8 = 'error'))` — a value computation, not
- *  a row filter — is never mistaken for a filter (the `bucket.resolve_ms`
- *  error-rate panel's own shape). A query whose WHERE names more than one
- *  metric (`index1 IN (...)`) requires a filtered blob to be one EVERY named
- *  metric sets — the filter applies to every row regardless of which metric
- *  produced it, so a blob only some of them set would silently drop the
- *  others' rows too. */
+ *  clean. Scoped to WHERE only, so a SELECT-list expression like
+ *  `sum(... * (blob8 = 'error'))` — a value computation, not a row filter —
+ *  is never mistaken for a filter. A query whose WHERE names more than one
+ *  metric (`index1 IN (...)`) requires a filtered blob to be one every
+ *  named metric sets, since the filter applies to every row regardless of
+ *  which metric produced it. */
 function validateMetricBlobFilters(query) {
   const violations = [];
   const whereMatch = /\bWHERE\b([\s\S]*?)(\bGROUP\s+BY\b|\bORDER\s+BY\b|$)/i.exec(query);
@@ -257,12 +245,10 @@ const LOKI_LABEL_SET = new Set(LOKI_LABELS);
 /** Every violation found in a LogQL selector/expr — empty means clean. */
 /** Strips `${varName}`/`${varName:format}` Grafana template-variable macros
  *  before the label scan below — mirroring `stripLiteralsAndMacros`'s own
- *  macro-stripping for AE queries (P1-logs fix: a `${service_name:regex}`
- *  value's own embedded `}` was fooling `/\{([^}]*)\}/`'s non-greedy match
- *  into treating that macro's closing brace as the SELECTOR's closing
- *  brace, silently skipping every label listed after it — verified: without
- *  this strip, `validateLokiExpr('{service_name=~"${service_name:regex}",
- *  session_id="x"}')` returned `[]` instead of flagging `session_id`). */
+ *  macro-stripping for AE queries. A `${service_name:regex}` value's own
+ *  embedded `}` would otherwise fool `/\{([^}]*)\}/`'s non-greedy match
+ *  into treating that macro's closing brace as the selector's closing
+ *  brace, silently skipping every label listed after it. */
 function stripLokiMacros(expr) {
   return expr.replace(/\$\{[^}]*\}/g, "MACRO");
 }
@@ -295,15 +281,14 @@ function loadDashboards() {
     }));
 }
 
-/** Every panel target's *effective* datasource — `target.datasource`, falling
- *  back to `panel.datasource` exactly the way Grafana itself resolves a
- *  target that doesn't repeat the panel's own datasource (a completely valid,
- *  common shape this repo's own generator does not happen to produce, but a
- *  future hand-edit could). Missing entirely — no target-level and no
- *  panel-level datasource, i.e. Grafana's implicit "default" datasource — is
- *  surfaced as `{ type: undefined, uid: undefined }`, never silently skipped:
- *  that is exactly the "doesn't name its tenant" shape the Loki check must
- *  catch, and the AE check must not quietly pass over either. */
+/** Every panel target's *effective* datasource — `target.datasource`,
+ *  falling back to `panel.datasource` exactly the way Grafana itself
+ *  resolves a target that doesn't repeat the panel's own datasource.
+ *  Missing entirely — no target-level and no panel-level datasource, i.e.
+ *  Grafana's implicit "default" datasource — is surfaced as
+ *  `{ type: undefined, uid: undefined }`, never silently skipped: that is
+ *  the "doesn't name its tenant" shape the Loki check must catch, and the
+ *  AE check must not quietly pass over either. */
 function allTargets(dashboard) {
   const targets = [];
   for (const panel of dashboard.panels ?? []) {
@@ -315,12 +300,12 @@ function allTargets(dashboard) {
   return targets;
 }
 
-/** Template-variable queries (`dashboard.templating.list[]`) whose datasource
- *  is the ClickHouse plugin (I1 — `allTargets()` only ever walked
- *  `panel.targets`, so a variable's own AE query, e.g. `environment`'s
- *  `SELECT DISTINCT blob3 FROM runner_events`, bypassed the lint entirely:
- *  a bad column or a disallowed function there would go straight to
- *  production undetected, same risk as a panel query). */
+/** Template-variable queries (`dashboard.templating.list[]`) whose
+ *  datasource is the ClickHouse plugin — `allTargets()` must also walk
+ *  these, not just `panel.targets`, or a variable's own AE query (e.g.
+ *  `environment`'s `SELECT DISTINCT blob3 FROM runner_events`) bypasses the
+ *  lint entirely: a bad column or a disallowed function there would go
+ *  straight to production undetected, same risk as a panel query. */
 function templatingAeTargetsOf(dashboard) {
   return (dashboard.templating?.list ?? [])
     .filter((v) => v.datasource?.type === "vertamedia-clickhouse-datasource")
@@ -351,15 +336,15 @@ function lokiTargetsOf(dashboard) {
 const KNOWN_LOKI_UIDS = new Set(["loki-browser", "loki-worker"]);
 const KNOWN_DATASOURCE_UIDS = new Set(["clickhouse-runner-events", "loki-browser", "loki-worker"]);
 
-// ---- P1-logs: a panel/target may name its datasource by a template
-// variable (`"${tenant}"`) instead of a literal uid — the Logs dashboard's
-// `tenant` variable ("browser"/"worker") IS how it lets a viewer pick which
-// Loki tenant a panel queries. A bare allowlist entry for the literal string
-// `"${tenant}"` would let ANY dashboard reference an undeclared variable and
-// still pass; instead, a `${varName}` uid is only accepted when the SAME
-// dashboard actually declares a template variable named `varName` of
-// `type: "datasource"` — and, for the Loki-specific check, one scoped to the
-// `loki` datasource type (`query: "loki"`), never the ClickHouse one. ------
+// ---- a panel/target may name its datasource by a template variable
+// (`"${tenant}"`) instead of a literal uid — the Logs dashboard's `tenant`
+// variable ("browser"/"worker") is how it lets a viewer pick which Loki
+// tenant a panel queries. A bare allowlist entry for the literal string
+// `"${tenant}"` would let any dashboard reference an undeclared variable
+// and still pass; instead, a `${varName}` uid is only accepted when the
+// same dashboard actually declares a template variable named `varName` of
+// `type: "datasource"` — and, for the Loki-specific check, one scoped to
+// the `loki` datasource type (`query: "loki"`), never the ClickHouse one. --
 
 /** `${varName}` or `$varName` -> `varName`, else `null` (not a template ref). */
 function templateVarRefName(uid) {
@@ -423,7 +408,7 @@ for (const { file, dashboard } of dashboards) {
   test(`${file}: every panel target resolves (with the panel-level fallback) to a known datasource uid`, () => {
     // Closes the gap a target-only check would miss: a target that omits its
     // own `datasource` and relies on the panel's (a shape Grafana itself
-    // resolves the same way, T09-D4) must still land on one of the three
+    // resolves the same way) must still land on one of the three
     // uids this box provisions, never on an implicit/unnamed default —
     // exactly the "names its tenant datasource" rule, generalized to every
     // target, not only ones that happen to already say `type: "loki"`.
@@ -434,7 +419,7 @@ for (const { file, dashboard } of dashboards) {
   });
 
   test(`${file}: ht_major variable options equal the contract's HT_MAJORS (attrs.ts), not a hand-duplicated copy`, () => {
-    // I2: "15,16,17,18,19,next,none" + one options entry per value was
+    // "15,16,17,18,19,next,none" + one options entry per value was
     // hand-typed into all 7 dashboards. This pins every dashboard's copy
     // against the one real source (HT_MAJORS), so a future contract change
     // (§3 is append-only, but a new major still lands here) is a failing
@@ -652,7 +637,7 @@ test("the datasource check fails on a target with no datasource at all (target-o
         title: "No datasource anywhere",
         // No panel-level datasource either — this is Grafana's implicit
         // "default" datasource, which a target-only scan (this file's first
-        // draft) silently skipped instead of flagging (T09-D4).
+        // draft) silently skipped instead of flagging.
         targets: [{ refId: "A", expr: '{hot_surface="o11y"}' }],
       },
     ],
@@ -679,7 +664,7 @@ test("the datasource check accepts a target that only names its datasource at th
   assert.equal(resolved[0].datasource.uid, "loki-worker");
 });
 
-// ---- P1-logs: the `${varName}` template-datasource-reference lint ---------
+// ---- the `${varName}` template-datasource-reference lint ------------------
 
 test('templateVarRefName: recognizes "${tenant}" and "$tenant", rejects a literal uid', () => {
   assert.equal(templateVarRefName("${tenant}"), "tenant");
@@ -718,9 +703,8 @@ test("logs.json: the tenant-templated datasource resolves via resolveDatasourceU
 });
 
 // =============================================================================
-// P1-logs (coordinator addendum): metrics emitted but previously unread by
-// any dashboard. Each assertion below fails if the corresponding panel is
-// removed — verified by reverting each one in turn during development.
+// Metrics emitted but unread by any dashboard. Each assertion below fails
+// if the corresponding panel is removed.
 // =============================================================================
 
 test("budget.gauge, bucket.resolve_ms, example.forked and example.downloaded are each read by SOME dashboard's AE query", () => {
