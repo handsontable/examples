@@ -107,8 +107,8 @@ only; it writes Loki data and the clean markers there. Lifecycle rules: `browser
 for a production build; `VITE_SENTRY_SCOPE` = `full` | `uncaught` (§11).
 
 **Headers**: `x-hot-session` (page-load id, browser → API worker), `x-o11y-secret`,
-`sentry-hook-signature`, the `__Host-o11y_session`/`__Host-o11y_login` cookies (K1 —
-`/grafana/*`'s own session, never forwarded to the container). Both cookies use `Path=/`
+`sentry-hook-signature`, the `__Host-o11y_session`/`__Host-o11y_login` cookies
+(`/grafana/*`'s own session, never forwarded to the container). Both cookies use `Path=/`
 (the `__Host-` prefix requires it), so the browser also sends them to `/api`, `/d` and
 the authoring app — none of those read them (the API worker reads only
 `Authorization`/`X-MCP-Secret`; authoring is static), but it means the cookie header
@@ -247,19 +247,19 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `o11y.backlog` | o11y worker cron | — | value (oldest age s), bytes | — |
 | `o11y.alert` | o11y worker cron | reason (rule id), outcome | count | `fired`, `resolved` |
 
-`o11y.wake`'s `duration_ms` (F8) is wake-to-ready time — from the wake starting to the
+`o11y.wake`'s `duration_ms` is wake-to-ready time — from the wake starting to the
 box's first successful `isReady()`, sourced from `wake:<wakeId>.readyMs` (§8) — on both
 the `clean` and `unclean` outcome. `duration_ms = 0` means the box never became ready
 during that wake, not a genuinely instant boot.
 
-The point's own **timestamp** (R3 F8) is a different moment: it is written at
+The point's own **timestamp** is a different moment: it is written at
 **resolution** — the next `backlog()` call that runs `resolveWakes()` (§8) and finds this
 wake `over`, not when the wake itself started. Locally, with no cron firing, that can lag
 the actual wake by an hour or more; in production it lags by at most one `*/10` cron
 period. Two wakes resolved in the same `resolveWakes()` call get timestamps identical to
 the millisecond even though their wakes started at different times — expected, not a bug.
 
-`sandpack.compile_error` (R9C, superseding F10b) counts Tier-1 compile failures from
+`sandpack.compile_error` counts Tier-1 compile failures from
 both places they occur:
 - a bundler diagnostic (`show-error` with no frames — the module never evaluated);
 - the parcel pre-transpile's own babel parse failure (every starter except `vue-cli`).
@@ -280,7 +280,7 @@ past and is dropped. One typed broken line = one `sandpack.compile_error`, no
 Sentry capture is added for the edit-path failure; the mount-path Sentry capture
 (`Tier1CompileError`) is unchanged.
 
-`preview.runtime_error` (F26) counts broken preview states, not relays. The preview
+`preview.runtime_error` counts broken preview states, not relays. The preview
 re-runs on every keystroke, so one typed line relays a whole keystroke-prefix ladder
 (`s is not defined`, `se is not defined`, …, then the line's real error). The browser
 collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
@@ -297,11 +297,11 @@ to that burst. On Tier 2, where a rebuild outlasts the 2 s window, a superseded
 rebuild's report can land after the burst closed and count on its own. The Sentry side is not behind this collapse; its relay budgets are
 unchanged.
 
-`serve.share` locally (F27): under `vite dev` (what `pnpm dev:full` serves), React
+`serve.share` locally: under `vite dev` (what `pnpm dev:full` serves), React
 StrictMode runs the share page's load effect twice, so one `/share/<id>` view gives 2
 points. A production build gives 1 (measured on `vite preview`).
 
-`payload.boot` (F15, W-triage) is emitted only at `POST /api/payload`, the Theme
+`payload.boot` is emitted only at `POST /api/payload`, the Theme
 Builder hand-off — never at the actual playground boot, `GET /api/payload/:id`. A
 `?payload=<bad-id>` failure on that boot is recorded as `error.handled
 context=payload-boot`, not as a `payload.boot` point.
@@ -324,7 +324,7 @@ instrumentations; no `user` meta; the facade sets `session.id` = page-load id on
 item; transport to same-origin `/telemetry/collect`; `beforeSend` = `scrubTelemetry` then
 the shared noise gates.
 
-Faro's global `dedupe` stays on for `pushError` (F12, W-triage): consecutive identical
+Faro's global `dedupe` stays on for `pushError`: consecutive identical
 exceptions (same type, message, stack, context) collapse to one item, with no time
 window. So `error.uncaught`/`error.handled` counts — including the dashboard panels
 built on them — are **reports**, not occurrences: a burst of identical errors counts as
@@ -341,7 +341,7 @@ What the o11y worker does with each Faro item at ingest:
 | event named `example.*` | one point | **none** |
 | other event, log | — | one log record |
 
-**Demo-runtime records (F10 Loki).** Each report that survives the F26 collapse (§5)
+**Demo-runtime records.** Each report that survives the collapse (§5)
 is also one handled Faro exception, through `Telemetry.error` with context
 `demo-runtime`. Its `type` is `DemoError`, `DemoUnhandledRejection`, `DemoConsoleError`,
 `DemoNetworkError` or `DemoStderr`. Its value is the §7 fingerprint shape (§3). It has
@@ -353,12 +353,12 @@ counted but gets no record: a warning is context, not a fault (DEV-2539). Faro's
 `pushError` dedupe applies, so an identical record in two consecutive bursts is sent
 once. The `preview.runtime_error` metric, not the line count, is the counter.
 
-**R3 F18 ruling**: a Faro measurement or web-vitals item (this table's scope — the item
+A Faro measurement or web-vitals item (this table's scope — the item
 kinds `normalise/faro.ts` handles) is AE-only; Loki holds logs, events and exceptions.
 This was a contract/ADR mismatch, not an implementation bug — ADR §F.1 ("Counts and
-latencies go to Analytics Engine; Loki holds the text") already said this; this table
-previously required a stored record for every measurement too, which made measurements
-~99% of the browser Loki tenant's lines and drained bytes (R3-triage F18) for no reader:
+latencies go to Analytics Engine; Loki holds the text") already said this; requiring a
+stored record for every measurement too would make measurements
+~99% of the browser Loki tenant's lines and drained bytes for no reader:
 no dashboard panel parses a measurement's `{"duration_ms":N}`-shaped body, so the AE
 point was always the only consumer. A measurement/web-vitals item still gets a
 hash-only `ingestItem` (no `record`) so a retried/redelivered batch cannot double-write
@@ -425,22 +425,21 @@ dedupe hash is computed over the decoded, scrubbed record before timestamps are 
 | `heartbeat` | `{ lastCron, lastIngest }` |
 
 Limits: records over 256 KB are dropped; requests to Loki carry at most 1 MB
-decompressed. Fix round (finding Z-A-C1): every free-text string (Faro/OTLP body,
+decompressed. Every free-text string (Faro/OTLP body,
 message, attribute value) is truncated to this same 256 KB before any scrub/redact
 regex runs over it (`SCRUB_TEXT_MAX_CHARS`, `packages/runtime/src/telemetry/scrub.ts`)
 — a ReDoS defense-in-depth independent of each pattern also being made linear-time.
 The fingerprint normaliser (`normalizeMonitorMessage`, §7) is bounded separately, to a
 much smaller 4096 chars, since its own output is always sliced to 200 chars regardless.
 
-(F11, W-triage) The pre-scrub truncation above shares the same 256 KB limit as the
+The pre-scrub truncation above shares the same 256 KB limit as the
 record-size drop, so a field that actually gets truncated still leaves the record over
 the drop cap — an oversize record is genuinely **dropped**, never truncated down to fit.
 Only the inbox/Loki record and its first-seen `fp:` entry are lost this way; the item's
 Analytics Engine point (e.g. `error.uncaught`/`error.handled`) is still written — dropping
 is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
 
-**Bounded storage (F2 fix, final review, B-C1/A-I1 — the resolve/drain/backlog paths
-must never scan committed history):**
+**Bounded storage** (the resolve/drain/backlog paths must never scan committed history):
 - A `key:` entry only ever holds a **live** state (`written`, `provisional:<wakeId>`, or
   a genuine `rejected:<reason>`). The moment a key is confirmed clean-committed, its
   `key:<inbox key>` entry is deleted and a `done:<inbox key>` marker takes its place in
@@ -472,13 +471,13 @@ must never scan committed history):**
 - A manual reopen of a **committed** key reads `done:`, moves it back to `key:<inbox
   key> = written`, and deletes the `done:` entry.
 
-**G1 fix round (final review, second wave) additions:**
-- **Pack alarm, bounded (A-I2 remainder).** The alarm no longer loads every pending
-  `row:` into memory before packing (F1's fix only bounded the packed OBJECT's size, not
-  this read). It pages `row:` in small chunks, accumulating up to one packed object's own
-  ~4 MB budget per round, looping until the backlog is drained or `MAX_OBJECTS_PER_ALARM`
-  (25) objects have been packed this invocation. See `pack.ts#collectRowBatch`.
-- **DO storage 128-key batch limit (N2).** Cloudflare's SQLite-backed Durable Object
+**Additional bounded-storage invariants:**
+- **Pack alarm, bounded.** The alarm pages `row:` in small chunks rather than loading
+  every pending row into memory before packing, accumulating up to one packed object's
+  own ~4 MB budget per round, looping until the backlog is drained or
+  `MAX_OBJECTS_PER_ALARM` (25) objects have been packed this invocation. See
+  `pack.ts#collectRowBatch`.
+- **DO storage 128-key batch limit.** Cloudflare's SQLite-backed Durable Object
   storage API caps `get`/`put`/`delete` at 128 keys/pairs per call
   (<https://developers.cloudflare.com/durable-objects/api/storage-api/>, fetched
   2026-09-24: "Supports up to 128 keys at a time" / "up to 128 key-value pairs at a
@@ -486,19 +485,16 @@ must never scan committed history):**
   `getManyChunked`/`putChunked`/`deleteChunked` — `checkDuplicates`, `newFingerprintWrites`,
   `pruneLedger`/`pruneHashBuckets`/`pruneFingerprintRegistry`, `finalizeWakeResolution`,
   `markKeysProvisional`, `reopenWindow`, `commitPackedObject`, and `ingest`'s own
-  transaction `put`. `finalizeWakeResolution`/`reopenWindow` also now run their whole
-  put+delete sequence inside one `storage.transaction()` (previously two independent
-  top-level calls) — chunking alone, without that, would let a crash between chunks
-  leave a partial write.
-- **Prune throughput (B-C1/A-I1 remainder).** `hash:`/`done:` prune batch sizes raised
-  from 500 to 5,000 rows/tick (still chunked to 128 per actual `delete()` call) — ADR
-  §D's own 10× headroom projects ~220,000 worker records/day, which the old 500/tick ×
-  144 ten-minute ticks/day (72,000/day) falls behind at roughly 3× today's traffic.
-  `rejected:` `key:` entries are now pruned too, past the same 7-day retention (filtered
-  by value, since `key:` mixes live and rejected states chronologically — see
-  `ledger.ts#pruneLedger`).
-- **Drain partial-400 durability (final review, second wave — "accepted chunks skip
-  §B.3").** A key with at least one chunk
+  transaction `put`. `finalizeWakeResolution`/`reopenWindow` run their whole put+delete
+  sequence inside one `storage.transaction()` — chunking alone, without that, would let
+  a crash between chunks leave a partial write.
+- **Prune throughput.** `hash:`/`done:` prune batch sizes are 5,000 rows/tick (still
+  chunked to 128 per actual `delete()` call) — ADR §D's own 10× headroom projects
+  ~220,000 worker records/day, which 500/tick × 144 ten-minute ticks/day (72,000/day)
+  falls behind at roughly 3× today's traffic. `rejected:` `key:` entries are pruned too,
+  past the same 7-day retention (filtered by value, since `key:` mixes live and rejected
+  states chronologically — see `ledger.ts#pruneLedger`).
+- **Drain partial-400 durability.** A key with at least one chunk
   accepted (2xx) and at least one chunk permanently rejected (400) now stays
   `provisional` (not `rejected`) — its accepted content follows the normal
   written→provisional→committed path, so an unclean stop before Loki's local flush
@@ -510,7 +506,7 @@ must never scan committed history):**
 
 `POST /telemetry/lite`, a JSON body, **≤ 2 KB**, sent with `navigator.sendBeacon(url, json)` —
 a plain string, not a `Blob`, so the browser sends its own default
-`Content-Type: text/plain;charset=UTF-8`, never `application/json` (D-M6 fix round; the
+`Content-Type: text/plain;charset=UTF-8`, never `application/json` (the
 route itself does not check or require a content type either way, so this is a fact about
 what ships on the wire, not a gate). The body itself is still JSON:
 
@@ -525,7 +521,7 @@ sampled at 10 % per page view, decided once per page; errors are sent up to the
 Faro items, clamping `ts` to the receive time ± 5 minutes.
 
 The dedupe hash covers the whole converted record (body with message and stack, attributes)
-plus the raw `ts` and, when present, `id`: a per-beacon random value (F32), used only in the
+plus the raw `ts` and, when present, `id`: a per-beacon random value, used only in the
 dedupe hash.
 
 ## 10. Local mode

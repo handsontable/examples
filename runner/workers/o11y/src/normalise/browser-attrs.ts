@@ -1,31 +1,23 @@
-// T02-D — the browser→AE attribute channel (see the task Outcome): the
-// contract's `HotAttrs` (`toAePoint`'s third argument) has fields —
+// The contract's `HotAttrs` (`toAePoint`'s third argument) has fields —
 // `reason`, `route_class`, `fingerprint`, `model`, `provider`, `device`,
 // `bucket`, `ref`, `area` — that `attrs.ts#ALLOWED_ATTRIBUTE_KEYS` does not
-// list, because that allowlist governs what a *stored, Loki-bound* record may
-// carry (§3's deliberately small resource/structured-metadata set), not what
-// Analytics Engine's §4 layout accepts. A Faro measurement/event/exception
-// item that wants to report one of these values has nowhere contract-defined
-// to put it.
-//
-// This module is this task's answer: the browser facade (T06, not yet built)
-// is expected to send these under a `hot.<column>` key in the item's
-// `context`/`attributes`, mirroring the existing `hot.*` convention — with
-// one deliberate exception. `hot.kind` is already reserved (§3: "the Faro
-// item kind") and `convert.ts#faroItemToRecord` always overwrites it with
-// `item.type` regardless of what the client sent, so a value meant for AE
-// slot `blob17` (ADR-0042's "docs, starter, saved, import, payload" kind)
-// would collide and never survive. That one AE column is read from
-// `hot.metric_kind` instead. T06/T09 must use these exact key names for the
-// values below to reach Analytics Engine at all.
+// list, because that allowlist governs what a *stored, Loki-bound* record
+// may carry (§3's small resource/structured-metadata set), not what
+// Analytics Engine's §4 layout accepts. This module reads these under a
+// `hot.<column>` key in the item's `context`/`attributes`, mirroring the
+// existing `hot.*` convention — with one exception: `hot.kind` is already
+// reserved (§3: "the Faro item kind") and `convert.ts#faroItemToRecord`
+// always overwrites it with `item.type`, so AE slot `blob17` (ADR-0042's
+// "docs, starter, saved, import, payload" kind) is read from
+// `hot.metric_kind` instead.
 //
 // Read from the item's **raw, pre-scrub** context/attributes — these values
 // never reach storage (only `toAePoint`, never `buildResourceLogs`), so
-// `scrubTelemetry`'s allowlist would otherwise strip every one of them before
-// this module ever sees them. Each value still gets this module's own light
-// sanitisation (`redactPreviewHosts` + `stripQueryAndFragment` + a length
-// cap) before being handed to `toAePoint`, since it is client-controlled and
-// never passed through the authoritative scrubber.
+// `scrubTelemetry`'s allowlist would otherwise strip every one of them
+// before this module ever sees them. Each value still gets this module's
+// own light sanitisation (`redactPreviewHosts` + `stripQueryAndFragment` +
+// a length cap), since it is client-controlled and never passed through
+// the authoritative scrubber.
 
 import { redactPreviewHosts } from "@handsontable/demo-runtime/monitor";
 import { type HotAttrs, stripQueryAndFragment } from "@handsontable/demo-runtime/telemetry";

@@ -1,8 +1,5 @@
-// Size caps (ADR §B.5 "size caps"). Spike (b)'s sandbox probe was meant to
-// measure real body sizes under load (task file, "Sandbox probe" section:
-// "body sizes, batches per minute"); the probe section of this task's Outcome
-// records what was actually captured. Until real traffic is measured, these
-// are conservative, documented defaults (T02-D), not derived numbers:
+// Size caps (ADR §B.5 "size caps"). Conservative, documented defaults, not
+// numbers derived from measured traffic:
 //
 // - `COLLECT_MAX_BYTES`: a Faro `transportBody` batch. 1 MB matches the
 //   contract's own `LOKI_REQUEST_MAX_BYTES` (inbox.ts) — a batch bigger than

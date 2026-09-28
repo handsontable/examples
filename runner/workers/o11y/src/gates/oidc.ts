@@ -1,27 +1,10 @@
 // ADR §B.5 `deploy` row: "GitHub OIDC token (issuer, audience, repository,
 // workflow), secret fallback". Verifies a GitHub Actions OIDC id-token
 // (`Authorization: Bearer <token>`) against GitHub's own JWKS with `jose`.
-//
-// T02-D — the audience string (see the task Outcome): the contract does not
-// pin one. `O11Y_GITHUB_OIDC_AUDIENCE` below is this task's choice —
-// "identify the intended recipient," GitHub's own recommendation — and
-// whichever CI workflow requests the id-token (T10, `master.yml`'s deploy
-// job per the observability contract §2 "each deploy job posts …") must
-// request it with this exact `audience` query parameter or every deploy
+// `O11Y_GITHUB_OIDC_AUDIENCE` is this Worker's own choice ("identify the
+// intended recipient", GitHub's recommendation); the deploy workflow that
+// requests the id-token must use this exact `audience`, or every deploy
 // event falls through to the secret fallback instead of the OIDC path.
-//
-// T02-D16 (fix round — the first pass checked only issuer, audience and
-// repository, missing ADR §B.5's fourth check, "workflow"): GitHub Actions
-// stamps every OIDC token with a `workflow_ref` claim,
-// `<owner>/<repo>/<workflow file path>@<ref>` — for a workflow that runs
-// directly (not called via `workflow_call`), this is the same value as
-// `job_workflow_ref`; the deploy job is expected to run directly, so
-// `workflow_ref` is what this checks. Exact match against
-// `env.GITHUB_OIDC_WORKFLOW_REF`, whose expected value (documented on the
-// `Env` field and in `wrangler.jsonc`) is
-// `handsontable/examples/.github/workflows/master.yml@refs/heads/master` —
-// **T10 must keep this in sync** with the real deploy workflow's file path
-// and the ref it runs from.
 
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Env } from "../env.js";
@@ -50,8 +33,7 @@ function githubJwks(): ReturnType<typeof createRemoteJWKSet> {
  *  test case would otherwise have every test after the first reuse the
  *  first test's cached (and now wrong) key set, fail JWT verification for an
  *  unrelated reason, and still assert `ok: false` — passing for the wrong
- *  reason. Found exactly this way: reverting the T02-D16 workflow check kept
- *  its test green until this reset was added and called per test. */
+ *  reason. */
 export function _resetGithubJwksCacheForTests(): void {
   jwksCache.clear();
 }
@@ -76,6 +58,8 @@ async function checkGithubOidc(req: Request, env: Env): Promise<GateResult | nul
     if (payload["repository"] !== env.GITHUB_OIDC_REPOSITORY) {
       return drop("oidc", 401, "repository mismatch");
     }
+    // `workflow_ref` (not `job_workflow_ref`): the deploy job runs directly,
+    // not via `workflow_call`, so the two claims carry the same value here.
     if (payload["workflow_ref"] !== env.GITHUB_OIDC_WORKFLOW_REF) {
       return drop("oidc", 401, "workflow mismatch");
     }

@@ -1,25 +1,25 @@
 # ADR-0041: Observability on Cloudflare — a sleeping Loki + Grafana box, OTLP inward, Sentry for uncaught errors
 
-**Status:** Proposed — design approved 2026-09-23 (revision 3), implemented (T00–T12,
-T03B), local end-to-end walkthrough and every task's sandbox probe complete (§L
-"Results," T11). 12 of 15 exit criteria pass outright with real evidence; criteria 5 and
-13 pass pending the two confirmations named below; criterion 8 (Volume) is **Mixed**, not
-a pass — Analytics Engine points and the raw Workers Logs pool both pass at 10× with real
-margin, but the exported-logs allotment does not (§D above has the numbers and the
-fallback). The design's own §L trigger (criterion 1, 2 or 7 failing) is not engaged.
+**Status:** Proposed — design approved 2026-09-23 (revision 3), implemented, local
+end-to-end walkthrough and every sandbox probe complete (§L "Results"). 12 of 15 exit
+criteria pass outright with real evidence; criteria 5 and 13 pass pending the two
+confirmations named below; criterion 8 (Volume) is **Mixed**, not a pass — Analytics
+Engine points and the raw Workers Logs pool both pass at 10× with real margin, but the
+exported-logs allotment does not (§D above has the numbers and the fallback). The
+design's own §L trigger (criterion 1, 2 or 7 failing) is not engaged.
 **Stays Proposed, not Accepted, pending exactly two items**: exit criterion 5's
 CPU/memory measurement inside a real Workers isolate (every measurement so far is a
-Node-process proxy — no task had isolate profiling access), and exit criterion 13's
+Node-process proxy — no isolate profiling access was available), and exit criterion 13's
 real-object retention expiry (a 1-day R2 lifecycle test is running against real objects;
-calendar time has not yet passed as of T11's own pass — see `docs/run-and-deploy.md`'s
+calendar time has not yet passed as of this pass — see `docs/run-and-deploy.md`'s
 Launch plan for how to close both).
 Supersedes ADR-0040 decisions A, B, C.2 and C.3; amends ADR-0022 (o11y spend cap,
 per-script billing rows), ADR-0038 (WAF exception extended to `/telemetry/*`); adds
-routes under ADR-0020. **No longer deviates from ADR-0007** (K1: `/grafana/*` gates
+routes under ADR-0020. **No longer deviates from ADR-0007**: `/grafana/*` gates
 through the same Handsontable login broker as every other internal surface, not
-Cloudflare Access — see §H). ADR-0042 ships with this
+Cloudflare Access — see §H. ADR-0042 ships with this
 ADR, and stays at the same status (Proposed) until this one flips to Accepted.
-ADR-0043 follows after launch (T13, not yet dispatched).
+ADR-0043 follows after launch (not yet dispatched).
 
 ## Context
 
@@ -146,14 +146,13 @@ box.
 
 **Wake.** Two triggers only:
 
-1. A Grafana visit through the login broker (ADR-0007, K1 — not Cloudflare Access). The
+1. A Grafana visit through the login broker (ADR-0007 — not Cloudflare Access). The
    Worker renews the activity timer on every HTTP
    request to `/grafana/*`, **including the waking page's own `meta refresh` poll while
-   the box is still booting** (T03B, F2 — the original implementation only counted a
-   request once the box was ready, so a visit wake with nothing yet in the backlog could
-   SIGTERM itself around 20s into boot, before the person who opened it ever saw
-   Grafana); the box stops after 15 idle minutes, and after 4 hours awake regardless (the
-   next request shows the waking page).
+   the box is still booting** (counting a request only once the box is ready would let
+   a visit wake with nothing yet in the backlog SIGTERM itself around 20s into boot,
+   before the person who opened it ever saw Grafana); the box stops after 15 idle
+   minutes, and after 4 hours awake regardless (the next request shows the waking page).
 2. A backlog: a `*/10` cron in the o11y worker asks `InboxWriter.backlog()` and wakes the
    box when the oldest uncommitted object is older than 60 minutes or the backlog exceeds
    64 MB. The cron never wakes the box when drains are paused (§G).
@@ -165,7 +164,7 @@ container's shutdown script stops Loki gracefully, confirms the index is uploade
 and only then writes a **clean-shutdown marker** `state/wakes/<wakeId>/clean` into the Loki
 bucket, the one bucket its credentials reach. The o11y worker reads `state/` through an R2
 binding on the same bucket; no lifecycle rule touches that prefix except a 30-day expiry.
-The marker, not `onStop`, is what the ledger trusts (§B.3). **Exception (T03B, F3):** a
+The marker, not `onStop`, is what the ledger trusts (§B.3). **Exception:** a
 wake that ends without ever having a `provisional` key (an empty backlog, or a
 Grafana-visit-only wake with nothing to drain) never gets an index upload and so never
 gets a marker — that is expected, not an unclean stop, and the ledger now resolves such a
@@ -178,8 +177,8 @@ content="3">`, no script, served by the Worker while the box is not ready.
 **Cost model**: drain wakes × measured drain-wake duration + visit hours, at
 $0.038–0.074 per awake hour on `standard-1`. The target is ≈ $5–8/month at current
 traffic; exit criterion L.7 recomputes it from the measured drain-wake duration and
-fails above $10. **Measured (T03B, real sandbox platform, corrected 1×/10× traffic scale,
-§L.7): $0.21/month at 1×, $0.33/month at 10×** — the design's own $5–8 target was itself a
+fails above $10. **Measured on the real sandbox platform, corrected 1×/10× traffic
+scale (§L.7): $0.21/month at 1×, $0.33/month at 10×** — the design's own $5–8 target was itself a
 conservative upper estimate; drain-wake frequency is capped by the 60-minute backlog-age
 trigger, not by traffic volume, so 20× more records only adds ~16s of drain time per wake,
 not 20× the awake-hour cost.
@@ -227,19 +226,15 @@ stores and packs. For each accepted request, in this order:
    per tenant to `inbox/<tenant>/<yyyy-mm-dd>/<hh>/<seq>.ndjson.gz`, where `<seq>` is a
    counter persisted in DO storage, incremented in the same transaction that records the
    key, zero-padded to 12 digits. The key's state is recorded as `written`; the packed
-   rows are deleted. **Corrected by implementation (fix round A-I2):** "4 MB stored" is a
-   real, enforced bound on the packed object's own decompressed NDJSON size
-   (`PACK_OBJECT_MAX_DECOMPRESSED_BYTES`), not only a flush-cadence hint — the alarm
-   takes pending rows in arrival order up to that budget (always at least one row, even
-   if a single row alone is over budget) and commits that object; a tenant with more
-   pending rows than fit in one object is packed across several objects, looping within
-   the same alarm invocation up to a per-invocation cap on packed objects and
-   rescheduling itself immediately when rows remain, rather than one unbounded
-   in-memory gzip per alarm. **Corrected again (fix round A-I2, G1, final review second
-   wave):** the A-I2 fix above bounded the packed OBJECT's size, but the alarm's own READ
-   of pending rows was still `list({prefix: "row:"})` with no bound — every pending row,
-   across a flood, loaded into memory before any cap applied. `row:<n>` is now
-   zero-padded (12 digits, matching `<seq>`'s own width), so native ascending key order
+   rows are deleted. "4 MB stored" is a real, enforced bound on the packed object's own
+   decompressed NDJSON size (`PACK_OBJECT_MAX_DECOMPRESSED_BYTES`), not only a
+   flush-cadence hint — the alarm takes pending rows in arrival order up to that budget
+   (always at least one row, even if a single row alone is over budget) and commits that
+   object; a tenant with more pending rows than fit in one object is packed across several
+   objects, looping within the same alarm invocation up to a per-invocation cap on packed
+   objects and rescheduling itself immediately when rows remain, rather than one unbounded
+   in-memory gzip per alarm. The alarm's own read of pending rows is bounded too: `row:<n>`
+   is zero-padded (12 digits, matching `<seq>`'s own width), so native ascending key order
    equals arrival order without an in-memory sort, and the alarm pages `row:` in small
    chunks, accumulated up to one packed object's own byte budget per round, rather than
    one unbounded `list()` — see contract §8 and `workers/o11y/src/inbox/pack.ts`.
@@ -272,10 +267,10 @@ describes, so backlog and state are readable without starting the container. Eac
   records pushed to Loki's `/otlp/v1/logs` with the tenant header in requests of at most
   1 MB decompressed. A key becomes `provisional(wakeId)` only after every one of its
   requests returned `2xx`. `429` and `5xx` are retried with backoff within the wake; a
-  `400` (for example `too_far_behind`) is logged with Loki's message. **Corrected by
-  implementation (T03B, F1):** a single too-old record inside an otherwise-good packed
-  object no longer 400s (and so rejects) the whole key — `drainKey` drops individual log
-  records older than `reject_old_samples_max_age` minus a margin *before* pushing, counts
+  `400` (for example `too_far_behind`) is logged with Loki's message. A single too-old
+  record inside an otherwise-good packed object does not 400 (and so reject) the whole
+  key — `drainKey` drops individual log records older than `reject_old_samples_max_age`
+  minus a margin *before* pushing, counts
   the dropped ones on the `o11y.drain` point, and still pushes the good siblings in the
   same key. A key is marked `rejected` only when the push itself still 400s after that
   filtering (a genuine, not-just-stale, rejection), which raises an alert (§F.3). Within
@@ -334,8 +329,8 @@ not a loop: they never pass through its own ingest routes.
 
 **C.2 Attributes, identity and time.** Every record carries `service.name`,
 `service.version`, `deployment.environment.name` and the `hot.*` set (`surface`, `tier`,
-`framework`, `ht_major`, `outcome`) as **resource attributes**. **Corrected by
-implementation and by exit criterion 15's own precise wording (T11):** Loki labels
+`framework`, `ht_major`, `outcome`) as **resource attributes**. Per exit criterion 15's
+own precise wording, Loki labels
 `service.name`, `deployment.environment.name` and every `hot.*` key — seven of the eight —
 from `containers/o11y/loki/loki-config.yaml`'s own `otlp_config.resource_attributes`
 promotion list. `service.version` is a resource attribute (queryable, present on every
@@ -365,7 +360,7 @@ strings, authored code, chat text and console output are never sent to the o11y 
 the EU maps bucket under `sourcemaps/<sha>/<original asset path>.map` before deleting
 them from `dist` (the Sentry Vite plugin's in-build deletion is turned off; one CI step
 uploads to both destinations, then deletes). At drain, for exception records only, the
-o11y worker resolves app-chunk frames with `source-map-js` against the map for the
+o11y worker resolves app-chunk frames with `@jridgewell/trace-mapping` against the map for the
 record's `service.version`, parsing lazily per file and caching in the isolate within a
 fixed memory budget; frames from the Babel compiler chunk and third-party files are left
 as they are. Maps expire with the browser tenant (30 days). Symbolication never runs on
@@ -411,7 +406,7 @@ embeds are identified by demo id.
   counted in the first. Because every count and alert reads Analytics Engine, which is not
   sampled at ingest, lowering the log sampling rate is the fallback that costs text, never
   alerts.
-  **Measured (T11, projected from real per-session/per-request counts × `traffic-baseline.md`,
+  **Measured (projected from real per-session/per-request counts × `traffic-baseline.md`,
   at the ADR's own required 10× headroom): Analytics Engine points pass comfortably
   (≈4.14M of the 10M dataset, well under half). The raw Workers Logs pool also passes
   (≈6.6M of 20M, under half) — but the exported-logs allotment does not clear its own half
@@ -490,8 +485,8 @@ the budget. Until then nothing that reaches Sentry today stops reaching it.
 
 ### F. What is metered
 
-**F.1 Store.** Counts and latencies go to Analytics Engine; Loki holds the text. (R3
-F18: contract §6's own table now matches this ruling — a Faro measurement or web-vitals
+**F.1 Store.** Counts and latencies go to Analytics Engine; Loki holds the text. (Contract
+§6's own table matches this ruling — a Faro measurement or web-vitals
 item is AE-only, never a stored Loki record.) The
 positional slot layout and the full metric registry, with allowed outcomes, are in
 [`docs/observability-contract.md`](../observability-contract.md) §4–§5; this section
@@ -566,18 +561,18 @@ day; an embed above 20 % errors with more than 50 views in 24 h; backlog older t
 
 ### H. Access, jurisdiction, retention
 
-- **Login broker (K1), not Cloudflare Access**: every `@handsontable.com` account, as for
+- **Login broker, not Cloudflare Access**: every `@handsontable.com` account, as for
   `/admin` — the same Handsontable login broker (ADR-0007). A callback page under
   `/grafana/_o11y/` reads the broker's fragment token once and exchanges it for the
   Worker's own HMAC-signed session cookie (`gates/session.ts`); Grafana Viewer via
   `auth.proxy`. This **conforms to ADR-0007 rather than deviating from it**. The earlier
   claim in this section — that the broker "hands a JWT to a SPA and cannot gate a proxied
   third-party HTML application" — was wrong: hot-mcp's own `create_app` runtime gates a
-  proxied app the identical way, and a point-in-time production probe (§M's K1 delta has
-  the exact curl command and its `302` result, dated 2026-09-24) confirmed the callback
-  host was allowed as of that date — expected to still hold, but re-run that probe before
-  launch rather than assuming it (see §M's K1 delta also for the one risk this design
-  inherits rather than fixes, DEV-3088).
+  proxied app the identical way, and a point-in-time production probe (the §M
+  access-broker delta has the exact curl command and its `302` result, dated 2026-09-24)
+  confirmed the callback host was allowed as of that date — expected to still hold, but
+  re-run that probe before launch rather than assuming it (see the §M access-broker delta
+  also for the one risk this design inherits rather than fixes, DEV-3088).
 - **EU-pinned**: the container (`jurisdiction: "eu"`), both Durable Objects, the inbox,
   Loki and maps buckets.
 - **Deploy order** for the mutual service bindings: the o11y worker first (binding the
@@ -599,7 +594,7 @@ Grafana config, provisioning, `compose.yml`), `pipeline/fixtures/otlp/`,
 `wrangler dev` or `compose.yml`; the o11y worker with Miniflare's R2, DO and cron; Loki on
 Miniflare's local S3 endpoint for R2 or MinIO; Analytics Engine replaced by a ClickHouse
 container holding an AE-shaped `runner_events` table, queried with the same SQL through
-the allowlisting helper; the login broker's session check (K1) by a fail-closed `DEV_ADMIN`
+the allowlisting helper; the login broker's session check by a fail-closed `DEV_ADMIN`
 bypass in `.dev.vars`.
 Cloudflare's OTLP export does not run locally; its fixtures are real bodies captured by
 the sandbox probe, scrubbed, plus hand-built edge cases. `pnpm o11y:dev` starts the box,
@@ -621,7 +616,7 @@ transitions and marker handling; a label test asserting the Loki series for each
 carry exactly the contract labels (exit criterion 15); scrubber tests per rule on real inputs (a Babel code
 frame, a preview-host URL, a user-agent string); a config test pinning the Loki keys of
 §B.4 and the `observability` block of §D; symbolication against a real `vite build`;
-beacon injection and an `acorn` ES5 parse; `e2e/o11y-local.spec.ts` (T11), which drives a
+beacon injection and an `acorn` ES5 parse; `e2e/o11y-local.spec.ts`, which drives a
 real browser against the real o11y worker and asserts the resulting points land in the
 local Analytics Engine stand-in (ClickHouse rows) — not a Loki query. Loki queryability
 itself is proven separately: `containers/o11y/local/stop-roundtrip.mjs`'s own
@@ -682,7 +677,7 @@ end-to-end walkthrough and launch.
 If criterion 1, 2 or 7 fails with its plan B, the design is rewritten toward the
 serverless store before more is built.
 
-**Results (T11, local end-to-end pass plus every task's sandbox probe):**
+**Results (local end-to-end pass plus every sandbox probe):**
 
 | # | Criterion | Result |
 |---|---|---|
@@ -711,7 +706,7 @@ measured, not a missing-evidence gap; it is carried as a named pre-launch action
 own §D already names the exact fallback (lower `head_sampling_rate`) for exactly this
 situation.
 
-### M. Implementation deltas (folded from T00–T12, T03B; full detail in git history under
+### M. Implementation deltas (full detail in git history under
 the deleted `runner/tasks/o11y/`)
 
 Deltas already folded as direct edits above (§A cost, §A wake/stop, §B.3 drain-rejection,
@@ -721,22 +716,21 @@ where they add information beyond what §A–§L already say:
 - **§B.2 ingest.** Hashing (step 2) uses each record's own raw, un-clamped source
   timestamp alongside its body and attributes — not the clamped `time_unix_nano` a later
   step computes — so two real deliveries of the same content at different real times still
-  hash differently, and the same body redelivered still dedupes (T02-D1). One aggregated
+  hash differently, and the same body redelivered still dedupes. One aggregated
   `o11y.ingest` point is written per *request* (not per record), so a batch of N duplicate
-  records reads as one `duplicate` point with `count = N`, not N separate points (T02-D3).
+  records reads as one `duplicate` point with `count = N`, not N separate points.
   Every §3 resource attribute a source has no natural value for defaults to `"none"`
   (`"unknown"` for `service.version` specifically, confirmed against real Cloudflare
   export samples that never carry it at all) — this default is what makes exit criterion
-  15 pass for worker-origin sources, not a defensive fallback (T02-D5, D18). A real
+  15 pass for worker-origin sources, not a defensive fallback. A real
   Cloudflare OTLP export's ray id arrives as `cloudflare.ray_id`, remapped to the
-  contract's own `cf.ray` (T02-D17). `HotAttrs` fields with no dotted `hot.*` resource-
-  attribute counterpart (`bucket`, `reason`, `fingerprint`, and others T02-D4 named but no
-  browser call site emits yet) travel over an AE-only channel, read from a Faro item's raw
-  `context` before the browser's own scrub allowlist would otherwise drop them — this
-  channel needed its own allowlist extension (`AE_ONLY_ATTRIBUTE_KEYS`) before it worked
-  for real, found live during T07 and T12's own work.
-- **§B.2 pack.** Fix round A-I2, confirmed against the landed `pack.ts`/`writer.ts`
-  change: the pack alarm's "at 4 MB stored" trigger (step 6 above) is now a real,
+  contract's own `cf.ray`. `HotAttrs` fields with no dotted `hot.*` resource-
+  attribute counterpart (`bucket`, `reason`, `fingerprint`, and others with no
+  browser call site emitting them yet) travel over an AE-only channel, read from a Faro
+  item's raw `context` before the browser's own scrub allowlist would otherwise drop
+  them — this channel needed its own allowlist extension (`AE_ONLY_ATTRIBUTE_KEYS`)
+  before it worked for real.
+- **§B.2 pack.** The pack alarm's "at 4 MB stored" trigger (step 6 above) is a real,
   enforced upper bound on a single packed object's decompressed size
   (`PACK_OBJECT_MAX_DECOMPRESSED_BYTES = 4 MB`), not only a flush-cadence hint. An
   over-threshold burst is capped by **splitting into extra keys, not by cutting the
@@ -748,48 +742,43 @@ where they add information beyond what §A–§L already say:
   over budget on its own is still packed alone (row size is already bounded to
   `INBOX_ROW_MAX_BYTES`, ~1 MB, well under the 4 MB object budget) rather than blocking
   progress.
-- **§B storage API, DO 128-key batch limit (confirmed platform fact, fix round N2, G1,
-  final review second wave).** Cloudflare's SQLite-backed Durable Object storage API caps
+- **§B storage API, DO 128-key batch limit** (confirmed platform fact). Cloudflare's
+  SQLite-backed Durable Object storage API caps
   `get`/`put`/`delete` at 128 keys/key-value pairs per call
   (<https://developers.cloudflare.com/durable-objects/api/storage-api/>, fetched
   2026-09-24: "Supports up to 128 keys at a time" / "up to 128 key-value pairs at a
-  time"). Local `workerd` was observed accepting 500+ in one call with no error, so
-  nothing in this codebase's test doubles
-  enforced it either, until this fix round added the check to both
-  (`workers/o11y/src/inbox/storage.ts#memoryStorage()` and
-  `pipeline/fixtures/o11y-harness.mjs`). Every multi-key call in `InboxWriter` — dedupe's
-  `checkDuplicates`, the fingerprint registry's writes/prune, `pruneLedger`, wake
-  resolution, `markKeysProvisional`, manual reopen, the pack commit, and `ingest`'s own
-  transaction `put` — now chunks through `storage.ts`'s `getManyChunked`/`putChunked`/
-  `deleteChunked`. `finalizeWakeResolution` and `reopenWindow` also now run their whole
-  put+delete sequence inside one `storage.transaction()` (previously two independent
-  top-level calls) — chunking alone, without that, would let a crash between chunks
-  leave a partial write (an orphaned `provisional:<wakeId>` key whose `wake:<id>` is
-  already gone).
-- **§B.3 drain reads whole objects.** Rereview row 20 (F1/F2/F3 fix round): documented
-  here, since it previously existed only in a fixer's own report, not the ADR. Each
-  drained key's packed object is read into memory whole before its records are pushed
+  time"). Local `workerd` accepts 500+ in one call with no error, so this codebase's
+  own test doubles (`workers/o11y/src/inbox/storage.ts#memoryStorage()`,
+  `pipeline/fixtures/o11y-harness.mjs`) enforce the same cap explicitly rather than
+  relying on `workerd` to catch a violation. Every multi-key call in `InboxWriter` —
+  dedupe's `checkDuplicates`, the fingerprint registry's writes/prune, `pruneLedger`,
+  wake resolution, `markKeysProvisional`, manual reopen, the pack commit, and
+  `ingest`'s own transaction `put` — chunks through `storage.ts`'s
+  `getManyChunked`/`putChunked`/`deleteChunked`. `finalizeWakeResolution` and
+  `reopenWindow` run their whole put+delete sequence inside one
+  `storage.transaction()` — chunking alone, without that, would let a crash between
+  chunks leave a partial write (an orphaned `provisional:<wakeId>` key whose
+  `wake:<id>` is already gone).
+- **§B.3 drain reads whole objects.** Each drained key's packed object is read into
+  memory whole before its records are pushed
   to Loki — this is bounded, not unbounded, because the object it reads was itself
-  capped at write time (A-I2's `PACK_OBJECT_MAX_DECOMPRESSED_BYTES`, ~4 MB), plus at
+  capped at write time (`PACK_OBJECT_MAX_DECOMPRESSED_BYTES`, ~4 MB), plus at
   most one further oversized single row (`INBOX_ROW_MAX_BYTES`, ~1 MB) packed alone
   when it alone exceeds the object budget. So one drain-time read is bounded to roughly
   4–5 MB, never the whole tenant's backlog at once. This bound is a property of the
-  PACK side (`inbox/pack.ts`, owned by a concurrent task in this fix round — see that
-  task's own report for its current shape) and is restated here only as the
-  drain-side consequence rereview row 20 asked to have written down, not as a claim
-  about `drain.ts`'s own internals.
+  PACK side (`inbox/pack.ts`), restated here as the drain-side consequence, not as a
+  claim about `drain.ts`'s own internals.
 - **§B.2 ingest, worker tenant.** A Worker's own `console.log(JSON.stringify(...))` line
   (the structured request/error lines §D describes) arrives through Cloudflare's real OTLP
   log export as **opaque body text**, not as OTLP attributes — confirmed with a real
-  captured export (T03B, answering the open question T02 and T03 both left). The o11y
-  worker now parses a JSON-object body and merges its keys into the same attribute bag a
+  captured export. The o11y
+  worker parses a JSON-object body and merges its keys into the same attribute bag a
   real OTLP attribute would land in, through the existing allowlist, with every
   §3 resource-attribute key **stripped from the parsed body first and given the lowest
   merge priority** — a body key cannot spoof `service.name`/`deployment.environment.name`/
-  any `hot.*` label (T03B, fix-round finding I2, found and fixed within T03B's own pass
-  before it shipped).
-- **§B.2 ingest, worker tenant — fingerprint (fix round C-I2, live at merge, second
-  wave).** The API worker's own handled-error lines (`reportDiagnostic`,
+  any `hot.*` label.
+- **§B.2 ingest, worker tenant — fingerprint** (live at merge). The API worker's
+  own handled-error lines (`reportDiagnostic`,
   `workers/api/src/telemetry/diagnostic.ts`) carry `hot.fingerprint` (contract §3
   AE-only key) in the same structured JSON body the bullet above describes. The read
   half (`workers/o11y/src/normalise/otlp.ts#toIngestItem`/`apiFingerprintFeed`) reads
@@ -801,14 +790,13 @@ where they add information beyond what §A–§L already say:
   for every other resource attribute); the parsed body's `log.kind === "error"`; the
   value matches contract §7's own shape, via `isValidFingerprint` — ONE shared
   validator, also used by the browser path's `resolveFingerprint`, never a second,
-  independently drifting copy (fix round finding N1, second wave: the first version of
-  this gate, and `normalise/faro.ts`'s own separate copy, both anchored on the FIRST
-  `:` and rejected the `:`-joined call-site paths `reportDiagnostic`'s own real callers
+  independently drifting copy: a validator anchored on the FIRST
+  `:` would reject the `:`-joined call-site paths `reportDiagnostic`'s own real callers
   send — `"npm-registry:version-exists"`, `"npm-registry:versions"` — so neither could
-  ever satisfy this condition before N1 landed, gate aside).
+  ever satisfy this condition, gate aside.
 
-  **Two preconditions, both now landed in this fix round, not just one:**
-  1. Finding **M2**: a real Cloudflare OTLP export's resource `service.name` is the
+  **Two preconditions, both must hold:**
+  1. **Service-name remap:** a real Cloudflare OTLP export's resource `service.name` is the
      deployed script's own name (`handsontable-demos-api`), not the contract's short
      `demos-api` — `normalise/otlp.ts#remapCloudflareServiceName` strips the shared
      `handsontable-` script-name prefix whenever what remains is one of the contract's
@@ -816,7 +804,7 @@ where they add information beyond what §A–§L already say:
      deployable. Confirmed against the captured real-export fixtures
      (`pipeline/fixtures/otlp/json/console-log-line*.json`,
      `cloudflare-invocation-log.json`), every one of which carries the raw script name.
-  2. Finding **N1**: the shared validator now accepts a `:`-joined `context`, so
+  2. **Shared fingerprint validator:** it accepts a `:`-joined `context`, so
      `reportDiagnostic`'s own real call sites' fingerprints pass the shape check at
      all — see above.
 
@@ -832,14 +820,14 @@ where they add information beyond what §A–§L already say:
   not guaranteed: the B cross-note fix (two bullets below) makes `tryParseJsonBodyAttrs`
   refuse to parse ANY body whose own `log.kind` isn't one of this worker's trusted
   shapes, so `bodyJsonAttrs` is empty for a body with no matching sentinel — but the
-  sentinel is body TEXT, not a resource attribute, and (per finding N6, investigated
-  this fix round, not fully resolved — see `normalise/otlp.ts#tryParseJsonBodyAttrs`'s
-  own doc comment for the full investigation) nothing in this pipeline can currently
+  sentinel is body TEXT, not a resource attribute, and (known gap, not fully resolved —
+  see `normalise/otlp.ts#tryParseJsonBodyAttrs`'s
+  own doc comment for the full analysis) nothing in this pipeline can currently
   tell a genuine `lines.ts` line apart from a Tier-2 container's own authored stdout
   that happens to print the same shape, since both would share this Worker's
-  `service.name` once M2 normalises it. Accepted, bounded residual: a forged line can
-  only mint a `fp:` entry and a notify-only, mrkdwn-escaped (A-C2) Slack line, the same
-  noise class N7 already accepts for the browser path — never Sentry, PII or code
+  `service.name` once the service-name remap normalises it. Accepted, bounded residual: a forged line can
+  only mint a `fp:` entry and a notify-only, mrkdwn-escaped Slack line, the same
+  noise class already accepted for the browser path — never Sentry, PII or code
   execution. Deliberately NOT `hot.surface !== "demo-runtime"` (the browser path's own
   rule) — a worker-tenant record's `hot.surface` resource attribute defaults to
   `"none"` when nothing sets it, which would admit any body reaching
@@ -847,52 +835,49 @@ where they add information beyond what §A–§L already say:
 - **§C.1 hops.** Faro's real browser transport posts a `TransportBody`
   (`{meta, exceptions?, logs?, measurements?, events?, traces?}`), not an array of
   self-contained items the way every contract function's own types assume — the ingest
-  route reconstructs items from the four typed arrays (T02-D6).
+  route reconstructs items from the four typed arrays.
 - **§C.3 symbolication.** A Faro exception's stack trace reaches the drain as V8-shaped
   text in the record body — the pre-implementation contract had no field carrying frame
-  data for this to resolve at all (T03, a touch to the shared `convert.ts`/`scrub.ts`
-  module outside T03's own file ownership — kept minimal and justified by the task
-  board's shared-file rules, since two tasks touching the same module needs sign-off).
+  data for this to resolve at all.
 - **§D Worker signals.** `container.boot_ms` (not `session.start`'s own `boot_timeout`
   outcome) is what fires when the Tier-2 boot window is exceeded — the original design
   would have double-counted a session that later times out after already reporting
-  `session.start` `ready` once (T05-D4, a design correction made before shipping, not
+  `session.start` `ready` once (a design correction made before shipping, not
   after). Several §5 metrics remain real but never observed in practice: `pool.gauge`
   `reason="builder"` (no signal tracks `BuilderSandbox` concurrency the way live sessions
   are tracked), `snapshot.build` `reason="inline"` (only the detached build path is
   instrumented), `session.end` `reason="sleep_after"` (nothing observes the Sandbox SDK's
-  own idle-timeout stop) — all named gaps, not silently dropped (T05-D5/D6/D7). A cron
+  own idle-timeout stop) — all named gaps, not silently dropped. A cron
   failure inside `ctx.waitUntil()` is structurally unreachable by `@sentry/cloudflare`'s
   own auto-capture (its `scheduled` instrumentation only wraps the synchronous handler
-  invocation) — every cron branch now calls `Sentry.captureException` explicitly in its own
-  catch (T05-D8, confirmed live: the pre-fix code produced zero Sentry envelopes for a
-  forced cron failure, the post-fix code produced exactly one).
-- **§E Sentry.** The full call-site inventory (T06) found one real §11 violation the
-  original Scope text missed: `App.tsx`'s `versions-fetch` diagnostic was unconditional
-  before this ADR's switch existed, exactly the shape §E.1 already names as "handled." A
-  controller ruling holds §E.3 binding over an earlier task-file instruction to "leave
-  Sentry" for demo-runtime preview events: `reportDemoEvent` keeps its full pre-ADR Sentry
-  behaviour (including the `DEMO_SURFACE` environment re-homing) under `full` scope,
-  unreachable under `uncaught` — "the re-homing disappears once the scope flips" is
-  literally true only after the flip, not at implementation time.
-- **§B.3 drain, a key with a mixed 400/2xx outcome (fix round, final review second
-  wave, "accepted chunks skip §B.3").** F2's original fix (two bullets above the pack-alarm ones)
-  correctly kept pushing every chunk of a key even after an earlier one 400'd, but still
-  classified the whole key `rejected` if ANY chunk 400'd — including when another chunk
-  landed 2xx. A `rejected` key never becomes `provisional`, so those already-accepted
-  bytes never passed the §B.3 marker/commit check any wake's clean stop confirms
+  invocation) — every cron branch calls `Sentry.captureException` explicitly in its own
+  catch (confirmed live: a forced cron failure without this produced zero Sentry
+  envelopes; with it, exactly one).
+- **§E Sentry.** The full call-site inventory found one real §11 violation: `App.tsx`'s
+  `versions-fetch` diagnostic was unconditional before this ADR's switch existed, exactly
+  the shape §E.1 already names as "handled." §E.3 is binding for demo-runtime preview
+  events: `reportDemoEvent` keeps its full pre-ADR Sentry behaviour (including the
+  `DEMO_SURFACE` environment re-homing) under `full` scope, unreachable under `uncaught`
+  — "the re-homing disappears once the scope flips" is literally true only after the
+  flip, not at implementation time.
+- **§B.3 drain, a key with a mixed 400/2xx outcome** ("accepted chunks skip §B.3").
+  Pushing every chunk of a key even after an earlier one 400'd, while still
+  classifying the whole key `rejected` if ANY chunk 400'd — including when another chunk
+  landed 2xx — would be wrong: a `rejected` key never becomes `provisional`, so those
+  already-accepted
+  bytes never pass the §B.3 marker/commit check any wake's clean stop confirms
   durability through: an unclean stop right after the push, before Loki's own local
   flush, could lose them with no automatic replay (only a manual reopen, which — being
-  a full key replay — would re-derive the identical classification anyway). Corrected: a
-  key with at least one accepted (2xx) chunk now stays `provisional`, following the
+  a full key replay — would re-derive the identical classification anyway). Instead: a
+  key with at least one accepted (2xx) chunk stays `provisional`, following the
   normal durability path; only a key with ZERO accepted chunks stays `rejected`. The
-  permanent chunk loss stays operator-visible via a new `rejectedEvent:` audit log
+  permanent chunk loss stays operator-visible via a `rejectedEvent:` audit log
   (`ledger.ts#recordPartialReject`, contract §8) rather than the key's own ledger state.
-- **§B.3/§F.3 storage housekeeping, remainder (fix round, final review second wave,
-  "prune ceiling").** Three gaps the B-C1/A-I1 fix round's own prune mechanism left
-  open: (1) its 500-row/tick batch limit falls behind ADR §D's own 10× traffic
+- **§B.3/§F.3 storage housekeeping, remainder** ("prune ceiling").
+  Three gaps in the prune mechanism: (1) a 500-row/tick batch limit falls behind
+  ADR §D's own 10× traffic
   projection at roughly 3× today's traffic — raised to 5,000/tick (still chunked to the
-  real 128-key limit per call, see the N2 bullet above), with the exact arithmetic in
+  real 128-key limit per call, see the DO storage batch-limit bullet above), with the exact arithmetic in
   `dedupe.ts#HASH_PRUNE_BATCH_LIMIT`'s doc comment; (2) `newFingerprintsSince` listed the
   entire (alphabetically, not chronologically, ordered) `fp:` prefix every ten-minute
   alert tick — a new `fpts:<firstSeenMs>:<fingerprint>` time-ordered secondary index
@@ -907,43 +892,39 @@ where they add information beyond what §A–§L already say:
 - **§F metering.** ADR-0042's `example.*` events needed the same AE-only attribute-channel
   extension as §B.2 above (`kind`→`hot.metric_kind`, since `hot.kind` is reserved for the
   Faro item kind, `ref`, `area`) before `kind`/`ref`/`area` survived the browser scrub at
-  all (T12). A post-fork landing needs a one-shot, non-storage URL marker (`?fork=1`,
+  all. A post-fork landing needs a one-shot, non-storage URL marker (`?fork=1`,
   stripped via `history.replaceState` on read) to classify as `entry="fork"` rather than
   `"deep-link"`, because `onFork`'s navigation is a full page reload — the same
   hard-navigation pattern the rest of the app already uses for every route change, which
-  destroys any in-memory alternative (T12-D2).
+  destroys any in-memory alternative.
 - **§H access.** `ACCESS_AUD` is still the committed `""` placeholder as of this ADR's own
-  fold — no task minted a real Access application; `docs/run-and-deploy.md`'s Launch plan
-  names this as the first pre-condition to confirm before any real deploy (T00-D8, carried
-  through every task since).
-- **§H access (K1, supersedes the bullet above).** The `/grafana/*` Access application
-  named above was never created before launch. The controller replaced the gate with the
+  fold — no Access application was ever minted; `docs/run-and-deploy.md`'s Launch plan
+  names this as the first pre-condition to confirm before any real deploy.
+- **§H access (supersedes the bullet above).** The `/grafana/*` Access application
+  named above was never created before launch. It was replaced with the
   Handsontable login broker (ADR-0007) instead of finishing it — `gates/session.ts`
   (session cookie, `DEV_ADMIN` bypass), `gates/broker.ts` (the one-time `/broker/userinfo`
-  call), `grafana/login.ts` (login/callback/session/logout). Before implementation began,
-  the task's dispatcher ran the real production probe by hand (curl against
-  `mcp-auth-proxy-j0tb.onrender.com/broker/login`, 2026-09-24) and confirmed `302` to
+  call), `grafana/login.ts` (login/callback/session/logout). A real production probe
+  (curl against
+  `mcp-auth-proxy-j0tb.onrender.com/broker/login`, 2026-09-24) confirmed `302` to
   Google for `return_to=https://demos.handsontable.com/grafana/_o11y/callback?n=…`, so the
   callback path is allowed today (see `docs/run-and-deploy.md`'s step 5 for the exact
-  command, and its own citation of this — the implementer's separate local round trip
-  against a *stubbed* broker (K1's own fix-round notes, "Real local run") proves the
+  command; a separate local round trip against a *stubbed* broker proves the
   Worker's own code, not the real broker's live configuration, and should not be read
-  as a second production probe). **K1 widens DEV-3088's blast radius, it does not just
+  as a second production probe). **This widens DEV-3088's blast radius, it does not just
   inherit it**: the broker's
   `return_to` allowlist is host-suffix-only, so it also admits anonymous Tier-2 preview
   hosts under `*.demos.handsontable.com`, letting anyone harvest a team member's 1h broker
-  token. Before K1, a stolen token could not reach Grafana at all (`ACCESS_AUD` was `""`,
-  so Access refused everything); after K1, it can be exchanged for a Grafana session. Fix
-  round (K1's own security review, finding I3)
-  narrows this: `gates/session.ts#computeSessionTtlSeconds` caps the session at
+  token. Before this change, a stolen token could not reach Grafana at all (`ACCESS_AUD` was `""`,
+  so Access refused everything); now, it can be exchanged for a Grafana session. This
+  narrows the exposure: `gates/session.ts#computeSessionTtlSeconds` caps the session at
   `min(now + 12h, brokerTokenExp)` (falling back to 1h when the token carries no readable
   `exp`) instead of a flat 12h, so a stolen token buys close to its own remaining
   lifetime, not up to 11 extra hours — narrows, does not close. DEV-3088 itself remains
   open and is filed and tracked separately from this ADR.
 - **§I local development.** `wrangler dev`'s local Container reaches `compose.yml`'s
   standalone `minio`/`clickhouse` services (started without the `box` service) via
-  Docker's own `host.docker.internal`, since the two are never on the same Docker network
-  (T03, `box.ts#buildLocalEnvVars`).
+  Docker's own `host.docker.internal`, since the two are never on the same Docker network.
 
 ## Consequences
 
@@ -955,7 +936,7 @@ where they add information beyond what §A–§L already say:
   `recordContainerUsage` takes a SKU.
 - **ADR-0038**'s WAF exception grows by one path, `/telemetry/*`.
 - **ADR-0007**: no longer deviated from — `/grafana/*` gates through the same
-  Handsontable login broker as every other internal surface (K1, §H).
+  Handsontable login broker as every other internal surface (§H).
 - **ADR-0020**: more route patterns on the main hostname, still in deploy commands.
 - **Sentry** keeps uncaught errors (as §E.1 defines them) and spend alerts; handled
   diagnostics move and lose grouping; the per-event `environment` re-homing and the
@@ -967,7 +948,7 @@ where they add information beyond what §A–§L already say:
   synchronous acknowledgements, event-time timestamps, and one path for every record.
 - **New operational surface**: one image (Loki + Grafana), three EU buckets, two Durable
   Object classes, provisioning in git, a fixture set, one Slack webhook, one
-  `O11Y_SESSION_SECRET` (K1 — no Access application; `/grafana/*` gates through the
+  `O11Y_SESSION_SECRET` (no Access application; `/grafana/*` gates through the
   existing login broker instead).
 - **Accepted limits**: no browser-to-worker trace join and no traces in Grafana until
   `spanContext()`; no alert rules or durable UI state in Grafana; the first visit after a
@@ -975,10 +956,10 @@ where they add information beyond what §A–§L already say:
   until lifecycle; embeds have no docs page attribution; handled errors have no issue
   grouping; the non-EU items listed in §H.
 - **Cost**: ≈ $5–8/month target, $10 exit ceiling, reported separately, capped
-  separately, summed under the same product ceiling. **Measured (T03B, real platform,
+  separately, summed under the same product ceiling. **Measured (real platform,
   §A/§L.7): $0.21/month at 1× traffic, $0.33/month at 10×** — both far under target.
 - **Volume**: Analytics Engine and the raw Workers Logs pool both pass exit criterion 8 at
-  10× with real margin; the exported-logs allotment does not, measured (T11, §D) —
+  10× with real margin; the exported-logs allotment does not, measured (§D) —
   `docs/run-and-deploy.md`'s Launch plan carries the pre-launch action (a real Tier-2
   stdout measurement to confirm or refine the projection, and the `head_sampling_rate`
   fallback if it holds).

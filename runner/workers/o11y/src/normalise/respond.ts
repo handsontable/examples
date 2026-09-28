@@ -1,25 +1,22 @@
 // The one place every route handler goes to answer a request and, in the
-// same call, write the `o11y.ingest` Analytics Engine point ADR §B.5 requires
-// ("every drop writes an `o11y.ingest` point with its reason") and §B.2
-// requires for an accepted/duplicate batch. Centralising this is also what
-// makes exit criterion 4 provable: a batch with N accepted and M duplicate
-// records writes exactly one `accepted` point (count=N) and one `duplicate`
-// point (count=M) — never one point per record, which would make "the same
-// export body delivered twice … produces one copy" hard to distinguish from
-// "…produces one point per record, indistinguishable from N separate
-// deliveries" in a query (T02-D, see the task Outcome).
+// same call, write the `o11y.ingest` Analytics Engine point ADR §B.5
+// requires ("every drop writes an `o11y.ingest` point with its reason")
+// and §B.2 requires for an accepted/duplicate batch. Centralising this is
+// also what makes ADR-0041 §L.4 provable: a batch with N accepted and M
+// duplicate records writes exactly one `accepted` point (count=N) and one
+// `duplicate` point (count=M) — never one point per record, which would
+// make "delivered twice produces one copy" indistinguishable from "N
+// separate deliveries" in a query.
 
 import { toAePoint, type CommonResourceAttrs } from "@handsontable/demo-runtime/telemetry";
 import type { Env } from "../env.js";
 import type { GateDrop } from "../gates/types.js";
 import { writePoint } from "./points.js";
 
-/** `o11y.ingest`'s own emitter identity (§5: "Emitted by: o11y worker") — not
- *  derived from the request, always this Worker's own `service.*`.
- *  `SERVICE_VERSION` is a T02 addition to `wrangler.jsonc`'s `vars` (see the
- *  task Outcome): nothing else needed the o11y worker's own deploy identity
- *  before this metric did. Falls back to `"dev"` under `wrangler dev`, where
- *  no deploy script sets it. */
+/** `o11y.ingest`'s own emitter identity (§5: "Emitted by: o11y worker") —
+ *  not derived from the request, always this Worker's own `service.*`.
+ *  Falls back to `"dev"` under `wrangler dev`, where no deploy script sets
+ *  `SERVICE_VERSION`. */
 export function o11ySelfIdentity(env: Env): CommonResourceAttrs {
   return {
     service_name: "demos-o11y",
@@ -44,12 +41,12 @@ export function respondDrop(env: Env, ctx: ExecutionContext, drop: GateDrop, byt
     ),
   );
   const headers: Record<string, string> = { ...JSON_HEADERS };
-  // Round 10: a 429 without `Retry-After` left Faro guessing its back-off.
+  // A 429 without `Retry-After` leaves Faro guessing its back-off.
   if (drop.retryAfterSeconds !== undefined) headers["retry-after"] = String(drop.retryAfterSeconds);
   return new Response(JSON.stringify({ error: drop.reason }), { status: drop.status, headers });
 }
 
-/** One dropped record inside an otherwise-accepted batch (T00-D10: a
+/** One dropped record inside an otherwise-accepted batch (a
  *  client-controlled `outcome`/`reason`/`item.type` that fails `toAePoint`'s
  *  or `faroItemToRecord`'s runtime validation) — the batch itself still
  *  answers `2xx` for its other records; this only accounts the one item. */
@@ -68,14 +65,9 @@ export function recordInvalidItem(env: Env, ctx: ExecutionContext, detail: strin
 
 /** One well-formed record dropped only for being over `INBOX_RECORD_MAX_BYTES`
  *  (256 KB, ADR §B.2 step 1) inside an otherwise-accepted batch — distinct
- *  from {@link recordInvalidItem} (fix round, I3): the task's own Scope text
- *  ("drop records over 256 KB") and the doc comment on `otlp.ts#OtlpProcessResult`
- *  both already called this `reason=size`, but the route handler was writing
- *  it through `recordInvalidItem` (`reason: "invalid_item"`) instead — a real
- *  observability gap, since an operator querying `o11y.ingest` by
- *  `reason="size"` to watch for oversized payloads would have seen nothing.
- *  Used by both the OTLP and Faro ingest paths (I2 added the Faro-side size
- *  check this shares with). */
+ *  from {@link recordInvalidItem} so an operator querying `o11y.ingest` by
+ *  `reason="size"` to watch for oversized payloads actually sees something.
+ *  Used by both the OTLP and Faro ingest paths. */
 export function recordOversizeDrop(env: Env, ctx: ExecutionContext, detail: string): void {
   writePoint(
     env,

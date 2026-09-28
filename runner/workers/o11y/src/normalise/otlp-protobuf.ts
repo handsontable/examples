@@ -1,12 +1,10 @@
 // Hand-rolled OTLP `ExportLogsServiceRequest` protobuf decoder, wire-primitive
 // only (`@bufbuild/protobuf/wire`'s `BinaryReader`, no generated/reflective
-// message types — T00's pinned choice, see its task Outcome: `protobufjs`'s
-// reflective decode path uses `new Function(...)`, which Workers disallows by
-// default). Decodes into the same flat shape `otlp-json.ts` produces from the
-// JSON variant, so `normalise/otlp.ts` has one shared "what to do with a
-// decoded ResourceLogs" step regardless of which wire format arrived — the
-// sandbox probe was meant to observe which one Cloudflare's own log export
-// actually sends (see this task's Outcome for what the probe recorded).
+// message types: `protobufjs`'s reflective decode path uses `new
+// Function(...)`, which workerd disallows). Decodes into the same flat
+// shape `otlp-json.ts` produces from the JSON variant, so `normalise/otlp.ts`
+// has one shared "what to do with a decoded ResourceLogs" step regardless
+// of which wire format arrived.
 //
 // Proto shapes decoded (github.com/open-telemetry/opentelemetry-proto,
 // `opentelemetry/proto/{logs,common,resource}/v1`), only the fields this
@@ -23,12 +21,12 @@
 //   AnyValue                 { string string_value = 1; bool bool_value = 2; int64 int_value = 3;
 //                              double double_value = 4; bytes bytes_value = 7; }  (oneof)
 //
-// T02-D — only scalar `AnyValue` kinds are decoded to a string (see the task
-// Outcome): `array_value`/`kvlist_value` (nested `AnyValue` collections) are
-// rendered as `"[unsupported: array]"`/`"[unsupported: kvlist]"` rather than
-// recursively decoded — no fixture or probe capture observed a nested value
-// under `hot.*`/`service.*`/`deployment.*` (the only attributes this
-// contract keeps), and every allowlisted key is a plain string by contract.
+// Only scalar `AnyValue` kinds are decoded to a string:
+// `array_value`/`kvlist_value` (nested `AnyValue` collections) are rendered
+// as `"[unsupported: array]"`/`"[unsupported: kvlist]"` rather than
+// recursively decoded — no captured export observed a nested value under
+// `hot.*`/`service.*`/`deployment.*` (the only attributes this contract
+// keeps), and every allowlisted key is a plain string by contract.
 
 import { BinaryReader } from "@bufbuild/protobuf/wire";
 

@@ -129,7 +129,7 @@ session bypass, contract §10, `workers/o11y/src/gates/session.ts#verifySession`
 credential), and `SLACK_WEBHOOK_URL` pointed at the local capture server
 (`http://localhost:4210/slack` by default).
 
-`O11Y_EXPORT_SECRET` and `SENTRY_HOOK_SECRET` (fix round R4, F21) are filled
+`O11Y_EXPORT_SECRET` and `SENTRY_HOOK_SECRET` are filled
 in separately, on **every** `dev.mjs --tier=full` run, not only a fresh
 bootstrap: whichever of the two lines is still declared empty gets a fresh,
 local-only random value (`ephemeralSecret()` — a 32-byte hex string, the same
@@ -231,7 +231,7 @@ one 100-per-60s bucket across the whole machine. Several parallel test
 browsers (or tabs) can burst past it and get `429`s, and a beacon dropped at
 the gate never reaches Loki — expect gaps, not a bug, when running
 multi-browser local traffic. Production has a real per-visitor
-`cf-connecting-ip`, so this is local-only (F29).
+`cf-connecting-ip`, so this is local-only.
 
 **Local Slack alerts.** `dev:full` starts
 `node scripts/o11y-slack-capture.mjs --port <O11Y_SLACK_CAPTURE_PORT>` — a
@@ -267,10 +267,10 @@ several triggers fires, so the `curl` forms above are simpler.)
 dashboard for API-worker lines, authoring/embed browser errors, and a
 free-text/`cf.ray`/`session.id`/demo-id search across every service in one
 place — it's linked from the Runner overview and Observability self
-dashboards too. (R3 F10: the same dashboard's `hot_surface="demo-runtime"`
+dashboards too. (The same dashboard's `hot_surface="demo-runtime"`
 panel carries no message text. `reportDemoEvent` files the preview relay as
 a `preview.runtime_error` count metric (a Faro measurement, `toFacade` →
-`telemetry.metric` → `pushMeasurement`) — as of the F18 ruling above (§6),
+`telemetry.metric` → `pushMeasurement`) — per the ruling above (§6),
 every measurement is Analytics-Engine-only, so this produces no Loki line
 at all any more, not even a count-only one. The one demo-runtime Loki line
 that still exists is the Tier-1 compile-failure branch, whose message is
@@ -435,15 +435,15 @@ instead — don't move them back into `wrangler.jsonc`.
 
 **Docker memory.** A Tier-2 load test that fills the real pool (up to 10 containers) plus
 ClickHouse needs more than Docker Desktop's default 8 GB — ClickHouse itself was OOM-killed
-at 8 GB during one such test (F36). Raise Docker's memory limit before running one.
+at 8 GB during one such test. Raise Docker's memory limit before running one.
 
 **Host sleep.** Restart `dev:full` if the laptop has been asleep for a while — `workerd`'s
 own alarms fire late once the host wakes, and the o11y worker can stop answering (every
-route times out, no error) until the stack is restarted (F31).
+route times out, no error) until the stack is restarted.
 
 **`at_capacity`.** Local `wrangler dev` does not enforce `containers[].max_instances`, so
 `at_capacity` and its alert can only be produced and checked on the sandbox/production
-account (F36) — never expect them to fire locally, however many sessions you open.
+account — never expect them to fire locally, however many sessions you open.
 
 ## Deploy (main Handsontable account)
 
@@ -558,7 +558,7 @@ instead (the `smoke` job).
 > History: an earlier pair of workflows, `deploy-runner-authoring.yml` and
 > `deploy-runner-api.yml`, did the same two deploys separately; they were
 > merged into `master.yml` so a single push range's `changes` job can gate a
-> third deploy (o11y, T10) off the same diff without a third redundant
+> third deploy (o11y) off the same diff without a third redundant
 > checkout+diff. There is no dashboard Git integration (Cloudflare Workers
 > Builds) — that requires one-time setup by someone with Cloudflare access and
 > silently deploys nothing until then; GitHub Actions needs only the existing
@@ -590,13 +590,13 @@ the "See in documentation" link.
   behind `E2E_STARTER_MATRIX=1`) boots every starter at every supported
   Handsontable major against a live instance — not part of CI, run manually.
   See `docs/starter-compat-matrix.md`.
-- **`e2e-telemetry`** (T10): builds the authoring app a SECOND time, with
+- **`e2e-telemetry`**: builds the authoring app a SECOND time, with
   `VITE_TELEMETRY_LOCAL=1` (contract §10), and runs
   `E2E_TELEMETRY=1 pnpm e2e e2e/telemetry-faro.spec.ts e2e/example-analytics.spec.ts`
   — both specs are self-contained (their own preview server, `page.route`
   interception of `/telemetry/collect`, no o11y worker or API worker needed),
   so they fit the deterministic PR suite.
-- **`e2e-o11y-local.yml`** (R1-followups): `e2e/telemetry-metrics.spec.ts`
+- **`e2e-o11y-local.yml`**: `e2e/telemetry-metrics.spec.ts`
   (`E2E_LIVE=1` + `E2E_TELEMETRY=1`) and `e2e/o11y-local.spec.ts`
   (`E2E_O11Y_LOCAL=1`) both need infrastructure the per-PR `ci.yml` suite
   should not own on every PR — a real local API worker with a live Tier-2
@@ -630,7 +630,7 @@ read from committed `.env.production`. A post-deploy smoke check verifies
 `demos.handsontable.com` serves the freshly built bundle.
 `workflow_dispatch`'s `deploy_authoring` checkbox allows a manual run.
 
-**Source maps (T10, ADR §C.3).** The `build` job's authoring build step passes
+**Source maps (ADR §C.3).** The `build` job's authoring build step passes
 `SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` (repo secret + vars) and
 `VITE_SENTRY_SCOPE: full` — those three secrets present is what
 `apps/authoring/vite.config.ts` reads as "this is the real production build",
@@ -749,9 +749,8 @@ below for why.
 
 Everything in this section is done once, by hand, against the real Cloudflare
 account, before the first `master.yml` run that touches `runner/workers/o11y/**`
-can work end to end. **T10 does not run any of it** — see the task's own "Out"
-line; this is the checklist for whoever performs the actual production launch
-(T11). Every `wrangler` command below needs `CLOUDFLARE_API_TOKEN` (or an
+can work end to end. CI does not run any of it — this is the checklist for
+whoever performs the actual production launch. Every `wrangler` command below needs `CLOUDFLARE_API_TOKEN` (or an
 authenticated `wrangler login`) and `-J eu`/`--jurisdiction eu` where shown —
 the o11y buckets are all EU (contract §2).
 
@@ -782,12 +781,11 @@ Dashboard → **R2 → Manage R2 API Tokens → Create API Token**, scope
 `handsontable-demos-o11y-maps` — the same "one bucket, nothing else" shape as
 the Loki token in step 3 below, and for the same reason: the only thing that
 ever needs to write here is `master.yml`'s own source-map upload step
-(`docs/run-and-deploy.md` §"Source maps (T10, ADR §C.3)" above), and it has
+(`docs/run-and-deploy.md` §"Source maps (ADR §C.3)" above), and it has
 no business being able to touch the inbox or Loki buckets, let alone anything
-outside this account's o11y resources. Review finding I1 (T10's fix round):
-this step used to piggyback on the account-wide `CLOUDFLARE_API_TOKEN`
-instead, widened with a blanket R2: Edit grant — replaced with this
-bucket-scoped credential so that token never needs R2 access at all.
+outside this account's o11y resources. This bucket-scoped credential means
+`CLOUDFLARE_API_TOKEN` never needs R2 access at all, rather than piggybacking
+on that account-wide token with a blanket R2: Edit grant.
 
 Add the two values as **repository** secrets (GitHub → repo **Settings →
 Secrets and variables → Actions → New repository secret**), not Worker
@@ -839,7 +837,7 @@ cd workers/o11y
 npx wrangler secret put O11Y_EXPORT_SECRET   # generate with `openssl rand -hex 32`, never print it
 ```
 
-**Facts pinned by T02's real sandbox-probe capture (see its Outcome), not
+**Facts pinned by a real sandbox-probe capture, not
 assumed:** the export is always `Content-Type: application/json`,
 `Content-Encoding: gzip` — Cloudflare has never been observed sending
 protobuf, so the ingest route does not need to handle it. `service.version` is
@@ -849,8 +847,7 @@ protobuf, so the ingest route does not need to handle it. `service.version` is
 `cloudflare.ray_id`, not a resource attribute. Do **not** enable a trace
 destination — contract §1: "There is no trace route" (ADR §C.4).
 
-**One more fact, pinned by T03B's own real captured export (answering the
-question T02 and T03 both left open):** a Worker's own `console.log(JSON.stringify(...))`
+**One more fact, pinned by a real captured export:** a Worker's own `console.log(JSON.stringify(...))`
 line (`workers/api/src/telemetry/lines.ts`'s structured request/error lines)
 arrives through this export as **opaque body text** — `body.stringValue` is
 the raw JSON string, and the record's own `attributes` carry only
@@ -863,7 +860,7 @@ crafted body cannot spoof a real label. Nothing to configure here; recorded
 so a future change to `lines.ts`'s own JSON shape does not accidentally
 reintroduce a field this parser does not expect.
 
-> ⚠️ The dashboard's create/patch response for a destination has, in T02's own
+> ⚠️ The dashboard's create/patch response for a destination has, in a real
 > probe session, twice echoed the export secret back in plaintext inside
 > `configuration.destination_conf` (not `configuration.headers`, which IS
 > redacted) — never paste that response into a shared terminal, log, or
@@ -873,9 +870,8 @@ reintroduce a field this parser does not expect.
 
 ### 5. `O11Y_SESSION_SECRET` for `/grafana/*`
 
-**No Cloudflare Access application is needed.** K1 (the controller decision
-from the broker/Grafana feasibility investigation)
-replaced the Access gate with the Handsontable login broker (ADR-0007) — the
+**No Cloudflare Access application is needed.** The gate is the
+Handsontable login broker (ADR-0007) — the
 same broker `/admin` and every other internal surface already sign in
 through. A callback page under `/grafana/_o11y/` reads the broker's
 fragment token once, and the o11y worker mints its own signed session
@@ -898,13 +894,11 @@ npx wrangler secret put O11Y_SESSION_SECRET   # generate with `openssl rand -hex
 `LOGIN_BROKER_URL` needs no dashboard step either — it is a public var,
 already the real broker URL in `wrangler.jsonc`'s `vars` block
 (`https://mcp-auth-proxy-j0tb.onrender.com`, the same value
-`workers/api/wrangler.jsonc` uses). Before K1 landed, the task's dispatcher ran the real
-production probe by hand —
+`workers/api/wrangler.jsonc` uses). A real production probe by hand —
 `curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' 'https://mcp-auth-proxy-j0tb.onrender.com/broker/login?return_to=https%3A%2F%2Fdemos.handsontable.com%2Fgrafana%2F_o11y%2Fcallback%3Fn%3Dx'`
-— and confirmed a `302` to Google (2026-09-24), so the callback host is allowed today;
-the K1 implementer separately re-verified the same round trip end-to-end against a
-*stubbed* local broker only ("Real local run", K1's own fix-round notes), which
-proves the Worker's own code, not the real broker's live
+— confirmed a `302` to Google (2026-09-24), so the callback host is allowed today; a
+separate local round trip against a *stubbed* broker proves the Worker's own code,
+not the real broker's live
 configuration. If the production behaviour ever changes, re-run the curl command above
 before assuming it still holds, and ask the broker's owners (`handsontable/hot-mcp`) to
 add `demos.handsontable.com` back to `BROKER_ALLOWED_RETURN_HOSTS` if it does not.
@@ -912,10 +906,10 @@ add `demos.handsontable.com` back to `BROKER_ALLOWED_RETURN_HOSTS` if it does no
 **The broker-wide risk this gate inherits, not fixes (DEV-3088).** The broker's
 `return_to` allowlist is host-suffix-only, so it also admits anonymous Tier-2 preview
 hosts (`*.demos.handsontable.com`) — anyone can harvest another team member's 1h broker
-token by sending them a crafted login link. Before K1, a stolen token could not reach
-Grafana at all (`ACCESS_AUD` was `""`, so Access refused everything). **K1 widens
-DEV-3088's blast radius**: a stolen token can now be exchanged for a Grafana session.
-Fix round (security review finding I3) narrows that widening — the session is capped at
+token by sending them a crafted login link. Without this gate, a stolen token could not
+reach Grafana at all (`ACCESS_AUD` was `""`, so Access refused everything); this gate
+widens DEV-3088's blast radius: a stolen token can now be exchanged for a Grafana
+session. The session is capped at
 `min(now + 12h, brokerTokenExp)` instead of a flat 12h, so the exposure a stolen token
 buys is close to the token's own 1h lifetime, not 11 hours longer — but does not close
 it: DEV-3088 itself remains open and is tracked separately, not by this gate.
@@ -939,16 +933,16 @@ passed to the box as `GrafanaBox`'s ClickHouse datasource credential.
 
 `RATE_LIMITER` needs no dashboard step — a Workers rate-limiting binding's
 `namespace_id` (`1001`, already in `wrangler.jsonc`) is a self-chosen scoping
-id, not a Cloudflare-provisioned resource (T02-D8); it is created the moment
+id, not a Cloudflare-provisioned resource; it is created the moment
 the Worker deploys with that binding present. `O11Y_STOP_GRACE_SECONDS` also
 needs no setup here — it is not a Worker var at all, but a hardcoded container
-`envVars` value in `box.ts` (120s in production; T03-D4).
+`envVars` value in `box.ts` (120s in production).
 
 ### 7. Slack webhook
 
 Slack → an **Incoming Webhook** app pointed at the alert channel. Paste the
 webhook URL into `SLACK_WEBHOOK_URL` (step 6). The o11y worker posts one line
-per alert-rule fire/resolve transition (`slackPoster`, T04) and no-ops
+per alert-rule fire/resolve transition (`slackPoster`) and no-ops
 silently without this secret — alerts still land as InboxWriter state and
 Grafana annotations either way, just without the Slack ping.
 
@@ -977,7 +971,7 @@ committed: `GITHUB_OIDC_REPOSITORY` (`handsontable/examples`) and
 `workers/o11y/wrangler.jsonc`'s `vars` block. **If `master.yml` is ever renamed
 or moved, or the default branch changes, `GITHUB_OIDC_WORKFLOW_REF` must be
 updated in the same PR** — `workers/o11y/src/gates/oidc.ts` checks the OIDC
-token's `workflow_ref` claim against it with an exact string match (T02-D16),
+token's `workflow_ref` claim against it with an exact string match,
 and a stale value makes every CI deploy event fall through to the
 `O11Y_EXPORT_SECRET` fallback (harmless, since that secret is also configured,
 but worth knowing rather than discovering silently).
@@ -1025,7 +1019,7 @@ The same order applies to a throwaway sandbox probe of either worker: stand
 up the probe o11y worker (or a stub) before the probe API worker if the
 probe exercises the mutual binding at all.
 
-## Launch plan (ADR-0041 §L, T11)
+## Launch plan (ADR-0041 §L)
 
 The order above ("First deploy, in order") is the mechanical dependency; this
 section is the gate around it — what must be true before deploying at all,
@@ -1037,39 +1031,37 @@ what to check right after, and the two decisions ("flip the Sentry scope",
 These are carried from the tasks that found them, not newly discovered here:
 
 - **`O11Y_SESSION_SECRET` must be set (at least 32 bytes, `openssl rand -hex 32`) before
-  the first real deploy** (K1, "One-time setup" step 5 above). Until it is,
+  the first real deploy** ("One-time setup" step 5 above). Until it is,
   `verifySession`/`verifyLoginCookie` both fail closed on every `/grafana/*` request
   (a navigation redirects to `/grafana/_o11y/login`, everything else gets 401) — but that
   login page itself answers a plain `500` rather than completing (`grafana/login.ts`'s own
   pre-flight check), so Grafana is simply unreachable, not silently degraded. There is no
-  Access application to create; Cloudflare Access was removed from this gate entirely
-  (K1).
-- **The Grafana session is capped at the broker token's own lifetime, not a flat 12h**
-  (K1 fix round, security review finding I3): before this fix, a stolen 1h broker token
-  (DEV-3088, the broker-wide `return_to` suffix-allowlist risk) could have been turned
+  Access application to create; Cloudflare Access was removed from this gate entirely.
+- **The Grafana session is capped at the broker token's own lifetime, not a flat 12h.**
+  A stolen 1h broker token
+  (DEV-3088, the broker-wide `return_to` suffix-allowlist risk) could otherwise be turned
   into an unrevocable 12h Grafana session — 11 extra hours of exposure per stolen token,
   on top of DEV-3088's existing blast radius. `gates/session.ts#computeSessionTtlSeconds`
-  now caps every session at `min(now + 12h, brokerTokenExp)`, falling back to 1h when the
-  token carries no readable `exp` — this narrows, but does not eliminate, what K1 adds to
-  DEV-3088's blast radius, which is still open and tracked separately.
-- **T09-D5's "no per-panel ClickHouse `database` field" decision has not been checked
+  caps every session at `min(now + 12h, brokerTokenExp)`, falling back to 1h when the
+  token carries no readable `exp` — this narrows, but does not eliminate, DEV-3088's
+  blast radius, which is still open and tracked separately.
+- **The "no per-panel ClickHouse `database` field" decision has not been checked
   against the real Analytics Engine SQL API** — only local ClickHouse and AE's documented
   SQL surface were checked. If a query returns "unknown table" in production Grafana where
-  it worked locally, this is the first thing to check (T09's own Outcome flags it too).
+  it worked locally, this is the first thing to check.
 - **The `aws s3 cp` step for the R2 source-map upload (`master.yml`'s `build` job) has never
-  run against a real R2 credential** (T10's own Outcome) — only simulated with `wrangler`
+  run against a real R2 credential** — only simulated with `wrangler`
   replaced by `echo`. Watch the first real `build` job's logs for this step specifically.
 - **The deploy-event steps' `Current Version ID:` grep has never run against a real
-  (non-dry-run) deploy** (T10) — an empty capture degrades to an empty `cf_version_id`
-  rather than failing the job. B-I1 (focused review fix round) added a mitigation, not a
-  fix of the underlying grep: `master.yml` now emits `::warning::` when the parse comes
+  (non-dry-run) deploy** — an empty capture degrades to an empty `cf_version_id`
+  rather than failing the job. `master.yml` emits `::warning::` when the parse comes
   back empty, and the o11y worker's ingest path (`normalise/deploy.ts`) marks the record
   with `cf_version_id_missing: true` in its body (never rejecting it — the deploy already
   shipped) plus a `console.warn`, so the gap is visible in the Actions run and queryable in
   Loki even if nobody is watching CI logs in real time. Spot-check the first real deploy's
   `/telemetry/deploy` payload (visible as a Runner-overview annotation, or in `o11y worker
   log stream`) for a real, non-empty `cf_version_id` regardless.
-- **The export destination's forced-timeout behaviour is unmeasured** (T02's own probe
+- **The export destination's forced-timeout behaviour is unmeasured** (the probe so far
   exercised a forced-500, not a hang) — if Cloudflare's log export ever stops making
   progress rather than erroring cleanly, that failure mode has no prior data point.
 - **`smoke`'s job (`master.yml`) has no `/telemetry/*` or `/grafana/*` coverage** — it only
@@ -1083,49 +1075,40 @@ this task could not test at all (calendar time, real Cloudflare Analytics Engine
 credentials). None of it blocks the deploy — it confirms the deploy did what the local
 walkthrough already showed.
 
-1. **Retired (F33) — needs a new probe.** This item used to send a malformed
-   `PATCH /api/demos/:id` (your own login's bearer token, a body that isn't valid JSON) and
-   expect the fetch catch-all's structured error line + a real Sentry event (exit criterion
-   11's Worker leg). That was already the *second* probe here: `POST /api/session` was the
-   original, retired when the session routes got the same 400-by-design fix (that route is
-   public/unauthenticated, so a malformed body there used to reach the catch-all as an
-   uncaught 500, polluting `api.request`'s 5xx rate and the `api-5xx-rate` alert).
-   `PATCH /api/demos/:id` was the replacement because authentication and the ownership check
-   both ran before the body was ever parsed, so a malformed body threw past them with
-   nothing written. F33 closed that same gap on `POST /api/demos` and `PATCH /api/demos/:id`
-   too (both now answer 400 by design, same helper/shape as the session fix) — so this probe
-   no longer reaches the catch-all either, and exit criterion 11's Worker leg has no
-   post-deploy probe left. The only `request.json()` call sites in `index.ts` that still
-   throw on a malformed body sit behind `authenticateService()` (the MCP routes,
-   `POST /api/mcp/demos` / `PATCH /api/mcp/demos/:id`) — usable only with the MCP's shared
-   service secret, not an operator's own bearer token, so they are not a drop-in replacement
-   for "with your own login". Needs a new Worker-tenant probe (or a change to this smoke
-   check's own expectation) before exit criterion 11 can be re-verified this way again.
-2. **Exit criterion 15, worker tenant, against a real Cloudflare export** — T02's own probe
-   already did this once (sandbox account); repeat once against the production o11y worker's
+1. **Retired — needs a new probe.** A malformed `POST /api/session` or
+   `PATCH /api/demos/:id` request used to reach the fetch catch-all as an uncaught 500
+   (exit criterion 11's Worker leg), but every `request.json()` call site in `index.ts`
+   now answers 400 by design before the body is parsed. The only remaining call sites
+   that still throw on a malformed body sit behind `authenticateService()` (the MCP
+   routes) — usable only with the MCP's shared service secret, not an operator's own
+   bearer token, so they are not a drop-in replacement. Needs a new Worker-tenant probe
+   (or a change to this smoke check's own expectation) before exit criterion 11 can be
+   re-verified this way again.
+2. **Exit criterion 15, worker tenant, against a real Cloudflare export** — a sandbox probe
+   already did this once; repeat once against the production o11y worker's
    real Workers Logs export destination and confirm the same 7 labels + `cloudflare.ray_id`
    remap + `service.version` default.
 3. **Exit criterion 9 (idle tab)** — open `/grafana/*`, leave the tab genuinely idle (no
-   dashboard auto-refresh) for 16 minutes, confirm the box stops. Not tested by any task
-   with a real open tab; T01's own evidence used zero requests, not an idle tab.
-4. **Exit criterion 13 (retention)** — check T03B's own 1-day retention-clock test
-   (`t03-retention-clock-test/` prefix, `o11y-probe-t03-loki`, sandbox account): the two
+   dashboard auto-refresh) for 16 minutes, confirm the box stops. Not tested with
+   a real open tab so far; the existing evidence used zero requests, not an idle tab.
+4. **Exit criterion 13 (retention)** — check the sandbox account's 1-day retention-clock
+   test (`t03-retention-clock-test/` prefix, `o11y-probe-t03-loki`): the two
    objects should be gone and the lifecycle rule should still be listed. If more than a few
-   days have passed since T03B ran it, this has almost certainly already resolved either
+   days have passed since that probe ran, this has almost certainly already resolved either
    way — check R2's own lifecycle-rule application/audit log rather than re-deriving timing.
 5. **`alert-eval-error` never fires** in the real Observability-self dashboard for the first
    several `*/10` ticks — this is the production detector for an Analytics Engine SQL
    incompatibility (a query the AE SQL API rejects that local ClickHouse happily accepts,
    ADR §L's own named trap). If it fires, treat it as a real incompatibility, not noise.
 6. **Tier-2 container stdout volume, confirm against the real measurement.** Locally
-   (T11, a real Tier-2 session under `wrangler dev`): a Vite-family starter (`react-js`)
+   (a real Tier-2 session under `wrangler dev`): a Vite-family starter (`react-js`)
    logs 12 lines at boot and 2 lines per 60-second keepalive poll (the Sandbox SDK's own
    structured logging of its health checks, not the dev server's own output); a
    slower-booting starter (`angular`) logs 22 lines at boot, same 2-per-poll rate
    afterward. Projected at the ADR's own required 10× headroom (`docs/adr/
    0041-observability-stack.md` §D "Measured"), this pushes the **exported-logs**
-   allotment (not the raw Workers Logs pool, which still passes) over half. **Fix round
-   D-I6:** the Observability-self dashboard has no panel for exported-log volume, and
+   allotment (not the raw Workers Logs pool, which still passes) over half. The
+   Observability-self dashboard has no panel for exported-log volume, and
    cannot get one cheaply — `o11y.ingest` (the only ingest-side AE point) aggregates one
    point per *request*, with no route/tenant dimension to split "Tier-2 container stdout"
    out from everything else the export destination carries. Read Cloudflare's own
@@ -1139,9 +1122,9 @@ walkthrough already showed.
    if it confirms the projection, lower `head_sampling_rate` (ADR §D's own named
    fallback) before the pool crosses half — do not wait for it to actually breach the
    10M/month allotment.
-7. **Exit criterion 5 (symbolication CPU/memory, ADR §L).** Fix round D-I5: every
-   measurement so far (§L, T11) is a Node-process proxy — no task had real Workers
-   isolate profiling access, which is exactly the "stays Proposed" blocker the ADR's
+7. **Exit criterion 5 (symbolication CPU/memory, ADR §L).** Every
+   measurement so far (§L) is a Node-process proxy — no real Workers
+   isolate profiling access has been available, which is exactly the "stays Proposed" blocker the ADR's
    own header names. Criterion 5's own wording: "an exception from a real `vite build`
    resolves to `src/…` file and line using at most 500 ms CPU and 64 MB of isolate
    memory; Babel-chunk frames are skipped, not parsed." This is a **Faro/browser**
@@ -1182,7 +1165,7 @@ walkthrough already showed.
 
    Open any Analytics-Engine-datasource panel in the **production** Grafana (`/grafana/`,
    not the local stack) and confirm it returns real rows rather than an "unknown table" SQL
-   error — T09-D5's "no per-panel ClickHouse `database` field" decision was checked against
+   error — the "no per-panel ClickHouse `database` field" decision was checked against
    local ClickHouse and AE's documented SQL surface only, never a live query (see the "Known
    gaps" note above). Separately, confirm the nightly `example_daily` rollup (ADR-0042,
    `cron:nightly:rollup`) is actually landing rows in D1:
@@ -1197,7 +1180,7 @@ walkthrough already showed.
    legitimately add none — expect rows, not necessarily one per calendar day, once at least one
    nightly cron (04:17 UTC) has run since deploy.
 9. **`at_capacity` and its alert.** Local `wrangler dev` does not enforce
-   `containers[].max_instances` (F36) — every session request succeeds locally regardless of
+   `containers[].max_instances` — every session request succeeds locally regardless of
    how many are already "awake", so `at_capacity`/`AT_CAPACITY_CODE` and the capacity-related
    alert can only be produced and confirmed against the real sandbox/production account.
    Fill the live pool (real Tier-2 sessions, one per framework, up to `max_instances`) and
@@ -1219,7 +1202,7 @@ projection) — but against real production data, not the local stack:
    after at least a few days of production traffic, are under half of every allotment (§D)
    the dashboard covers, matching or beating the sandbox-measured figures (ADR-0041 §L,
    criteria 7–8: $0.21/month at 1× traffic, $0.33/month at 10×, both far under the $10
-   ceiling). **Fix round D-I6:** the exported-logs allotment specifically is NOT on that
+   ceiling). The exported-logs allotment specifically is NOT on that
    dashboard (see the post-deploy smoke's item 6 above for why) — read it from
    Cloudflare's own Workers → Observability → Usage view instead, same place, same
    number, this time "at least a few days" rather than "one day." If real Tier-2 stdout
@@ -1227,29 +1210,29 @@ projection) — but against real production data, not the local stack:
    criterion 8, the one criterion that stayed Mixed rather than passing), do not flip
    the scope until the fallback (lowering `head_sampling_rate`, ADR §D's own named
    escape hatch) has brought it back under half.
-4. **The API-side new-fingerprint feed (C-I2) is confirmed live in production, not
+4. **The API-side new-fingerprint feed is confirmed live in production, not
    just correctly gated.** ADR §E.1: the exact new-fingerprint alert (§F.3) is what
    replaces Sentry's own "new issue" signal for a handled-error class once the scope
    narrows — if this feed is dark, an API-side handled-error class that goes from zero
    to happening gets NO signal at all under `uncaught` (Sentry stops seeing it, and
    nothing tells the operator a new one started). This is **not** itself gated by the
    `SENTRY_SCOPE` flip — the o11y worker's `*/10` new-fingerprint cron runs
-   unconditionally (ADR §M's C-I2 bullet) — so confirm it separately, before relying on
+   unconditionally (ADR §M) — so confirm it separately, before relying on
    it as the flip's replacement signal: trigger a real, once-off `reportDiagnostic` call
    in production (the `npm-registry:version-exists`/`npm-registry:versions` probe paths
    are the ADR's own named example) and confirm its `hot.fingerprint` appears as a new
    `fp:` entry and a Slack "new fingerprint" post, not silently dropped. This needs BOTH
-   fix-round findings **M2** (real `service.name` normalised to the contract's
-   `demos-api`) and **N1** (the shared fingerprint validator accepts a `:`-joined
-   `context`) — either one reverted or regressed makes this feed a silent no-op again.
+   the real `service.name` normalised to the contract's `demos-api`, and the shared
+   fingerprint validator accepting a `:`-joined `context` — either one reverted or
+   regressed makes this feed a silent no-op again.
    Also confirm, separately, that no unrelated Tier-2 SSR authored `console.log` is
-   producing spurious `fp:` entries of its own (finding N6, ADR §M — an accepted,
-   bounded residual risk, Slack noise only, not a blocker, but worth a quick look at the
+   producing spurious `fp:` entries of its own (ADR §M's known, accepted,
+   bounded residual risk — Slack noise only, not a blocker, but worth a quick look at the
    Slack channel's actual traffic before trusting this as a clean signal).
 
 **Who flips it**: whoever owns the o11y stack operationally at launch time (the same person
 or team who would triage an `alert-eval-error` or a stale-heartbeat page) — a role, not a
-name fixed here; confirm with the user before the first flip. D-M12 fix round: the
+name fixed here; confirm with the user before the first flip. The
 mechanism is not a `--var` flag pair — both names are already committed config, edited in
 place and redeployed/rebuilt: `SENTRY_SCOPE` is the `"full"` var in
 `workers/api/wrangler.jsonc`, flipped to `"uncaught"` and deployed with the API worker;
@@ -1312,8 +1295,8 @@ today's dashboards, saved searches and on-call habits keep working unchanged.
 `window.onerror`/`unhandledrejection`/`Sentry.ErrorBoundary`; Worker
 fetch-catch-all/DO alarms/cron/snapshot-job failures) plus the budget-alert
 `captureMessage` — everything else goes to o11y alone. **Do not flip this
-switch as part of T10 or any one-time setup step above** — see "Launch plan
-(ADR-0041 §L, T11)" above for the exact three conditions and who flips it; it
+switch as part of CI or any one-time setup step above** — see "Launch plan
+(ADR-0041 §L)" above for the exact three conditions and who flips it; it
 needs no revert plan of its own either way, since it only ever
 narrows Sentry, never widens it beyond what `reportingGate.ts`/`sentry-gate.ts`
 already allow.

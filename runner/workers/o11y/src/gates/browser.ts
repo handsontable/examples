@@ -29,7 +29,7 @@ export async function checkBrowserGates(req: Request, env: Env, maxBytes: number
 }
 
 /** ADR §B.5: "payload environment matches" — the body's own declared
- *  environment (Faro's `meta.app.environment`, set by `initTelemetry()`, T06)
+ *  environment (Faro's `meta.app.environment`, set by `initTelemetry()`)
  *  must agree with this Worker's `O11Y_ENV`. Checked after the body is parsed
  *  (host/env above only looks at headers), so it is a separate function, not
  *  part of `checkBrowserGates`. `undefined` (an item shape that never set it)

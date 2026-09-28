@@ -56,7 +56,7 @@ A third Worker, **`handsontable-demos-o11y`** (`workers/o11y/`), owns the
 host — `workers_dev: false`, `preview_urls: false` (contract §1: everything
 reaches it through the deploy script's `--routes` flags, never a Cloudflare
 subdomain). Full setup — buckets, lifecycle, secrets (`/grafana/*` gates through the
-Handsontable login broker, ADR-0007, K1 — not Cloudflare Access), the export
+Handsontable login broker, ADR-0007 — not Cloudflare Access), the export
 destination, deploy ordering — is in
 [run-and-deploy.md](run-and-deploy.md#one-time-setup); this is the
 resource inventory.
