@@ -682,7 +682,8 @@ export const REPORTER_SOURCE = `(function () {
 
   // A Tier-1 document is re-evaluated in place on every compile, so a typed line's
   // prefix runs would otherwise spend the whole budget before the finished line throws.
-  // Only the parent may reset it; the warning budget stays per page (breadcrumb trail).
+  // Only a reset from the parent is honoured (a demo can bypass the reporter anyway, so
+  // the parent's budget is the cap); the warning budget stays per page (breadcrumb trail).
   try {
     window.addEventListener("message", function (event) {
       try {

@@ -12,8 +12,8 @@ export type DemoMonitorKind = "error" | "rejection" | "console-error" | "console
 export type PreviewRuntimeErrorReason = "uncaught" | "console" | "network" | "stderr";
 
 /** The Faro exception record `name` a collapsed report becomes (Loki line
- *  `<name>: <shape>`). `console-warn` gets none — a warning is context,
- *  not a fault (DEV-2539), so it counts but opens no Loki "error" line. */
+ *  `<name>: <shape>`). `console-warn` gets none: it is not a runtime error
+ *  (see `REASON_BY_KIND`). */
 const RECORD_NAME_BY_KIND: Record<DemoMonitorKind, string | null> = {
   error: "DemoError",
   rejection: "DemoUnhandledRejection",

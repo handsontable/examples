@@ -195,7 +195,7 @@ interface CollapsedDemoEvent {
   attrs: HotAttrs;
   reason: string;
   fingerprint: string;
-  recordName: string | null;
+  recordName: string;
   shape: string;
 }
 
@@ -211,7 +211,6 @@ function emitCollapsedDemoEvent(event: CollapsedDemoEvent): void {
     { count: 1 },
     { ...event.attrs, reason: event.reason, fingerprint: event.fingerprint },
   );
-  if (event.recordName === null) return;
   const record = new Error(event.shape);
   record.name = event.recordName;
   record.stack = "";
@@ -310,7 +309,7 @@ function reportDemoEventUnguarded(
   // Into the edit-burst collapse, not straight to the facade, and before
   // either Sentry budget — a keystroke ladder must not drain the relay
   // budget before a later real error of the page load.
-  if (report.reason !== null) {
+  if (report.reason !== null && report.recordName !== null) {
     const fp = contractFingerprint(report.fingerprintContext, report.fingerprintMessage);
     const collapsed: CollapsedDemoEvent = {
       attrs: report.attrs,
