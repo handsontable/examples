@@ -73,6 +73,7 @@ import {
   previewMonitoring,
   reportDemoEvent,
   noteDemoEdit,
+  noteDemoPushOutcome,
   resetDemoEventCollapse,
   collapseCompileError,
   reportError,
@@ -2598,6 +2599,8 @@ function Authoring({
     wireRuntimeMetrics(runtime, { framework: entry.framework, versionRef: v.value.ref }, telemetry, {
       collapseCompileError,
     });
+    // An edit that re-runs nothing must not leave its burst without the running sandbox's errors.
+    if (runtime instanceof SandpackRuntime) runtime.onPushOutcome(noteDemoPushOutcome);
     const previewTracker = trackPreviewReady(
       runtime,
       {

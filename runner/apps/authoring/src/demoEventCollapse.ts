@@ -6,7 +6,9 @@
 // holding one report per key (§7 fingerprint) until `settleMs` after the
 // last edit, when the final run's reports emit once each. A compile failure
 // (`replacesRun`) drops the held reports and suppresses later non-compile
-// ones, so a syntax error counts as one `sandpack.compile_error`.
+// ones, so a syntax error counts as one `sandpack.compile_error`. An edit
+// that leaves the running sandbox unchanged (`pushOutcome("unchanged")`)
+// re-runs nothing, so the burst ends with the running sandbox's reports.
 //
 // Import-free, clock/timer injected, so `node --test` can pin this logic.
 
@@ -37,6 +39,10 @@ export interface ReportOptions {
   replacesRun?: boolean;
 }
 
+/** What the newest edit's push did: dispatched a new sandbox (`rerun`), or
+ *  found it identical to the running one and sent nothing (`unchanged`). */
+export type PushOutcome = "rerun" | "unchanged";
+
 export interface DemoEventCollapse<T> {
   /** An edit that re-runs the preview (a keystroke, a chat or Style-panel
    *  write, a file add/delete/rename). Opens or extends the burst. */
@@ -46,6 +52,10 @@ export interface DemoEventCollapse<T> {
    *  replaces everything held and suppresses the burst's later non-compile
    *  reports; outside a burst it is emitted at once like any other report. */
   report(key: string, item: T, opts?: ReportOptions): void;
+  /** The newest edit's push outcome (Tier 1 only). `rerun` starts a new
+   *  running sandbox; `unchanged` makes the burst's result the running
+   *  sandbox's not-yet-emitted reports, since no new run will replace them. */
+  pushOutcome(outcome: PushOutcome): void;
   /** Close the open burst now (emit what the last run reported). */
   flush(): void;
   /** A new preview mount: close the open burst for the outgoing preview,
@@ -67,12 +77,17 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
   /** The open burst's newest edit failed to compile: its reports are from
    *  code already typed past, until the next edit. */
   let runReplaced = false;
+  /** Reports of the running sandbox (since the last `rerun` or `reset`),
+   *  first one per key, with whether it has been emitted. */
+  let running = new Map<string, { item: T; emitted: boolean }>();
 
   // No `counted` check here: `report` does it for the direct path, and a held
   // key cannot already be counted — `counted` is cleared when the burst opens
   // and nothing is emitted until it closes.
   function emit(key: string, item: T): void {
     if (used >= ceiling) return;
+    const current = running.get(key);
+    if (current) current.emitted = true;
     counted.add(key);
     used += 1;
     opts.emit(item);
@@ -102,6 +117,9 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
       }, settleMs);
     },
     report(key, item, reportOpts) {
+      if (!reportOpts?.replacesRun && !running.has(key) && running.size < pendingMax) {
+        running.set(key, { item, emitted: false });
+      }
       if (counted.has(key)) return;
       if (timer === null) {
         emit(key, item);
@@ -116,10 +134,21 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
       if (pending.has(key) || pending.size >= pendingMax) return;
       pending.set(key, item);
     },
+    pushOutcome(outcome) {
+      if (outcome === "rerun") {
+        running = new Map();
+        return;
+      }
+      if (timer === null) return;
+      pending = new Map();
+      for (const [key, { item, emitted }] of running) if (!emitted) pending.set(key, item);
+      runReplaced = false;
+    },
     flush,
     reset() {
       flush();
       counted.clear();
+      running = new Map();
     },
   };
 }

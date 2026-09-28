@@ -327,6 +327,7 @@ export class SandpackRuntime implements DemoRuntime {
   private readonly compileTimingCbs = new Set<(e: SandpackCompileTimingEvent) => void>();
   private readonly compileErrorCbs = new Set<(e: SandpackCompileErrorEvent) => void>();
   private readonly bundlerUnreachableCbs = new Set<(e: SandpackBundlerUnreachableEvent) => void>();
+  private readonly pushOutcomeCbs = new Set<(outcome: "rerun" | "unchanged") => void>();
   /** When the compile currently in flight was dispatched to the bundler — either
    *  `loadSandpackClient`'s initial compile (mount) or `updateSandbox` (an edit or
    *  `reload()`). Cleared once the terminal message for it arrives. Only ever one
@@ -350,6 +351,10 @@ export class SandpackRuntime implements DemoRuntime {
    *  see the interface doc comment for what this covers. */
   onBundlerUnreachable(cb: (e: SandpackBundlerUnreachableEvent) => void): void {
     this.bundlerUnreachableCbs.add(cb);
+  }
+  /** See the interface doc. Fires for the newest push only, never for a failed transpile. */
+  onPushOutcome(cb: (outcome: "rerun" | "unchanged") => void): void {
+    this.pushOutcomeCbs.add(cb);
   }
 
   private resolveCompileTiming(outcome: "ok" | "error"): void {
@@ -839,7 +844,10 @@ export class SandpackRuntime implements DemoRuntime {
         //
         // `reload()` passes `force`, and its stamp guarantees a diff, so the refresh
         // button still re-runs the sandbox rather than being skipped here.
-        if (!opts.force && sameFiles(candidate, this.published)) return;
+        if (!opts.force && sameFiles(candidate, this.published)) {
+          for (const cb of this.pushOutcomeCbs) cb("unchanged");
+          return;
+        }
         // Recorded *after* the push, never before. `setupFrom` throws when the resolved
         // entry is transiently missing (mid-rename, the DEV-2130 guard), and a `published`
         // set ahead of that throw would claim the bundler holds a sandbox it never
@@ -853,6 +861,7 @@ export class SandpackRuntime implements DemoRuntime {
         this.compileDispatchedAt = performance.now();
         this.client.updateSandbox(setup, false);
         this.published = candidate;
+        for (const cb of this.pushOutcomeCbs) cb("rerun");
       })
       .catch((cause: unknown) => {
         /* mid-edit parse error — the user is still typing. Nothing reaches the bundler and

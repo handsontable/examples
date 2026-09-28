@@ -31,7 +31,7 @@ import {
 } from "./eventGate.js";
 import { resolveSentryScope, reportsDiagnosticToSentry } from "./sentryScope.js";
 import { demoEventReport, type DemoMonitorKind } from "./demoEventReport.js";
-import { createDemoEventCollapse } from "./demoEventCollapse.js";
+import { createDemoEventCollapse, type PushOutcome } from "./demoEventCollapse.js";
 import { tier2StderrReport } from "./tier2Report.js";
 import { telemetry } from "./telemetry/index.js";
 
@@ -244,6 +244,11 @@ export function collapseCompileError(emit: () => void): void {
  *  collapse, so this only arms a timer. */
 export function noteDemoEdit(): void {
   demoEventCollapse.noteEdit();
+}
+
+/** The Tier-1 runtime's push outcome for the newest edit (`onPushOutcome`). */
+export function noteDemoPushOutcome(outcome: PushOutcome): void {
+  demoEventCollapse.pushOutcome(outcome);
 }
 
 /** A preview is being torn down (example/version switch, remount) —

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { SandpackRuntime } from "../packages/runtime/dist/sandpack.js";
 import { isTranspileFailure, transpileFilesForParcel } from "../packages/runtime/dist/transpile.js";
 import { fingerprint, recordingTelemetry, toAePoint } from "../packages/runtime/dist/telemetry/index.js";
@@ -211,6 +212,8 @@ function ladderHarness() {
   };
   const { runtime, pushes } = mountedParcel();
   wireRuntimeMetrics(runtime, { framework: "javascript", versionRef: "18.0.0" }, telemetry, { collapseCompileError });
+  // Mirrors `App.tsx` → `sentry.ts#noteDemoPushOutcome`.
+  runtime.onPushOutcome((outcome) => collapse.pushOutcome(outcome));
   const points = (name) => telemetry.metrics.filter((m) => m.name === name);
   return { clock, telemetry, collapse, runtime, pushes, relayRuntimeError, points };
 }
@@ -271,4 +274,102 @@ test("a runtime JSON.parse SyntaxError stays a preview.runtime_error, never a co
 
   assert.equal(points("preview.runtime_error").length, 1);
   assert.equal(points("sandpack.compile_error").length, 0);
+});
+
+// ---- a throwing line typed key by key, as the code editor produces it -------
+
+/** The documents CodeMirror's `closeBrackets` produces while `line` is typed
+ *  one key at a time: an opener inserts its closer, and typing the closer
+ *  that is already next steps over it without changing the document. */
+function typedDocuments(line) {
+  const PAIRS = { "(": ")", "[": "]", "{": "}", "'": "'", '"': '"' };
+  const CLOSERS = new Set([")", "]", "}", "'", '"']);
+  let doc = "";
+  let cursor = 0;
+  const docs = [];
+  for (const ch of line) {
+    const next = doc[cursor];
+    if (CLOSERS.has(ch) && next === ch) {
+      cursor += 1; // steps over: no edit reaches the app
+      continue;
+    }
+    const insert = PAIRS[ch] && (next === undefined || /[\s)\]};:>]/.test(next)) ? ch + PAIRS[ch] : ch;
+    doc = doc.slice(0, cursor) + insert + doc.slice(cursor);
+    cursor += 1;
+    docs.push(doc);
+  }
+  assert.equal(doc, line, "guard: the typed document ends as the line itself");
+  return docs;
+}
+
+/** What the preview relays for a pushed sandbox: the pushed module is run
+ *  (timers fire at once) and its uncaught throw, if any, is the relay. */
+function runPushed(setup) {
+  const code = setup.files["/index.js"].code;
+  const sandbox = { setTimeout: (fn) => typeof fn === "function" && fn(), JSON, Error, console: { log() {} } };
+  try {
+    vm.runInNewContext(code, sandbox);
+    return null;
+  } catch (e) {
+    return `Uncaught ${e.name}: ${e.message}`;
+  }
+}
+
+const TYPED_THROWS = [
+  ["setTimeout(() => { throw new Error('typed runtime'); }, 100);", "Uncaught Error: typed runtime"],
+  ['setTimeout(() => JSON.parse("{typed"), 50);', `Uncaught SyntaxError: ${jsonParseMessage('{typed')}`],
+];
+
+function jsonParseMessage(text) {
+  try {
+    JSON.parse(text);
+  } catch (e) {
+    return e.message;
+  }
+  throw new Error("guard: expected a JSON.parse failure");
+}
+
+for (const [line, thrown] of TYPED_THROWS) {
+  test(`typed key by key, \`${line}\` counts its final run's error once, though the closing ';' re-runs nothing`, async () => {
+    const { clock, collapse, runtime, pushes, relayRuntimeError, points } = ladderHarness();
+
+    for (const doc of typedDocuments(line)) {
+      const before = pushes.length;
+      runtime.writeFile("/index.js", BASE_SOURCE + doc + "\n");
+      collapse.noteEdit(); // App.tsx#writeFile, right after the runtime write
+      await settle();
+      // Each run relays before the next keystroke (the typist is slower than the compile).
+      if (pushes.length > before) {
+        const relayed = runPushed(pushes.at(-1));
+        if (relayed) relayRuntimeError(relayed);
+      }
+    }
+    assert.ok(pushes.length > 3, "guard: prefixes of the line ran");
+    assert.equal(runPushed(pushes.at(-1)), thrown, "guard: the last run is the finished line's");
+    clock.advance(DEMO_EDIT_SETTLE_MS);
+
+    const runtimeErrors = points("preview.runtime_error");
+    assert.equal(runtimeErrors.length, 1, "the error the finished line throws, once");
+    assert.equal(runtimeErrors[0].attrs.fingerprint, fingerprint("demo-runtime", thrown));
+    assert.equal(points("sandpack.compile_error").length, 0, "the finished line compiles");
+  });
+}
+
+test("an edit that transpiles to the running sandbox reports 'unchanged'; one that differs reports 'rerun'", async () => {
+  const { runtime, pushes } = mountedParcel();
+  const outcomes = [];
+  runtime.onPushOutcome((o) => outcomes.push(o));
+
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n");
+  await settle();
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1);\n");
+  await settle();
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1, \n"); // does not parse: no outcome
+  await settle();
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n"); // superseded before its transpile settles: no outcome
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(2)\n");
+  await settle();
+
+  assert.deepEqual(outcomes, ["rerun", "unchanged", "rerun"]);
+  assert.equal(pushes.length, 2);
 });
