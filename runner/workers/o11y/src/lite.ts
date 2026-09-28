@@ -164,6 +164,15 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
     // source timestamp, exactly as received") — `ts` is epoch ms, restated as
     // a string, the same way OTLP's raw `time_unix_nano` is.
     rawEventTime: String(body.ts),
+    // F32: the reporter's per-beacon id, hash-only (never in the stored
+    // record, attributes or a Loki label — no cardinality). A conditional
+    // spread, never `extra: body.id !== undefined ? {...} : undefined` —
+    // `stableStringify` walks `Object.entries`, so a present `extra` key
+    // holding `undefined` would still serialize (as `"extra":undefined`) and
+    // change the hash for every old-reporter beacon that has no `id` at all.
+    // With the spread, an id-less beacon (an old reporter still cached on a
+    // `/d`/`/embed` page) hashes exactly as it did before this field existed.
+    ...(body.id !== undefined ? { extra: { beacon_id: body.id } } : {}),
   });
 
   // A-I4 remainder's own pattern (`normalise/faro.ts`): a hash-only item with
