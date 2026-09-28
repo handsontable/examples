@@ -109,8 +109,17 @@ export type SymbolicateSkipReason =
   | "fetch_error"
   | "parse_error"
   | "over_budget"
+  | "over_cap"
   | "lookup_error"
   | "no_frames_matched";
+
+/** Distinct map keys one call (one inbox object) may read from R2: an
+ *  authoring build ships 7 JS chunks (`vite build`), so 32 covers four builds'
+ *  chunks in one object, while a body of forged frame URLs costs 32 GETs. */
+export const MAX_MAP_KEYS_PER_CALL = 32;
+/** Frames looked up per body: the deepest browser stack is SpiderMonkey's
+ *  128 frames (V8 reports 10, JavaScriptCore 100). */
+export const MAX_FRAMES_PER_BODY = 128;
 
 export interface SymbolicateSkip {
   /** The maps-bucket key, e.g. `sourcemaps/<sha>/assets/index-abc.js.map`. */
@@ -119,7 +128,7 @@ export interface SymbolicateSkip {
   /** Frames that pointed at this key and stayed unresolved. */
   frames: number;
   /** The first underlying error message, truncated; absent for `no_map`,
-   *  `over_budget` and `no_frames_matched`. */
+   *  `over_budget`, `over_cap` and `no_frames_matched`. */
   detail?: string;
 }
 
@@ -155,6 +164,8 @@ function errorDetail(err: unknown): string {
 interface KeyStats {
   attempted: number;
   resolved: number;
+  /** Frames past {@link MAX_FRAMES_PER_BODY} or {@link MAX_MAP_KEYS_PER_CALL}, never looked up. */
+  capped: number;
   lookupErrors: number;
   lookupDetail?: string;
 }
@@ -190,6 +201,11 @@ class DrainMapCache {
     return this.#failures.get(key);
   }
 
+  /** The map {@link get} already loaded for `key`, or `null`. */
+  loaded(key: string): TraceMap | null {
+    return this.#parsed.get(key) ?? null;
+  }
+
   #fail(key: string, reason: SymbolicateSkipReason, detail?: string): null {
     this.#parsed.set(key, null);
     this.#failures.set(key, detail === undefined ? { reason } : { reason, detail });
@@ -218,38 +234,66 @@ class DrainMapCache {
   }
 }
 
-/** Resolves one exception's body text in place; unchanged if nothing
- *  resolves. Never throws: a `line < 1` frame is skipped before reaching
- *  the map library (`originalPositionFor({line:0})` throws, and a
- *  `lineno: 0` stack frame is valid, storable Faro input), and
- *  `originalPositionFor` itself is wrapped in try/catch so any other
- *  library throw leaves the frame byte-for-byte unresolved instead. */
-async function resolveBody(
-  body: string,
-  serviceVersion: string,
-  cache: DrainMapCache,
-  stats: Map<string, KeyStats>,
-): Promise<string> {
-  const lines = body.split("\n");
-  let changed = false;
+interface PlannedFrame {
+  index: number;
+  frame: ParsedFrame & { line: number; col: number };
+  mapKey: string;
+}
 
+interface PlannedBody {
+  lines: string[];
+  frames: PlannedFrame[];
+}
+
+function statsFor(stats: Map<string, KeyStats>, mapKey: string): KeyStats {
+  let keyStats = stats.get(mapKey);
+  if (!keyStats) {
+    keyStats = { attempted: 0, resolved: 0, capped: 0, lookupErrors: 0 };
+    stats.set(mapKey, keyStats);
+  }
+  return keyStats;
+}
+
+/** Picks the frames of one body to look up, in line order, admitting map keys
+ *  into `admitted` up to {@link MAX_MAP_KEYS_PER_CALL}. Synchronous and
+ *  order-only, so which frames are capped never depends on R2 timing. A
+ *  `line < 1` frame is skipped (`originalPositionFor({line:0})` throws, and a
+ *  `lineno: 0` frame is valid Faro input). */
+function planBody(body: string, serviceVersion: string, admitted: Set<string>, stats: Map<string, KeyStats>): PlannedBody {
+  const lines = body.split("\n");
+  const frames: PlannedFrame[] = [];
+  let candidates = 0;
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     if (raw === undefined) continue;
     const frame = parseLine(raw);
     if (!frame || frame.line === undefined || frame.col === undefined) continue; // not a resolvable stack line
-    if (!Number.isFinite(frame.line) || !Number.isFinite(frame.col) || frame.line < 1) continue; // a line-0 (or otherwise invalid) frame is left unresolved, never passed to the map consumer
+    if (!Number.isFinite(frame.line) || !Number.isFinite(frame.col) || frame.line < 1) continue;
     if (isBabelChunk(frame.filename)) continue; // criterion 5: left unparsed, deliberately
-
     const mapKey = mapKeyFor(frame.filename, serviceVersion);
     if (!mapKey) continue;
-    let keyStats = stats.get(mapKey);
-    if (!keyStats) {
-      keyStats = { attempted: 0, resolved: 0, lookupErrors: 0 };
-      stats.set(mapKey, keyStats);
+    const keyStats = statsFor(stats, mapKey);
+    candidates++;
+    if (candidates > MAX_FRAMES_PER_BODY || (!admitted.has(mapKey) && admitted.size >= MAX_MAP_KEYS_PER_CALL)) {
+      keyStats.capped++;
+      continue;
     }
+    admitted.add(mapKey);
+    frames.push({ index: i, frame: { ...frame, line: frame.line, col: frame.col }, mapKey });
+  }
+  return { lines, frames };
+}
+
+/** Resolves a planned body against the maps already loaded into `cache`;
+ *  the original text if nothing resolves. `originalPositionFor` is wrapped
+ *  so a library throw leaves that one frame byte-for-byte unresolved. */
+function renderBody(body: string, plan: PlannedBody, cache: DrainMapCache, stats: Map<string, KeyStats>): string {
+  const { lines } = plan;
+  let changed = false;
+  for (const { index, frame, mapKey } of plan.frames) {
+    const keyStats = statsFor(stats, mapKey);
     keyStats.attempted++;
-    const map = await cache.get(mapKey);
+    const map = cache.loaded(mapKey);
     if (!map) continue; // no map, or it failed to parse — leave the frame exactly as it was (reported via the skip signal)
 
     // V8/ErrorEvent columns are 1-based; trace-mapping's generated position
@@ -258,14 +302,13 @@ async function resolveBody(
     try {
       original = originalPositionFor(map, { line: frame.line, column: Math.max(0, frame.col - 1) });
     } catch (err) {
-      // A library throw on this one frame must not cost the rest of the body.
       keyStats.lookupErrors++;
       keyStats.lookupDetail ??= errorDetail(err);
       continue;
     }
     if (original.line === null || original.line === undefined || !original.source) continue;
 
-    lines[i] = renderLine({
+    lines[index] = renderLine({
       prefix: frame.prefix,
       fn: original.name ?? frame.fn,
       filename: normaliseSourcePath(original.source),
@@ -275,7 +318,6 @@ async function resolveBody(
     keyStats.resolved++;
     changed = true;
   }
-
   return changed ? lines.join("\n") : body;
 }
 
@@ -300,7 +342,10 @@ function serviceVersionOf(record: OtlpResourceLogs): string | null {
 /**
  * Resolves every exception record's body in `records`, leaving every other
  * record untouched. One {@link DrainMapCache} per call — see its own doc
- * comment for why it must not persist across calls.
+ * comment for why it must not persist across calls. Plans every body first,
+ * then reads the admitted maps one at a time in first-seen order, so the
+ * R2 reads are capped at {@link MAX_MAP_KEYS_PER_CALL} and the output is
+ * the same on every replay.
  */
 export async function symbolicateResourceLogs(
   records: readonly OtlpResourceLogs[],
@@ -308,39 +353,46 @@ export async function symbolicateResourceLogs(
 ): Promise<OtlpResourceLogs[]> {
   const cache = new DrainMapCache(deps);
   const stats = new Map<string, KeyStats>();
-  const out: OtlpResourceLogs[] = [];
+  const admitted = new Set<string>();
+  const plans = new Map<object, PlannedBody>();
 
   for (const record of records) {
-    if (!isExceptionRecord(record)) {
-      out.push(record);
-      continue;
-    }
+    if (!isExceptionRecord(record)) continue;
     const serviceVersion = serviceVersionOf(record);
-    if (!serviceVersion) {
+    if (!serviceVersion) continue;
+    for (const scope of record.scopeLogs) {
+      for (const log of scope.logRecords) {
+        if (!log.body?.stringValue) continue;
+        try {
+          plans.set(log, planBody(log.body.stringValue, serviceVersion, admitted, stats));
+        } catch {
+          // a body that cannot be planned is left as it is
+        }
+      }
+    }
+  }
+
+  for (const mapKey of admitted) await cache.get(mapKey);
+
+  const out: OtlpResourceLogs[] = [];
+  for (const record of records) {
+    if (!isExceptionRecord(record) || !serviceVersionOf(record)) {
       out.push(record);
       continue;
     }
-
-    const resolvedScopeLogs = await Promise.all(
-      record.scopeLogs.map(async (scope) => ({
-        logRecords: await Promise.all(
-          scope.logRecords.map(async (log) => {
-            if (!log.body?.stringValue) return log;
-            // `resolveBody` never throws, but this is a second, independent
-            // isolation layer, so a throw here can't cost every later
-            // record in the batch.
-            let resolvedBody: string;
-            try {
-              resolvedBody = await resolveBody(log.body.stringValue, serviceVersion, cache, stats);
-            } catch {
-              resolvedBody = log.body.stringValue;
-            }
-            return resolvedBody === log.body.stringValue ? log : { ...log, body: { stringValue: resolvedBody } };
-          }),
-        ),
-      })),
-    );
-
+    const resolvedScopeLogs = record.scopeLogs.map((scope) => ({
+      logRecords: scope.logRecords.map((log) => {
+        const plan = plans.get(log);
+        if (!plan || !log.body?.stringValue) return log;
+        let resolvedBody: string;
+        try {
+          resolvedBody = renderBody(log.body.stringValue, plan, cache, stats);
+        } catch {
+          resolvedBody = log.body.stringValue;
+        }
+        return resolvedBody === log.body.stringValue ? log : { ...log, body: { stringValue: resolvedBody } };
+      }),
+    }));
     out.push({ ...record, scopeLogs: resolvedScopeLogs });
   }
 
@@ -350,7 +402,8 @@ export async function symbolicateResourceLogs(
 
 /** One entry per map key whose frames were attempted and not all
  *  resolved, in first-seen order. A key with at least one resolved frame
- *  is only reported for a `lookup_error`, not a normal unmatched frame. */
+ *  is only reported for a `lookup_error` or `over_cap`, not a normal
+ *  unmatched frame. */
 function reportSkips(
   stats: Map<string, KeyStats>,
   cache: DrainMapCache,
@@ -359,12 +412,13 @@ function reportSkips(
   const skips: SymbolicateSkip[] = [];
   let suppressed = 0;
   for (const [key, s] of stats) {
-    const unresolved = s.attempted - s.resolved;
+    const unresolved = s.attempted - s.resolved + s.capped;
     if (unresolved === 0) continue;
     const failure = cache.failureOf(key);
     let skip: SymbolicateSkip | null = null;
     if (failure) skip = { key, reason: failure.reason, frames: unresolved, ...(failure.detail !== undefined ? { detail: failure.detail } : {}) };
     else if (s.lookupErrors > 0) skip = { key, reason: "lookup_error", frames: unresolved, ...(s.lookupDetail !== undefined ? { detail: s.lookupDetail } : {}) };
+    else if (s.capped > 0) skip = { key, reason: "over_cap", frames: unresolved };
     else if (s.resolved === 0) skip = { key, reason: "no_frames_matched", frames: unresolved };
     if (!skip) continue;
     if (skips.length < MAX_SKIP_REPORTS) skips.push(skip);

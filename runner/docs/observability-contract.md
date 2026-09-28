@@ -569,6 +569,11 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   every wake. Any other `429`, and a `5xx`, stays transient and stops the batch. An
   inbox read that throws leaves only that key `written`; the rest of the batch still
   pushes and commits, and a batch in which every read threw ends the wake's drain.
+- **Symbolication read caps.** One inbox object reads at most 32 distinct maps
+  (`MAX_MAP_KEYS_PER_CALL`, first-seen order) and looks up at most 128 frames per body
+  (`MAX_FRAMES_PER_BODY`), so a drain step of 10 objects stays at a few hundred of the
+  Workers limit of 10,000 subrequests. Frames past either cap stay byte-for-byte and are
+  reported as `o11y.symbolicate.skip` with reason `over_cap`.
 
 ## 9. Lite beacon payload
 

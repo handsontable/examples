@@ -31,9 +31,10 @@ import vm from "node:vm";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { symbolicateResourceLogs, normaliseSourcePath, MAX_SKIP_REPORTS } = await import(
+const { symbolicateResourceLogs, normaliseSourcePath, MAX_SKIP_REPORTS, MAX_MAP_KEYS_PER_CALL, MAX_FRAMES_PER_BODY } = await import(
   "../workers/o11y/src/drain/symbolicate.ts"
 );
+const { drainBatch } = await import("../workers/o11y/src/drain/drain.ts");
 const { formatStackFrame, scrubTelemetry, faroItemToRecord, buildResourceLogs, encodeNdjson, inboxKey } = await import(
   "@handsontable/demo-runtime/telemetry"
 );
@@ -333,6 +334,114 @@ test("skip signal: the default reporter writes one `o11y.symbolicate.skip` JSON 
   assert.deepEqual(lines.map((l) => JSON.parse(l)), [
     { event: "o11y.symbolicate.skip", key: "sourcemaps/cafe1234/assets/index-a.js.map", reason: "no_map", frames: 1 },
   ]);
+});
+
+// ---- R2 read caps ---------------------------------------------------------------
+
+/** One exception record per stack, stamped now so the drain's age filter keeps it. */
+function recentExceptionRecord(frameLines, serviceVersion) {
+  const record = exceptionRecord(frameLines, serviceVersion);
+  record.scopeLogs[0].logRecords[0].timeUnixNano = String(BigInt(Date.now()) * 1_000_000n);
+  return record;
+}
+
+/** A body under the 1 MB collect cap: 5 exceptions of 2980 frames, each frame
+ *  its own made-up chunk URL, so every frame is a distinct map key. */
+function fanoutRecords(offset = 0) {
+  let n = offset;
+  return Array.from({ length: 5 }, () =>
+    recentExceptionRecord(
+      Array.from({ length: 2980 }, () => formatStackFrame({ filename: `http://a/${(n++).toString(36)}.js`, function: "f", lineno: 1, colno: 1 })),
+      "x",
+    ),
+  );
+}
+
+const bodyOf = (record) => record.scopeLogs[0].logRecords[0].body.stringValue;
+
+test("a fan-out body reads at most MAX_MAP_KEYS_PER_CALL maps in the real drain, and leaves every frame past the cap as it was", async () => {
+  const records = fanoutRecords();
+  const firstKeys = Array.from({ length: MAX_MAP_KEYS_PER_CALL + 8 }, (_, i) => `sourcemaps/x/${i.toString(36)}.js.map`);
+  const workdir = await mkdtemp(path.join(tmpdir(), "o11y-fanout-drain-"));
+  try {
+    await writeFile(path.join(workdir, "inbox-key.txt"), inboxKey("browser", new Date(), 0));
+    await writeFile(path.join(workdir, "inbox.ndjson.gz"), await gzip(encodeNdjson(records)));
+    // Maps exist past the cap too, so a capped frame stays unresolved because it was never read.
+    for (const key of firstKeys) {
+      await mkdir(path.dirname(path.join(workdir, "maps", key)), { recursive: true });
+      await writeFile(path.join(workdir, "maps", key), ONE_MAPPING_MAP);
+    }
+
+    const out = await runChild(workdir);
+
+    assert.equal(out.codegenBlocked, true);
+    assert.deepEqual(out.mapReads, firstKeys.slice(0, MAX_MAP_KEYS_PER_CALL), "the first-seen keys, each read once");
+    assert.equal(out.result.outcomes[0].outcome, "provisional", JSON.stringify(out.result.outcomes));
+    const pushed = out.pushes.flatMap((p) => p.body.resourceLogs).map(bodyOf);
+    const sent = records.map(bodyOf);
+    assert.equal(pushed.length, sent.length);
+    const pushedLines = pushed[0].split("\n");
+    const sentLines = sent[0].split("\n");
+    for (let i = 1; i <= MAX_MAP_KEYS_PER_CALL; i++) assert.match(pushedLines[i], /\(src\/a\.ts:1:1\)$/);
+    assert.deepEqual(pushedLines.slice(MAX_MAP_KEYS_PER_CALL + 1), sentLines.slice(MAX_MAP_KEYS_PER_CALL + 1), "capped frames are byte-for-byte");
+    assert.deepEqual(pushed.slice(1), sent.slice(1), "bodies whose every key is past the cap are unchanged");
+    const reported = out.skips.flatMap((s) => s.reported);
+    assert.ok(reported.length > 0 && reported.every((s) => s.reason === "over_cap"), JSON.stringify(reported.slice(0, 3)));
+  } finally {
+    await rm(workdir, { recursive: true, force: true });
+  }
+});
+
+test("frames past MAX_FRAMES_PER_BODY in one body are left as they were and reported as over_cap", async () => {
+  const lines = Array.from({ length: MAX_FRAMES_PER_BODY + 72 }, () => frame("index-a.js", 1, 1));
+  const record = exceptionRecord(lines);
+  const reads = [];
+  const { out, calls } = await collectSkips([record], async (key) => {
+    reads.push(key);
+    return ONE_MAPPING_MAP;
+  });
+  const outLines = out[0].scopeLogs[0].logRecords[0].body.stringValue.split("\n");
+  assert.deepEqual(reads, ["sourcemaps/cafe1234/assets/index-a.js.map"]);
+  assert.equal(outLines.filter((l) => l.endsWith("(src/a.ts:1:1)")).length, MAX_FRAMES_PER_BODY);
+  assert.deepEqual(outLines.slice(MAX_FRAMES_PER_BODY + 1), lines.slice(MAX_FRAMES_PER_BODY));
+  assert.deepEqual(calls, [{ skips: [{ key: "sourcemaps/cafe1234/assets/index-a.js.map", reason: "over_cap", frames: 72 }], suppressed: 0 }]);
+});
+
+test("the caps make the same frames resolve on every replay, whatever order the map reads answer in", async () => {
+  const records = [recentExceptionRecord(Array.from({ length: 40 }, (_, i) => frame(`c${i}.js`)), "v"), recentExceptionRecord(Array.from({ length: 40 }, (_, i) => frame(`d${i}.js`)), "v")];
+  const outputs = [];
+  for (const delay of [(i) => i, (i) => 40 - i]) {
+    let i = 0;
+    const out = await symbolicateResourceLogs(records, {
+      getMap: async () => {
+        await new Promise((r) => setTimeout(r, delay(i++ % 40)));
+        return ONE_MAPPING_MAP;
+      },
+      onSkip() {},
+    });
+    outputs.push(JSON.stringify(out));
+  }
+  assert.equal(outputs[0], outputs[1]);
+});
+
+test("a full drain batch of fan-out keys reads at most 10 × MAX_MAP_KEYS_PER_CALL maps in total", async () => {
+  const objects = new Map();
+  for (let k = 0; k < 10; k++) objects.set(inboxKey("browser", new Date(), k), await gzip(encodeNdjson(fanoutRecords(k * 14_900))));
+  let reads = 0;
+  const result = await drainBatch([...objects.keys()], new Set(), {
+    fetchObject: async (key) => objects.get(key) ?? null,
+    pushToLoki: async () => ({ status: 204 }),
+    symbolicate: (records) =>
+      symbolicateResourceLogs(records, {
+        getMap: async () => {
+          reads++;
+          return null;
+        },
+        onSkip() {},
+      }),
+  });
+  assert.deepEqual(new Set(result.outcomes.map((o) => o.outcome)), new Set(["provisional"]));
+  assert.equal(reads, 10 * MAX_MAP_KEYS_PER_CALL);
 });
 
 // ---- source-path normalisation -----------------------------------------------
