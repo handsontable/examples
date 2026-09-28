@@ -9,15 +9,15 @@ import { Sentry } from "./sentry.js";
 // its latency to every route, including ones that need no identity at all.
 import { seedAnonymousContext } from "./userScope.js";
 seedAnonymousContext();
-// Faro (T06): after Sentry, before anything else runs, same reasoning as
+// Faro: after Sentry, before anything else runs, same reasoning as
 // `seedAnonymousContext` above — this module resolves its own gate
 // (`resolveReporting` + the local flag/host check, contract §10), so ordering
 // relative to Sentry's init does not matter for correctness, only convention.
 import { initTelemetry, reportUncaughtError } from "./telemetry/index.js";
 import { safeInit } from "./bootGuard.js";
-// Minor triage item 5: `initTelemetry()` used to run unguarded here — a
+// `initTelemetry()` must never run unguarded here — a
 // synchronous throw inside it (Faro's own client construction, a gate check,
-// anything) would propagate straight out of this module's top-level
+// anything) would otherwise propagate straight out of this module's top-level
 // evaluation and blank the whole app before `createRoot` ever runs, even
 // though Sentry (imported above) is already initialised and would have
 // reported it just fine on its own. Telemetry is a best-effort side channel
@@ -61,7 +61,7 @@ import { ThemeProvider } from "@handsontable/demo-editor-shell";
 import { App } from "./App.js";
 
 /**
- * Test-only render-crash seam for `e2e/telemetry-faro.spec.ts` (T06 acceptance
+ * Test-only render-crash seam for `e2e/telemetry-faro.spec.ts` (acceptance
  * criteria: "a render crash inside the error boundary reaches both Sentry and
  * Faro"). Nothing else in the app can trigger a deterministic render crash
  * from outside — this is the least invasive seam that stays structurally
