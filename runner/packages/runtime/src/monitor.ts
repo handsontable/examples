@@ -1072,7 +1072,7 @@ function dv(){var u="";try{u=(navigator&&navigator.userAgent)||"";}catch(e){}
 return /ipad|tablet|playbook|silk/i.test(u)?"tablet":/mobi|iphone|ipod|android.*mobile|windows phone/i.test(u)?"mobile":"desktop";}
 var DEV=dv();
 function bc(t,f){try{
-var p={v:1,t:t,s:SURF,demo:DEMO,ht:HTM,fw:FWK,dev:DEV,ts:Date.now()};
+var p={v:1,t:t,s:SURF,demo:DEMO,ht:HTM,fw:FWK,dev:DEV,ts:Date.now(),id:Math.random().toString(36).slice(2,10)};
 for(var k in f)p[k]=f[k];
 var j=JSON.stringify(p);
 if(bl(j)>PMAX)return;

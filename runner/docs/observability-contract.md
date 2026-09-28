@@ -516,7 +516,7 @@ route itself does not check or require a content type either way, so this is a f
 what ships on the wire, not a gate). The body itself is still JSON:
 
 ```json
-{"v":1,"t":"err","s":"embed","demo":"r-react-18-0-0","ht":"18","fw":"react","n":"TypeError","m":"<normalized, ≤500 chars>","st":"<stack, ≤2000 chars>","val":null,"dev":"desktop","ts":1695463200000}
+{"v":1,"t":"err","s":"embed","demo":"r-react-18-0-0","ht":"18","fw":"react","n":"TypeError","m":"<normalized, ≤500 chars>","st":"<stack, ≤2000 chars>","val":null,"dev":"desktop","ts":1695463200000,"id":"a1b2c3d4"}
 ```
 
 `t` = `err` | `vital`; `s` = `embed` | `d`; for `vital`, `n` is `LCP` | `INP` | `CLS` |
@@ -526,9 +526,8 @@ sampled at 10 % per page view, decided once per page; errors are sent up to the
 Faro items, clamping `ts` to the receive time ± 5 minutes.
 
 The dedupe hash covers the whole converted record (body with message and stack, attributes)
-plus the raw `ts`. Two beacons from different page loads that are byte-identical (same demo,
-same error, same millisecond) therefore count as one record: the payload has no per-beacon
-identity yet (F32).
+plus the raw `ts` and, when present, `id`: a per-beacon random value (F32), used only in the
+dedupe hash.
 
 ## 10. Local mode
 

@@ -59,6 +59,16 @@ interface LiteBase {
   /** Epoch ms. Clamped to receive time ± 5 minutes at ingest (§9), same rule as
    *  every other record's timestamp (ADR §C.2). */
   ts: number;
+  /** Per-beacon random id (F32): `Math.random().toString(36).slice(2,10)` from
+   *  the reporter, 0-8 lowercase base-36 characters — `Math.random()` landing
+   *  on exactly `0` yields `""`, which is a valid id, not a missing one. Used
+   *  only to keep two byte-identical beacons (same demo/error/millisecond,
+   *  e.g. two parallel page loads, or several throws in one synchronous pass)
+   *  from being deduped as a single record — see `workers/o11y/src/lite.ts`'s
+   *  `hashRecord` call. Absent entirely for a beacon sent by an old, cached
+   *  reporter still on a page; that must hash exactly as before this field
+   *  existed. */
+  id?: string;
 }
 
 export interface LiteErrorPayload extends LiteBase {
@@ -116,6 +126,12 @@ export function isValidLitePayload(data: unknown): data is LiteBeaconPayload {
   if (typeof d["ts"] !== "number" || !Number.isFinite(d["ts"])) return false;
   if (d["m"] !== undefined && (typeof d["m"] !== "string" || d["m"].length > LITE_MESSAGE_MAX)) return false;
   if (d["st"] !== undefined && (typeof d["st"] !== "string" || d["st"].length > LITE_STACK_MAX)) return false;
+  // F32: `id` is absent for an old/cached reporter (pre-F32) — accepted, not
+  // required. `{0,16}` deliberately allows the empty string: the reporter's
+  // `Math.random().toString(36).slice(2,10)` can legitimately produce `""`
+  // when `Math.random()` returns exactly 0, and that must not reject the
+  // whole beacon.
+  if (d["id"] !== undefined && (typeof d["id"] !== "string" || !/^[0-9a-z]{0,16}$/.test(d["id"]))) return false;
 
   if (d["t"] === "err") {
     if (typeof d["n"] !== "string" || d["n"].length === 0) return false;
