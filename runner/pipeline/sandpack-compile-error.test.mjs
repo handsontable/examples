@@ -458,6 +458,20 @@ test("an edit that transpiles to the running sandbox reports 'unchanged'; one th
   assert.equal(pushes.length, 2);
 });
 
+test("a bundler start that no push asked for (the mount's own compile) is not a rerun", async () => {
+  const { runtime, pushes } = mountedParcel();
+  const outcomes = [];
+  runtime.onPushOutcome((o) => outcomes.push(o));
+  runtime.onMessage({ type: "start" });
+  assert.deepEqual(outcomes, []);
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n");
+  await settle();
+  runtime.onMessage({ type: "start" });
+  runtime.onMessage({ type: "start" });
+  assert.equal(pushes.length, 1);
+  assert.deepEqual(outcomes, ["rerun"], "one push, one rerun");
+});
+
 test("each dispatched run re-arms the in-preview reporter first; an unchanged or failed push does not", async () => {
   const order = [];
   const runtime = new SandpackRuntime(ENTRY, {

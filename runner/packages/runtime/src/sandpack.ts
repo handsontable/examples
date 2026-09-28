@@ -330,6 +330,8 @@ export class SandpackRuntime implements DemoRuntime {
   private readonly compileErrorCbs = new Set<(e: SandpackCompileErrorEvent) => void>();
   private readonly bundlerUnreachableCbs = new Set<(e: SandpackBundlerUnreachableEvent) => void>();
   private readonly pushOutcomeCbs = new Set<(outcome: "rerun" | "unchanged") => void>();
+  /** Pushes dispatched to the bundler whose `start` has not arrived yet. */
+  private pushesAwaitingStart = 0;
   /** When the compile currently in flight was dispatched to the bundler — either
    *  `loadSandpackClient`'s initial compile (mount) or `updateSandbox` (an edit or
    *  `reload()`). Cleared once the terminal message for it arrives. Only ever one
@@ -655,8 +657,11 @@ export class SandpackRuntime implements DemoRuntime {
     };
     switch (m.type) {
       // `rerun` at the bundler's `start`, not at dispatch: the bundler runs one compile at
-      // a time, so what the previous run relays still arrives between the two.
+      // a time, so what the previous run relays still arrives between the two. Only a
+      // pushed compile's start counts; the mount's own compile is not an edit's run.
       case "start":
+        if (this.pushesAwaitingStart === 0) break;
+        this.pushesAwaitingStart -= 1;
         for (const cb of this.pushOutcomeCbs) cb("rerun");
         break;
       case "done":
@@ -870,6 +875,7 @@ export class SandpackRuntime implements DemoRuntime {
         this.resetMonitorBudget();
         this.client.updateSandbox(setup, false);
         this.published = candidate;
+        this.pushesAwaitingStart += 1;
       })
       .catch((cause: unknown) => {
         /* mid-edit parse error — the user is still typing. Nothing reaches the bundler and

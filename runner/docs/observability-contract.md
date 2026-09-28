@@ -296,7 +296,7 @@ collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
   sandbox's;
 - on Tier 1, the bundler runs one compile at a time, so a run's reports can still arrive
   after the next edit has been dispatched. A new run starts at the bundler's `start`
-  message (`onPushOutcome("rerun")`), not at dispatch, and what the burst held until
+  message for a pushed compile (`onPushOutcome("rerun")`), not at dispatch, and what the burst held until
   then came from the run it replaces and is dropped. A pre-transpile failure of the
   newest edit is kept, because no run of that edit will start;
 - 2 s (`DEMO_EDIT_SETTLE_MS`) after the last edit the burst closes, and the last run's
