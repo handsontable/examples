@@ -21,12 +21,7 @@ import { drainBatch, type DrainDeps } from "./drain/drain.js";
 import { symbolicateResourceLogs } from "./drain/symbolicate.js";
 import type { Env } from "./env.js";
 import { reportAwakeSeconds } from "./cost.js";
-
-/** ADR-0041 §B.1: every request reaches the o11y worker on this hostname,
- *  never a per-deploy variable — hardcoded rather than a new `vars` entry
- *  (unlike `CLOUDFLARE_ACCOUNT_ID`, which genuinely differs per account and
- *  has no other source at runtime, this string never varies). */
-const PUBLIC_ORIGIN = "https://demos.handsontable.com";
+import { PUBLIC_ORIGIN } from "./gates/session.js";
 
 /** Matches the observability contract §1's bucket-name table. Used as the
  *  DEFAULT only (fix round I4) — `env.LOKI_S3_BUCKET` overrides it when

@@ -91,7 +91,6 @@ export const ATTR_HOT_KIND = "hot.kind";
  *  §C.4), so a record claiming that kind is malformed, not a fourth
  *  legitimate value. */
 export const HOT_KINDS = ["exception", "log", "event", "measurement"] as const;
-export type HotKind = (typeof HOT_KINDS)[number];
 
 export const STRUCTURED_METADATA_KEYS = [
   ATTR_HOT_DEMO_ID,
@@ -99,7 +98,6 @@ export const STRUCTURED_METADATA_KEYS = [
   ATTR_CF_RAY,
   ATTR_HOT_KIND,
 ] as const;
-export type StructuredMetadataKey = (typeof STRUCTURED_METADATA_KEYS)[number];
 
 /**
  * §3 "Diagnostic tags" — flat, non-dotted metadata on a handled-error or
@@ -146,7 +144,6 @@ export const DIAGNOSTIC_TAG_KEYS = [
   "api_base_origin",
   "net_effective_type",
 ] as const;
-export type DiagnosticTagKey = (typeof DIAGNOSTIC_TAG_KEYS)[number];
 
 /**
  * T02-D4's AE-only browser attribute channel (T07 fix round, controller
@@ -198,7 +195,6 @@ export const AE_ONLY_ATTRIBUTE_KEYS = [
   ATTR_HOT_REF,
   ATTR_HOT_AREA,
 ] as const;
-export type AeOnlyAttributeKey = (typeof AE_ONLY_ATTRIBUTE_KEYS)[number];
 
 /** One row per §3 resource attribute: its OTLP key, the Loki label it promotes to
  *  (`undefined` when the contract says "no"), and the Analytics Engine blob slot

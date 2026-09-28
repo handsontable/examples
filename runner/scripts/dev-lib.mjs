@@ -978,7 +978,7 @@ export function listRunningContainers(execFileSyncImpl) {
     });
 }
 
-export const LEFTOVER_CONTAINER_NAME_RE = /handsontable-demos-(api|o11y)/;
+const LEFTOVER_CONTAINER_NAME_RE = /handsontable-demos-(api|o11y)/;
 
 /** `before`: a Set of container ids running when this run started (from
  *  `listRunningContainers` at that point, ids only). `after`:
@@ -998,7 +998,7 @@ export function possiblyLeftoverContainers(before, after) {
  *  who recognizes them as genuinely this run's own can clean them up by
  *  hand, after confirming (e.g. `docker inspect` the ports/mounts) that
  *  they are not another worktree's session. */
-export function describeLeftoverContainersForOperator(candidates) {
+function describeLeftoverContainersForOperator(candidates) {
   const ids = candidates.map((c) => c.id).join(" ");
   const names = candidates.map((c) => c.name).join(", ");
   return (
@@ -1625,12 +1625,6 @@ export function buildPlan(tier, ports, opts = {}) {
     });
   }
   return plan;
-}
-
-/** Names only, in spawn order — what `pipeline/dev-script.test.mjs` asserts
- *  the plan for each tier is built from. */
-export function planNames(tier, ports) {
-  return buildPlan(tier, ports).map((p) => p.name);
 }
 
 // ---------------------------------------------------------------------------

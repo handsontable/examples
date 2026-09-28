@@ -79,7 +79,7 @@ export const DEMO_COLLAPSE_CEILING = 50;
 
 /** Distinct keys held for one burst. Anything past this is dropped — the
  *  final run of a real demo has a handful of distinct faults, not dozens. */
-export const DEMO_COLLAPSE_PENDING_MAX = 20;
+const DEMO_COLLAPSE_PENDING_MAX = 20;
 
 export interface DemoEventCollapseOptions<T> {
   /** Receives each report that survives the collapse. */
