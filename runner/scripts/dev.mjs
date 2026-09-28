@@ -47,12 +47,7 @@ import {
   redactArgsForLog,
   PORT_DEFAULTS,
 } from "./dev-lib.mjs";
-// dev-prepull task's own additions — a separate import statement so a
-// parallel edit to the block above merges cleanly.
 import { shouldCheckContainerImages, collectTierBaseImages, ensureContainerImagesPresent, formatImagePullFailure } from "./dev-lib.mjs";
-// dev-persist task's own additions — a separate import statement (rather
-// than folded into the block above) so a parallel edit to that block's own
-// import list merges cleanly.
 import {
   composeDownArgs,
   o11yDevDataModeLine,
@@ -141,11 +136,10 @@ async function main() {
     process.exit(1);
   }
 
-  // Dev-stack note ("stale dependencies after a pull"): a pull that adds a
-  // dependency (e.g. the F30 fix's @jridgewell/trace-mapping) with
-  // node_modules never reinstalled used to run all the way to the 120s
-  // readiness timeout below before failing with a generic "worker never
-  // came up" — the real `Could not resolve "..."` wrangler error was only
+  // A pull that adds a dependency (e.g. @jridgewell/trace-mapping) with
+  // node_modules never reinstalled would otherwise run all the way to the
+  // 120s readiness timeout below before failing with a generic "worker
+  // never came up" — the real `Could not resolve "..."` wrangler error only
   // ever visible buried in the piped [api]/[o11y] log output above it. This
   // cheap, file-mtime-only check runs before anything else (Docker check,
   // migrations, spawning any child) and fails fast with the one command that
@@ -163,12 +157,12 @@ async function main() {
     process.exit(1);
   }
 
-  // B-9: the Docker-availability check used to run AFTER --reset-local-db,
-  // so `dev.mjs --tier=2 --reset-local-db` with Docker not running deleted
-  // workers/api's local D1 state (`.wrangler/state/v3/d1` + the
-  // applied-migrations record) and then immediately exited on the
-  // Docker-not-running error — a surprising side effect for a run that
-  // otherwise did nothing. `--reset-local-db` is only ever valid alongside
+  // Checked BEFORE --reset-local-db: reversed, `dev.mjs --tier=2
+  // --reset-local-db` with Docker not running would delete workers/api's
+  // local D1 state (`.wrangler/state/v3/d1` + the applied-migrations
+  // record) and then immediately exit on the Docker-not-running error — a
+  // surprising side effect for a run that otherwise did nothing.
+  // `--reset-local-db` is only ever valid alongside
   // `--tier=2`/`--tier=full` (parseArgs above already enforces this), the
   // same tiers that need Docker, so checking Docker first and resetting
   // only after it is confirmed available costs nothing and removes that
@@ -217,7 +211,7 @@ async function main() {
     // Baseline for the leftover-container REPORT on shutdown (this run
     // never stops a container it cannot prove it started — see
     // dev-lib.mjs's module-level doc comment on `possiblyLeftoverContainers`
-    // for why, NB2 in re-review 2).
+    // for why).
     containersBefore = new Set(listRunningContainers((cmd, args) => execFileSync(cmd, args)).map((c) => c.id));
   }
 
@@ -299,22 +293,15 @@ async function main() {
   const o11yDir = path.join(RUNNER_ROOT, "workers", "o11y");
   const teardownSteps = [];
   if (tier === "2" || tier === "full") {
-    // Measured for this task: Ctrl-C does not make wrangler's own Tier-2
-    // Sandbox-container orchestration tear itself down synchronously — a
-    // session's containers can still be `Up` several seconds after this
-    // wrapper has already exited.
-    //
-    // Re-review 2, NB2: this step used to `docker stop` whatever
-    // `possiblyLeftoverContainers` found. That heuristic ("new since this
-    // run's own snapshot" + name match) cannot prove ownership — another
-    // worktree's `wrangler dev`/Tier-2 session started at any point during
-    // THIS run's (possibly hours-long) lifetime produces the identical
-    // signal, and several worktrees running `wrangler dev` on this machine
-    // at once is the NORMAL case, not an edge case. So this step never
-    // stops anything anymore — it only PRINTS a report and the exact
-    // manual `docker ps`/`docker stop` commands, so a developer can decide
-    // by hand after confirming (e.g. `docker inspect`) what a container
-    // actually is.
+    // Ctrl-C does not make wrangler's own Tier-2 Sandbox-container
+    // orchestration tear itself down synchronously — a session's
+    // containers can still be `Up` several seconds after this wrapper has
+    // already exited. This step never `docker stop`s a container it cannot
+    // prove it started (see dev-lib.mjs's `possiblyLeftoverContainers` doc
+    // comment: several worktrees running `wrangler dev` at once is the
+    // NORMAL case) — it only PRINTS a report and the exact manual
+    // `docker ps`/`docker stop` commands, so a developer can decide by hand
+    // after confirming (e.g. `docker inspect`) what a container actually is.
     teardownSteps.push(() => {
       reportLeftoverContainers(containersBefore, (cmd, args) => execFileSync(cmd, args), (msg) => log("dev", msg));
     });
@@ -333,11 +320,10 @@ async function main() {
       if (patched.length) log("o11y", `filled in local-dev defaults for: ${patched.join(", ")}`);
       if (stripped.length) log("o11y", `left ${stripped.join(", ")} undeclared so this run's own ephemeral --var takes effect`);
     }
-    // F21 (fix round R4): runs on EVERY invocation, not only a fresh
-    // bootstrap (`created`) — a `.dev.vars` bootstrapped before this fix
-    // shipped still declares these two empty forever otherwise, which is
-    // exactly the finding (worker-tenant/Sentry panels can't fill locally
-    // because both fixture-replay gates 401). Only the key NAME is logged,
+    // Runs on EVERY invocation, not only a fresh bootstrap (`created`) — a
+    // pre-existing `.dev.vars` needs these two filled as well, or
+    // worker-tenant/Sentry panels can't fill locally because both
+    // fixture-replay gates 401. Only the key NAME is logged,
     // never the generated value — the same rule `O11Y_SESSION_SECRET`'s own
     // `--var` gets from `redactArgsForLog`, here trivially satisfied because
     // the value is never in `dev.mjs`'s own argv/log line at all.
@@ -372,14 +358,14 @@ async function main() {
         process.exit(1);
       }
     }
-    // NB8 (re-review 2): only fires for an EXISTING .dev.vars (a fresh one
-    // just got DEV_ADMIN patched in and O11Y_SESSION_SECRET stripped, above)
-    // — a stale pre-K1 file otherwise fails closed silently.
+    // Only fires for an EXISTING .dev.vars (a fresh one just got DEV_ADMIN
+    // patched in and O11Y_SESSION_SECRET stripped, above) — a stale file
+    // otherwise fails closed silently.
     for (const warning of checkO11yDevVarsStaleness(devVarsPath)) log("o11y", `warning: ${warning}`);
 
     const composeFile = path.join(RUNNER_ROOT, "containers", "o11y", "compose.yml");
-    // Z-D-H2 fix: per-worktree default (an explicit COMPOSE_PROJECT_NAME
-    // still wins) — see resolveComposeProjectName's own doc comment in
+    // Per-worktree default (an explicit COMPOSE_PROJECT_NAME still wins) —
+    // see resolveComposeProjectName's own doc comment in
     // dev-lib.mjs for why a single fixed default collided across worktrees.
     const composeProjectName = resolveComposeProjectName(process.env);
     const composeEnv = {
@@ -420,16 +406,14 @@ async function main() {
     log("dev", o11yDevDataModeLine(fresh));
 
     log("compose", `starting minio + clickhouse (project ${composeProjectName})`);
-    // T1: `minio-init` (a one-shot `mc mb` container) is gone — its image
-    // (quay.io/minio/mc) stopped being pullable along with quay.io/minio/minio
-    // itself. compose.yml's `minio` service now creates its own bucket via
-    // MINIO_DEFAULT_BUCKETS before its healthcheck goes green, so `--wait`
-    // (block until every named service is healthy/running) replaces waiting
-    // on the old init container's exit code.
+    // `minio-init` (a one-shot `mc mb` container) is not used — its image
+    // (quay.io/minio/mc) is not pullable. compose.yml's `minio` service
+    // creates its own bucket via MINIO_DEFAULT_BUCKETS before its
+    // healthcheck goes green, so `--wait` (block until every named service
+    // is healthy/running) is sufficient.
     //
-    // B-I2: brings the stack up and, if `up` itself throws (`--wait` above
-    // makes that a real possibility — a healthcheck that never goes green —
-    // where the old `up -d` essentially never threw here), tears the SAME
+    // Brings the stack up and, if `up` itself throws (a real possibility
+    // with `--wait`: a healthcheck that never goes green), tears the SAME
     // project back down (no `-v`, data kept) before rethrowing — see
     // `bringUpO11yCompose`'s own doc comment in dev-lib.mjs for why this
     // needed to be pulled out of `main()` (a throw here happens BEFORE this
@@ -488,14 +472,14 @@ async function main() {
     }
   }
 
-  // Re-review 2, NB5: `cleanup()` (kill children + run teardown steps) is
-  // split from `shutdown()` (cleanup, then `process.exit(0)`) so a STARTUP
-  // failure (the readiness-wait `await` below throwing) can also run
-  // cleanup without lying about the exit code — `shutdown()` always exits
-  // 0, which is correct for an intentional SIGINT/SIGTERM/SIGHUP but wrong
-  // for "we're crashing". Before this split, `main()`'s readiness timeout
-  // threw straight past every teardown step (`main().catch` at the bottom
-  // never calls `shutdown`/`cleanup`), leaving live `wrangler dev`/`vite`
+  // `cleanup()` (kill children + run teardown steps) is split from
+  // `shutdown()` (cleanup, then `process.exit(0)`) so a STARTUP failure
+  // (the readiness-wait `await` below throwing) can also run cleanup
+  // without lying about the exit code — `shutdown()` always exits 0, which
+  // is correct for an intentional SIGINT/SIGTERM/SIGHUP but wrong for
+  // "we're crashing". Without this split, a readiness timeout would throw
+  // straight past every teardown step (`main().catch` at the bottom never
+  // calls `shutdown`/`cleanup`), leaving live `wrangler dev`/`vite`
   // children and any compose stack running — the next `pnpm dev` would
   // then fail on `--strictPort`, or silently fight the orphaned session
   // for the same ports.
@@ -533,12 +517,11 @@ async function main() {
     await cleanup(`${signal} received`);
     process.exit(0);
   }
-  // SIGHUP (re-review 2, NB5): every child is spawned `detached: true`
-  // (its own process group/session), so closing the terminal a `dev.mjs`
-  // run is attached to sends SIGHUP to `dev.mjs` itself but NOT to the
-  // detached children — without a handler here, `dev.mjs` used to die on
-  // the default SIGHUP action (no cleanup at all) and leave every child
-  // running.
+  // SIGHUP: every child is spawned `detached: true` (its own process
+  // group/session), so closing the terminal a `dev.mjs` run is attached to
+  // sends SIGHUP to `dev.mjs` itself but NOT to the detached children —
+  // without a handler here, the default SIGHUP action (no cleanup at all)
+  // would leave every child running.
   for (const sig of SHUTDOWN_SIGNALS) {
     process.on(sig, () => shutdown(sig));
   }
@@ -549,9 +532,9 @@ async function main() {
     if (wranglerRegistryPath && (proc.name === "api" || proc.name === "o11y")) {
       env.WRANGLER_REGISTRY_PATH = wranglerRegistryPath;
     }
-    // NB6 (re-review 2): the real args (below, `spawn`) still carry the
-    // ephemeral O11Y_SESSION_SECRET value in full — this only keeps it out
-    // of dev.mjs's own printed log line.
+    // The real args (below, `spawn`) still carry the ephemeral
+    // O11Y_SESSION_SECRET value in full — this only keeps it out of
+    // dev.mjs's own printed log line.
     log(proc.name, `spawning: ${proc.bin} ${redactArgsForLog(proc.args).join(" ")}`);
     const child = spawn(proc.bin, proc.args, {
       cwd,
@@ -584,8 +567,8 @@ async function main() {
   }
 
   // ---- readiness ------------------------------------------------------
-  // Re-review 2, NB5: wrapped so a readiness TIMEOUT (`waitForServer`
-  // throwing) also runs `cleanup()` before this rejection reaches
+  // Wrapped so a readiness TIMEOUT (`waitForServer` throwing) also runs
+  // `cleanup()` before this rejection reaches
   // `main().catch` at the bottom — see `cleanup`/`shutdown`'s own doc
   // comment above for the bug this closes.
   try {
