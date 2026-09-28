@@ -972,7 +972,8 @@ sized from what one IP actually sends:
 
 A 429 carries `Retry-After: 60`. Faro's transport retries up to
 `maxBackoffMs: 75 000` (the window plus Faro's 20 % jitter), so a 429'd batch
-is sent again after the window, not dropped. It keeps at most 30 batches
+is sent again after the window, not dropped, unless the tab is left first
+(the `pagehide` drain's one keepalive attempt lands in the same window). It keeps at most 30 batches
 queued (`bufferSize`) and makes 3 attempts per batch. A lite beacon has no
 retry, so a 429 drops it.
 
