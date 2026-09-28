@@ -11,6 +11,10 @@ import type { Env } from "./env.js";
 
 const STALE_THRESHOLD_MS = 30 * 60 * 1000;
 const WATCHDOG_STATE_KV_KEY = "o11y-watchdog:state";
+/** How long the heartbeat RPC may take before the o11y worker counts as unreachable.
+ *  The call is one Durable Object storage read (tens of ms), so 5 s only trips on a hung
+ *  or frozen worker, well inside the cron invocation's own limit. */
+export const HEARTBEAT_TIMEOUT_MS = 5_000;
 
 export interface HeartbeatReport {
   lastCron: number;
@@ -54,14 +58,18 @@ async function writeWatchdogState(env: Env, state: WatchdogState): Promise<void>
 
 /** Calls `heartbeat()` over the `O11Y` binding's named `O11yHeartbeat` RPC
  *  entrypoint — never `.fetch()`: the o11y worker's default export has no
- *  HTTP route for this report. Any failure (missing binding, RPC rejection,
- *  malformed body) is treated as a stale heartbeat — an unreachable o11y
+ *  HTTP route for this report. Any failure (missing binding, RPC rejection or
+ *  timeout, malformed body) is treated as a stale heartbeat — an unreachable o11y
  *  worker is exactly the condition this watchdog exists to catch. */
-async function fetchHeartbeat(env: Env): Promise<HeartbeatReport | null> {
+async function fetchHeartbeat(env: Env, timeoutMs: number): Promise<HeartbeatReport | null> {
   const o11y = o11yHeartbeatRpc(env);
   if (!o11y) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const body = await o11y.heartbeat();
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("heartbeat timed out")), timeoutMs);
+    });
+    const body = await Promise.race([o11y.heartbeat(), deadline]);
     if (typeof body.lastCron !== "number" || typeof body.lastIngest !== "number") return null;
     return {
       lastCron: body.lastCron,
@@ -70,6 +78,8 @@ async function fetchHeartbeat(env: Env): Promise<HeartbeatReport | null> {
     };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -86,8 +96,9 @@ export async function checkO11yHeartbeat(
   env: Env,
   capture: CaptureMessageFn = defaultCapture,
   nowMs = Date.now(),
+  timeoutMs = HEARTBEAT_TIMEOUT_MS,
 ): Promise<void> {
-  const report = await fetchHeartbeat(env);
+  const report = await fetchHeartbeat(env, timeoutMs);
   const staleCron = report === null || nowMs - report.lastCron > STALE_THRESHOLD_MS;
   const staleIngest = report === null || nowMs - report.lastIngest > STALE_THRESHOLD_MS;
   const isStale = staleCron || staleIngest;
