@@ -279,11 +279,14 @@ test("R9C: a runtime SyntaxError (JSON.parse) stays a runtime error — only the
   const jsonParse = "SyntaxError: Unexpected token } in JSON at position 1";
   collapse.noteEdit();
   relay(jsonParse);
+  // The same run's next fault: were the SyntaxError taken for a compile
+  // failure (message-shape detection), it would suppress this one.
+  relay(FINAL);
   clock.advance(DEMO_EDIT_SETTLE_MS);
-  assert.deepEqual(emitted, [jsonParse]);
+  assert.deepEqual(emitted, [jsonParse, FINAL]);
   // And outside a burst (a click that parses bad JSON), at once.
   relay("SyntaxError: Unexpected end of JSON input");
-  assert.deepEqual(emitted, [jsonParse, "SyntaxError: Unexpected end of JSON input"]);
+  assert.deepEqual(emitted, [jsonParse, FINAL, "SyntaxError: Unexpected end of JSON input"]);
 });
 
 test("R9C: a first-load compile failure counts at once, and only once until the next edit", () => {
@@ -305,4 +308,13 @@ test("R9C: the next edit re-arms runtime reports after a compile failure", () =>
   // Burst closed: a click in the stale preview that throws still counts.
   relay("stale preview click");
   assert.deepEqual(emitted, ["compile: Unexpected token", "stale preview click"]);
+});
+
+test("R9C: a stale relay held before the final keystroke's compile failure is dropped by it", () => {
+  const { clock, emitted, collapse, relay, compileError } = compileHarness();
+  collapse.noteEdit(); // the last keystroke of the line
+  relay("cons is not defined"); // the previous run, still in flight
+  compileError("Unexpected token (1:12)");
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, ["compile: Unexpected token (1:12)"]);
 });

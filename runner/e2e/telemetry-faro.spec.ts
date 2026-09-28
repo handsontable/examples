@@ -753,7 +753,12 @@ test.describe("Faro in the authoring app (T06)", () => {
     await activeEditor(page).click();
     await page.keyboard.press("ControlOrMeta+End");
     await page.keyboard.press("Enter");
-    await page.keyboard.type("const R9C = ;", { delay: 40 });
+    // No delay on purpose: the identifier prefixes' runs then relay their
+    // ReferenceErrors after later keystrokes (compile slower than the typist),
+    // which is exactly what the verifier's `reason=console`/`uncaught` points
+    // were. With a 40 ms delay the relays land before the next keystroke and
+    // the replacesRun rule goes unexercised (measured: that mutation passed).
+    await page.keyboard.type("const R9C = ;", { delay: 0 });
 
     await expect
       .poll(() => measurementsSince(mark).filter((m) => m.type === "sandpack.compile_error").length, { timeout: 15_000 })
