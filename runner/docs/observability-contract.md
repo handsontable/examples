@@ -65,7 +65,7 @@ Ports inside the Grafana box, reached only through `GrafanaBox.containerFetch`:
 | `O11Y_MAPS` | R2 | bucket `handsontable-demos-o11y-maps` (EU) |
 | `RUNNER_EVENTS` | Analytics Engine | dataset `runner_events` |
 | `API` | service binding | `handsontable-demos-api` (o11y usage metering, o11y spend, later `AdminReads`) |
-| `RATE_LIMITER` | Rate Limiting binding | gates `POST /telemetry/collect` and `POST /telemetry/lite` (ADR §B.5) |
+| `RATE_LIMITER` | Rate Limiting binding | gates `POST /telemetry/collect` and `POST /telemetry/lite` (ADR §B.5): 100 requests / 60 s per `cf-connecting-ip`, 429 with `Retry-After: 60`, which the browser's Faro transport waits out (runbook "Ingest rate limit") |
 | `O11Y_ENV` | var | `production` \| `local` |
 | `LOGIN_BROKER_URL` | var | Handsontable login broker base URL (ADR-0007, K1) — same value as `workers/api/wrangler.jsonc`'s own `LOGIN_BROKER_URL` |
 | `GITHUB_OIDC_REPOSITORY` | var | `handsontable/examples` |

@@ -228,10 +228,11 @@ Pass `--replay` to run it automatically instead of just printing it.
 `cf-connecting-ip ?? "unknown"` (`gates/browser.ts`) — every local browser
 resolves the same fallback, so `/telemetry/collect`/`/telemetry/lite` share
 one 100-per-60s bucket across the whole machine. Several parallel test
-browsers (or tabs) can burst past it and get `429`s, and a beacon dropped at
-the gate never reaches Loki — expect gaps, not a bug, when running
-multi-browser local traffic. Production has a real per-visitor
-`cf-connecting-ip`, so this is local-only.
+browsers can burst past it and get `429`s. A Faro batch is then sent again
+about 60 s later, but a lite beacon dropped at the gate never reaches Loki.
+Expect delays and gaps, not a bug, when running multi-browser local traffic.
+Production keys on each visitor's own `cf-connecting-ip`, so this is
+local-only (see "Ingest rate limit" below for the per-IP budget).
 
 **Local Slack alerts.** `dev:full` starts
 `node scripts/o11y-slack-capture.mjs --port <O11Y_SLACK_CAPTURE_PORT>` — a
@@ -949,6 +950,31 @@ id, not a Cloudflare-provisioned resource; it is created the moment
 the Worker deploys with that binding present. `O11Y_STOP_GRACE_SECONDS` also
 needs no setup here — it is not a Worker var at all, but a hardcoded container
 `envVars` value in `box.ts` (120s in production).
+
+**Ingest rate limit: 100 requests / 60 s per `cf-connecting-ip`.**
+`/telemetry/collect` and `/telemetry/lite` share this one bucket. The limit is
+sized from what one IP actually sends:
+
+- **Authoring tab:** about 12 POSTs a minute at most. Faro flushes every 5 s
+  (`telemetry/faroConfig.ts`) and each time the tab is hidden; a flush whose
+  items span a URL change goes out as one POST per page URL.
+  `sandpack.compile_ms` is sent once per mount and once per edit burst, not
+  once per keystroke. Measured (a Tier-1 `javascript` example, typing for 70 s,
+  `/telemetry/collect` stubbed): 5–8 POSTs in the busiest 60 s, page load
+  included, for a comment or a string literal at 150 or 250 ms per key, and for
+  statements at 150 ms.
+- **Embed or `/d` page view:** on average 0.4 lite beacons (four vitals on the
+  10 % of views that sample them), plus at most 20 error beacons
+  (`MONITOR_EVENT_CEILING`) from a demo that throws.
+- **One IP:** 100/60 s covers 8 authoring tabs flushing at the 12/min ceiling,
+  12 at the measured worst of 8, or about 250 embed views a minute. That is
+  enough headroom for an office NAT, so the limit stays at 100.
+
+A 429 carries `Retry-After: 60`. Faro's transport retries up to
+`maxBackoffMs: 75 000` (the window plus Faro's 20 % jitter), so a 429'd batch
+is sent again after the window, not dropped. It keeps at most 30 batches
+queued (`bufferSize`) and makes 3 attempts per batch. A lite beacon has no
+retry, so a 429 drops it.
 
 ### 7. Slack webhook
 

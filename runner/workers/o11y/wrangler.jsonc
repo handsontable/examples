@@ -102,9 +102,8 @@
   // ADR §B.5's rate-limiting binding, gating `collect`/`lite`.
   // `ratelimits[].namespace_id` is a free-form string the deploy author
   // picks, not a dashboard-provisioned id. `1001` is scoped to this Worker
-  // only. `100` req/`60`s per `cf-connecting-ip` is a starting value,
-  // generous for a legitimate browser and tight enough to blunt abuse;
-  // unmeasured against real traffic — tune after launch.
+  // only. `100` req/`60`s per `cf-connecting-ip`: an authoring tab flushes
+  // every 5 s, an embed view sends about 0.4 (runbook "Ingest rate limit").
   "ratelimits": [
     { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 100, "period": 60 } }
   ]
