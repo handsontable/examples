@@ -20,13 +20,11 @@ import {
   truncateForScrub,
 } from "@handsontable/demo-runtime/telemetry";
 
-// `stripUrlQueriesInText` and `redactIpInText` are defined once in the
-// runtime package (browsers and this Worker both scrub with them, ADR §E.4)
-// and re-exported here so this module's existing consumers — this file's
-// own `scrubBodyText`/`scrubAttributeValues`, and `pipeline/o11y-redos.test.mjs` /
-// `pipeline/o11y-normalise.test.mjs`, which import them by this path — keep
-// working unchanged.
-export { redactIpInText, stripUrlQueriesInText };
+// `stripUrlQueriesInText` and `redactIpInText` are now defined once in the
+// runtime package (browsers and this Worker both scrub with them, ADR §E.4).
+// `redactIpInText` is re-exported because `pipeline/o11y-redos.test.mjs` and
+// `pipeline/o11y-normalise.test.mjs` import it by this module's path.
+export { redactIpInText };
 
 /** T02-D — a user-agent string embedded in free body text (see the task
  *  Outcome): `scrub.ts#reduceBrowserMeta` only reduces the *structured*
