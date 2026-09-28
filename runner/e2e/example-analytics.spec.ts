@@ -371,3 +371,54 @@ test("landing on /edit/:id?fork=1 (onFork's own destination) fires example.open 
   // manual reload of this same address is a plain deep-link, not a fork.
   await expect(page).toHaveURL(new RegExp(`/edit/${FORKED_DEMO_ID}$`));
 });
+
+// `example.saved` is the API worker's (contract §5): the browser hands it the
+// open example's `ht_major` in the Save request and sends no event of its own.
+const SAVED_DEMO_ID = "e2esave01";
+
+test("a Save sends the open example's ht_major to the API and emits no example.saved event itself", async ({ page }) => {
+  await stubShell(page);
+  await signIn(page);
+  const patches: Array<Record<string, unknown>> = [];
+  await page.route("**/api/demos/**", async (route: Route) => {
+    if (route.request().method() === "PATCH") {
+      patches.push(JSON.parse(route.request().postData() ?? "{}"));
+      return route.fulfill({ json: { ok: true, htVersion: "18.0.0" } });
+    }
+    return route.fulfill({
+      json: new URL(route.request().url()).pathname.endsWith("/source")
+        ? { framework: "react", files: FORKED_DEMO_FILES }
+        : { title: "Saved demo", description: null, ht_version: "18.0.0", created_at: "2026-09-23T00:00:00.000Z" },
+    });
+  });
+  const events = captureTelemetryEvents(page);
+
+  await page.goto(`${BASE_URL}/edit/${SAVED_DEMO_ID}`);
+  await expect.poll(() => events.filter((e) => e.name === "example.open").length).toBe(1);
+  const [open] = events.filter((e) => e.name === "example.open");
+  expect(open.attributes?.["hot.metric_kind"]).toBe("saved");
+
+  const saveButton = page.getByRole("button", { name: /^Save/ });
+  await page.locator('[data-pane-active="true"] .cm-content').click();
+  await page.keyboard.type("// edit");
+  await expect(saveButton).toHaveText("Save •");
+  await saveButton.click();
+  await expect(saveButton).toHaveText("Save");
+
+  expect(patches).toHaveLength(1);
+  expect(patches[0]).toHaveProperty("files");
+  expect(patches[0].exampleHtMajor).toBe(open.attributes?.["hot.ht_major"]);
+  expect(patches[0].exampleHtMajor).toBe("18");
+
+  // Faro sends in push order, so once a probe pushed after the Save has
+  // arrived, an `example.saved` pushed by the Save would have arrived too.
+  const probeRef = `save-probe-${Date.now()}`;
+  await page.evaluate((ref) => {
+    const hook = (window as unknown as {
+      __t06Telemetry?: { event: (name: string, attrs: Record<string, string>) => void };
+    }).__t06Telemetry;
+    hook?.event("example.downloaded", { kind: "saved", ref });
+  }, probeRef);
+  await expect.poll(() => events.some((e) => e.attributes?.["hot.ref"] === probeRef)).toBe(true);
+  expect(events.filter((e) => e.name === "example.saved")).toHaveLength(0);
+});

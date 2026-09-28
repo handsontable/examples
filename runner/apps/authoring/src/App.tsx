@@ -81,7 +81,7 @@ import {
 } from "./sentry.js";
 import { isMonitorPayload } from "@handsontable/demo-runtime/monitor";
 import { tier1Report } from "./tier1Report.js";
-import { telemetry, apiHeaders } from "./telemetry/index.js";
+import { telemetry, apiHeaders, telemetryEnabled } from "./telemetry/index.js";
 import type { HotAttrs, Surface, Tier } from "@handsontable/demo-runtime/telemetry";
 import {
   emitBucketResolve,
@@ -3090,11 +3090,13 @@ function Authoring({
         body: JSON.stringify({
           files: filesRef.current,
           htVersion: version,
+          // The API worker writes `example.saved` (ADR-0042 §2) from this once the
+          // rebuild lands, so a visitor who leaves before the response still counts.
+          exampleHtMajor: telemetryEnabled() ? currentExampleTaxonomyRef.current?.ht_major : undefined,
         }),
       });
       await assertApiOk(res, `save failed (${res.status})`);
       clearDirty();
-      noteExampleAction("example.saved"); // ADR-0042 §2
     } catch (e) {
       // Losing a save is the worst outcome in the app — the user's edits are only
       // in this tab's memory until the PATCH lands. Which is exactly why an
@@ -3108,7 +3110,7 @@ function Authoring({
     } finally {
       setSaving(false);
     }
-  }, [savedId, isShare, version, clearDirty, noteExampleAction]);
+  }, [savedId, isShare, version, clearDirty]);
 
   /**
    * The preview bar's share icon, mode-aware (ADR-0025). `edit` has a saved demo

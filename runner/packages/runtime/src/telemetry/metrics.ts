@@ -186,7 +186,7 @@ const REGISTRY_DATA = {
   },
   "example.engaged": EXAMPLE_ACTION,
   "example.forked": EXAMPLE_ACTION,
-  "example.saved": EXAMPLE_ACTION,
+  "example.saved": { ...EXAMPLE_ACTION, emittedBy: "API worker (ADR-0042)" },
   "example.shared": EXAMPLE_ACTION,
   "example.downloaded": EXAMPLE_ACTION,
   "api.request": {

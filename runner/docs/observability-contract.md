@@ -226,7 +226,8 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `error.uncaught` | browser, beacon | surface, fingerprint, demo_id | count | — |
 | `error.handled` | browser, API worker | surface, route_class, fingerprint | count | — |
 | `example.open` | browser (ADR-0042) | kind, ref, area, framework, ht_major, bucket, reason (`entry`) | count | reason `deep-link`, `picker`, `switch`, `version-switch`, `fork` |
-| `example.engaged`, `example.forked`, `example.saved`, `example.shared`, `example.downloaded` | browser (ADR-0042) | kind, ref, area, framework, ht_major, bucket | count | — |
+| `example.engaged`, `example.forked`, `example.shared`, `example.downloaded` | browser (ADR-0042) | kind, ref, area, framework, ht_major, bucket | count | — |
+| `example.saved` | API worker (ADR-0042) | kind, ref, area, framework, ht_major, bucket | count | — |
 | `api.request` | API worker | route_class, outcome | count, duration_ms | `2xx`, `3xx`, `4xx`, `5xx` |
 | `session.start` | API worker | framework, ht_major, outcome | count, duration_ms | `ready`, `at_capacity`, `container_starting`, `boot_timeout`, `budget_denied`, `error` |
 | `session.end` | API worker | framework, reason | count, value (awake s) | reason `pagehide`, `sleep_after`, `teardown_failed`, `budget_closed` |
@@ -303,6 +304,15 @@ A report from a superseded run still in flight at the last keystroke can add one
 to that burst. On Tier 2, where a rebuild outlasts the 2 s window, a superseded
 rebuild's report can land after the burst closed and count on its own. The Sentry side is not behind this collapse; its relay budgets are
 unchanged.
+
+`example.saved` is written by the API worker when an editor Save (`PATCH /api/demos/:id`
+with `files`) finishes its rebuild, because the rebuild can outlast the visitor's stay on
+the page. It carries the same values the browser's other `example.*` events do for a saved
+demo: `kind=saved`, `ref` = the demo id, `framework` = the demo row's, and `ht_major` = the
+body's `exampleHtMajor`, which is the major the editor opened the demo at. `area` and
+`bucket` stay empty. The editor sends `exampleHtMajor` only while its own telemetry gate is
+open (§10). A request without a valid value writes no point, so saves by API token, or
+those the gate excludes, are not counted. `blob1`/`blob2` name `demos-api`.
 
 `serve.share` locally: under `vite dev` (what `pnpm dev:full` serves), React
 StrictMode runs the share page's load effect twice, so one `/share/<id>` view gives 2

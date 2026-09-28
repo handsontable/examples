@@ -141,7 +141,7 @@ function buildFacade(faro: Faro, pageLoadId: string): Telemetry {
     // `skipDedupe: true` on both calls: faro-core's default GLOBAL dedupe
     // keeps exactly one `lastPayload` per API and skips a push that
     // deep-equals the previous one, with no time window — two identical
-    // `example.saved`/`example.open` calls back-to-back would otherwise
+    // `example.downloaded`/`example.open` calls back-to-back would otherwise
     // silently drop the second before it leaves the browser. Server-side
     // redelivery hashing already includes the client timestamp, so this
     // client-side collapse buys no dedupe value here, only data loss.
