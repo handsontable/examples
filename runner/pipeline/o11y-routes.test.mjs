@@ -934,34 +934,17 @@ test("POST /telemetry/hooks/sentry: fix round A-I3 — a title embedding a previ
   assert.doesNotMatch(text, /referrer=slack/, "no query string on the permalink survives");
 });
 
-// ---- unregistered contract routes still 501/404 -----------------------------------
-//
-// `POST /telemetry/lite` was this file's own placeholder for "not yet
-// registered" until T08 (ADR §C.5) implemented it — `workers/o11y/src/lite.ts`,
-// registered through the same `router.ts` this file drives its assertions
-// through. Its real behaviour (status codes, gates, the stored shape) is
-// `pipeline/lite-beacon.test.mjs`'s job now, the same split every other T02
-// route already has with its own dedicated fixtures.
+// ---- unregistered paths answer 404 -----------------------------------------
 
 test("an unknown path answers 404", async () => {
-  const { env } = freshEnv();
-  const res = await worker.fetch(new Request("https://demos.handsontable.com/nope"), env, ctx);
-  assert.equal(res.status, 404);
-});
-
-// Fix round (finding A-M5): `/_internal/heartbeat` must never be answered by
-// this Worker's default `fetch()` — it is served only through the
-// `O11yHeartbeat` RPC entrypoint (`heartbeat.ts`). Fails without the fix:
-// before the fix, this path was handled unconditionally in `fetch()` before
-// route matching and answered 200 with the heartbeat JSON.
-test("GET /_internal/heartbeat 404s through the public fetch handler", async () => {
-  const { env } = freshEnv();
-  const res = await worker.fetch(
-    new Request("https://demos.handsontable.com/_internal/heartbeat"),
-    env,
-    ctx,
-  );
-  assert.equal(res.status, 404);
+  // `/_internal/heartbeat` gets no special handling in the public fetch
+  // handler — the heartbeat report is served only through the
+  // `O11yHeartbeat` RPC entrypoint (`heartbeat.ts`).
+  for (const path of ["/nope", "/_internal/heartbeat"]) {
+    const { env } = freshEnv();
+    const res = await worker.fetch(new Request(`https://demos.handsontable.com${path}`), env, ctx);
+    assert.equal(res.status, 404, path);
+  }
 });
 
 // ---- Every stored record carries the contract labels, none carry forbidden data ---
