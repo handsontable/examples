@@ -1163,8 +1163,8 @@ function Authoring({
   // preview pane and this needs a button: the answer to an expired session is
   // "sign in again", which is an action, not a sentence.
   const [sessionExpired, setSessionExpired] = useState(false);
-  // A failed Save's message. A dialog, not `errorMessage`: that card only renders once the
-  // preview itself has failed, and a Save usually fails over a preview that still runs.
+  // A failed Save, Fork or Share. A dialog, not `errorMessage`: that card only renders once
+  // the preview itself has failed, and these usually fail over a preview that still runs.
   const [saveError, setSaveError] = useState<string | null>(null);
   const [versionWarning, setVersionWarning] = useState<string | null>(null);
   /** Did the floor below just cost this demo its theme module? Its own state, not
@@ -3021,7 +3021,7 @@ function Authoring({
       // would not (DEV-2534). `finally` still clears the in-flight state.
       if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-embed");
-      setErrorMessage(e instanceof Error ? e.message : String(e));
+      setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setEmbedding(false);
     }
@@ -3064,7 +3064,7 @@ function Authoring({
       setForking(false);
       if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-fork");
-      setErrorMessage(e instanceof Error ? e.message : String(e));
+      setSaveError(e instanceof Error ? e.message : String(e));
     }
   }, [user, entry, version, forkedFrom, importedTitle, noteExampleAction]);
 

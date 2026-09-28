@@ -618,6 +618,25 @@ test("a Save whose code does not build shows the build error and keeps the edit 
   await expect(dialog).toHaveCount(0);
 });
 
+for (const action of ["Fork", "Share"] as const) {
+  test(`a ${action} whose code does not build shows the build error`, async ({ page }) => {
+    await stubShell(page);
+    await signIn(page);
+    await stubProfile(page);
+    const detail = 'error during build: src/App.tsx:1:10: ERROR: Unexpected ";"';
+    await page.route("**/api/demos", (route) => route.fulfill({ status: 422, json: { error: "build_failed", detail } }));
+
+    await page.goto("/?example=react");
+    await expect(accountAvatar(page)).toBeVisible();
+    await (action === "Fork" ? forkButton(page) : shareIcon(page)).click();
+
+    const dialog = page.getByRole("dialog", { name: "Couldn't save" });
+    await expect(dialog).toContainText(detail);
+    await expect(page.getByText(/build_failed/)).toHaveCount(0);
+    await expect(forkButton(page)).toBeEnabled();
+  });
+}
+
 // The bug the uniform early-return would have introduced. `onFork` has no
 // `finally` — the success path navigates away, and clearing `forking` first
 // would flash the button back to idle mid-navigation — so the busy state is
