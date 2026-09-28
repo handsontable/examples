@@ -119,3 +119,40 @@ test("Grafana visit wake: unaffected by drainsPaused (still wakes the box)", asy
   assert.equal(await res.text(), "grafana-body", "the box answered — the visit wake was not refused");
   assert.deepEqual(grafanaBox.calls, ["visit"], "ADR §G: 'visit wakes still work' — drainsPaused must never gate this path");
 });
+
+// F37 (round 10): with the budget overridden to $0.10 and the spend at $0.32,
+// the SAME tick that fired o11y-spend-cap still woke the box for the backlog.
+// `scheduled()` ran the backlog wake beside `runAlerts`, so it read
+// `drainsPaused` before this tick's spend-cap result set it. This drives the
+// real `scheduled()` with the spend coming from the API binding (the value the
+// admin override feeds), not a hand-set flag.
+test("F37: the tick whose spend-cap fires wakes nothing for the backlog; the tick after the cap resolves unpauses and wakes", async () => {
+  let spend = { spendUsd: 0.32, capUsd: 0.1 }; // the Round 10 override
+  const { env, doStorage } = makeEnv(InboxWriter, {
+    env: {
+      O11Y_ENV: "local",
+      RUNNER_EVENTS_CLICKHOUSE_URL: "http://127.0.0.1:1",
+      API: { fetch: async () => new Response(null, { status: 204 }), o11ySpend: async () => spend },
+    },
+  });
+  const objectKey = "inbox/worker/2026-09-01/00/000000000002.ndjson.gz";
+  env.O11Y_INBOX = makeListableR2([
+    { key: objectKey, size: 1024, uploaded: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+  ]);
+  await doStorage.put({ [inboxKeyStorageKey(objectKey)]: "written" });
+  const grafanaBox = makeGrafanaBoxRecorder();
+  env.GRAFANA_BOX = grafanaBox.namespace;
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+  assert.equal(await writer.drainsPaused(), false, "precondition: not paused before the tick");
+
+  await worker.scheduled({ cron: "*/10 * * * *" }, env, ctx);
+  await ctx.drain();
+  assert.equal(await writer.drainsPaused(), true, "the tick that fires the cap pauses drains");
+  assert.deepEqual(grafanaBox.calls, [], "and the same tick must not wake the box for the backlog");
+
+  spend = { spendUsd: 0.32, capUsd: 15 }; // override removed, back to the default budget
+  await worker.scheduled({ cron: "*/10 * * * *" }, env, ctx);
+  await ctx.drain();
+  assert.equal(await writer.drainsPaused(), false, "the next tick after the cap resolves unpauses");
+  assert.deepEqual(grafanaBox.calls, ["backlog"], "and wakes the box for the waiting backlog");
+});
