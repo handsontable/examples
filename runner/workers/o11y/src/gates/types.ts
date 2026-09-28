@@ -19,6 +19,9 @@ export interface GateDrop {
    *  ingest routes are public and unauthenticated up to this point — no gate
    *  reason should leak *why* a secret/HMAC/OIDC check failed). */
   detail?: string;
+  /** Sent as `Retry-After` (seconds) by `respond.ts#respondDrop`. Only the
+   *  rate-limit gate sets it. */
+  retryAfterSeconds?: number;
 }
 
 export type GateResult = GateOk | GateDrop;
