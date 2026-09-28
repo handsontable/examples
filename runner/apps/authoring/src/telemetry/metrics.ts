@@ -10,7 +10,7 @@
 //
 // The runtime engines (`packages/runtime/src/sandpack.ts`, `container.ts`) expose
 // timing through hooks declared as OPTIONAL members on the shared `DemoRuntime`
-// interface (`packages/runtime/src/types.ts`, T07 phase 2) —
+// interface (`packages/runtime/src/types.ts`) —
 // `onCompileTiming`/`onCompileError`/`onBundlerUnreachable` (`SandpackRuntime`
 // only), `onSessionStart`/`onHmr` (`ContainerRuntime` only). `wireRuntimeMetrics`
 // below calls every one of them through `runtime.onX?.(cb)`, so a caller holding
@@ -39,7 +39,7 @@ import { HT_MAJORS, type HotAttrs, type HtMajor, type Surface, type Telemetry } 
 /**
  * Contract §3 `hot.ht_major` from a Handsontable version ref.
  *
- * T07-D1: a pkg.pr.new build ref maps to `"next"`, same as an actual `next`
+ * A pkg.pr.new build ref maps to `"next"`, same as an actual `next`
  * prerelease. `HT_MAJORS` (the closed set `toAePoint` enforces) has no slot for a
  * build id, and both channels are equally "not a stable release" from a metrics
  * point of view — inventing a value outside the closed set would throw inside
@@ -49,7 +49,7 @@ export function htMajorOf(ref: string | null | undefined): HtMajor {
   if (!ref) return "none";
   if (isNextPrereleaseVersion(ref)) return "next";
   const major = selectedReleaseMajor(ref);
-  if (major === null) return "next"; // pkg.pr.new build ref (T07-D1), or unparsed
+  if (major === null) return "next"; // pkg.pr.new build ref, or unparsed
   const asString = String(major);
   return (HT_MAJORS as readonly string[]).includes(asString) ? (asString as HtMajor) : "none";
 }
@@ -96,14 +96,14 @@ export interface PreviewReadyTracker {
   abandon(): void;
 }
 
-/** Generous, tier-specific defaults (T07-D2): Tier-2 cold boots can take minutes
+/** Generous, tier-specific defaults: Tier-2 cold boots can take minutes
  *  (the create POST alone can sit near Cloudflare's ~100s edge ceiling, and the
  *  dev server still has to install and start after that), so a short timeout here
  *  would latch `timeout` and then silently drop the real `ready` that follows.
  *  Tier-1's hosted bundler has no comparable install step. Neither number is
  *  measured against production traffic yet — both are a ceiling picked to never
  *  fire before a real failure would already have reported through `onError`, not
- *  a target latency. Revisit once T09 has real `preview.ready_ms` data per tier. */
+ *  a target latency. Revisit once real `preview.ready_ms` data exists per tier. */
 const DEFAULT_PREVIEW_TIMEOUT_MS: Record<1 | 2, number> = {
   1: 30_000,
   2: 180_000,
@@ -174,8 +174,8 @@ export function trackPreviewReady(
  * simply registers nothing for the three Sandpack-only hooks, and vice versa —
  * no engine branch, no cast to a concrete class needed at the call site.
  *
- * `sandpack.compile_error` fires for a bundler diagnostic and (R9C, F10
- * compile half) for the parcel pre-transpile's own babel failure, which never
+ * `sandpack.compile_error` fires for a bundler diagnostic and
+ * for the parcel pre-transpile's own babel failure, which never
  * reaches the bundler — on mount, and for the newest push on the edit path.
  * Typing one broken line walks through several distinct diagnostics
  * (`Unexpected token`, `Missing initializer…`, `Unterminated JSX…`), so a
@@ -184,21 +184,21 @@ export function trackPreviewReady(
  * edit-burst collapse, shared with `preview.runtime_error`) a compile error
  * counts once per edit burst, from the burst's final state, and suppresses the
  * burst's runtime relays from code already typed past. Without it (a bare
- * caller, and the pre-R9C behaviour) the point is deduped by fingerprint for
+ * caller) the point is deduped by fingerprint for
  * the life of `runtime`.
  *
- * T07-D2 — `session.start_ms`'s `reason` (cold/warm) is intentionally never set.
+ * `session.start_ms`'s `reason` (cold/warm) is intentionally never set.
  * `toAePoint` accepts the metric with `reason` omitted (every `HotAttrs` field is
  * optional; the closed-set check in `metrics.ts#toAePoint` only fires when a value
  * IS supplied), so this is a valid point, just without that breakdown. No
  * client-observable cold/warm signal exists anywhere in the codebase today
- * (`sessionDiagnostics.ts` — the "existing session diagnostics" this task's Scope
- * names — only classifies elapsed time and response origin) — the create response
+ * (`sessionDiagnostics.ts` only classifies elapsed time and response origin) —
+ * the create response
  * (`{ previewUrl, port }`) carries nothing about pool state, and each mount mints a
  * fresh session id, so there is no "was this container already warm" fact
  * available client-side to attach. Following through on a latency-threshold guess
  * would put a fabricated split on a dashboard as if it were measured. Follow-up:
- * T05/the API worker should add a `cold`/`warm` field to the create response
+ * the API worker should add a `cold`/`warm` field to the create response
  * (it already knows this — the pool it drew from is server state).
  */
 export function wireRuntimeMetrics(

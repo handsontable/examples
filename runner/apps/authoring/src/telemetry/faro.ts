@@ -48,12 +48,11 @@ import {
 } from "../eventGate.js";
 
 /**
- * Fix round D-I2: contract §6 requires `beforeSend` = `scrubTelemetry` THEN
- * the shared noise gates — before this fix, only `sentry.ts`'s `beforeSend`
- * ever ran them, so every browser-noise shape Sentry has always dropped
- * (the ResizeObserver loop warning, a navigation-abort `Failed to fetch`/
- * `Load failed`, a foreign-origin extension frame, the Outlook/Office
- * safelink scanner's injected rejection) reached Faro/Loki instead, and —
+ * Contract §6 requires `beforeSend` = `scrubTelemetry` THEN
+ * the shared noise gates — without this, every browser-noise shape Sentry
+ * drops (the ResizeObserver loop warning, a navigation-abort `Failed to
+ * fetch`/`Load failed`, a foreign-origin extension frame, the Outlook/Office
+ * safelink scanner's injected rejection) would reach Faro/Loki instead, and —
  * because `surface` defaults to `authoring` and these are all
  * `handled: false` — could mint a fresh `fp:` first-seen entry and fire the
  * §F.3 new-fingerprint alert, the exact replacement ADR §E.1 promises for
@@ -90,14 +89,14 @@ function faroExceptionToExceptionShape(payload: ScrubbableFaroItem["payload"]) {
 }
 
 /** Every item passes through the one contract scrubber before transport
- *  (ADR §E.4) — the exact cast pair T00-D11 documents as the unavoidable
+ *  (ADR §E.4) — the exact cast pair documents the unavoidable
  *  boundary between Faro's real item union (which includes `TraceEvent`,
  *  never exported here) and this module's narrower `ScrubbableFaroItem`.
- *  D-I2: an `exception` item is then run through the shared noise gates,
+ *  An `exception` item is then run through the shared noise gates,
  *  same as Sentry's own `beforeSend` — AFTER scrubbing, so a gate never
  *  reads pre-scrub content.
  *
- *  R3 F17a: BEFORE scrubbing, an `exception` item's stack frames are run
+ *  BEFORE scrubbing, an `exception` item's stack frames are run
  *  through `withoutMessageEchoFrames` on the RAW (unstripped) message —
  *  `scrubTelemetry` already strips the query/fragment off a frame's
  *  `filename`, which would break the substring match this needs against the
@@ -142,27 +141,26 @@ const beforeSend: BeforeSendHook = (item) => {
  * (`attrs.ts#ALLOWED_ATTRIBUTE_KEYS`) — a bare `HotAttrs` key like `surface`
  * is not one of them and is silently dropped by the scrubber that runs in
  * `beforeSend`, BEFORE the request ever leaves the browser (confirmed with a
- * live capture against a real `vite preview` build, not assumed — see T06-D1
- * in the task Outcome). This maps:
+ * live capture against a real `vite preview` build, not assumed). This maps:
  *
  * - the six `HotAttrs` fields with a dotted RESOURCE-attribute equivalent
  *   (`surface`→`hot.surface` etc) — survive as §3 resource attributes/Loki
  *   labels.
- * - `kind`/`ref`/`area` → `hot.metric_kind`/`hot.ref`/`hot.area` (T12,
- *   ADR-0042) and `bucket`/`reason`/`fingerprint` → `hot.bucket`/
- *   `hot.reason`/`hot.fingerprint` (T07 fix round, controller ruling) —
- *   `attrs.ts#AE_ONLY_ATTRIBUTE_KEYS`, T02-D4's AE-only channel
+ * - `kind`/`ref`/`area` → `hot.metric_kind`/`hot.ref`/`hot.area` (ADR-0042)
+ *   and `bucket`/`reason`/`fingerprint` → `hot.bucket`/
+ *   `hot.reason`/`hot.fingerprint` —
+ *   `attrs.ts#AE_ONLY_ATTRIBUTE_KEYS`, the AE-only channel
  *   (`workers/o11y/src/normalise/browser-attrs.ts#readAeOnlyAttrs`): these
  *   survive the allowlist too, but `convert.ts#hoistAttributes` never hoists
  *   them into a stored record — only `toAePoint` (via `readAeOnlyAttrs`) ever
  *   reads them. NOT a resource attribute, NOT a Loki label. `kind` in
  *   particular cannot use the bare dotted name `hot.kind` — that key is
  *   already reserved for the Faro item kind and always overwritten
- *   server-side (T02-D4) — hence `hot.metric_kind`.
+ *   server-side — hence `hot.metric_kind`.
  *
  * Every other `HotAttrs` field (`route_class`, `model`, `provider`, `device`)
  * still has no equivalent and is sent unmapped — no browser call site needs
- * one yet (T02-D4's remaining AE-only columns).
+ * one yet.
  */
 const DOTTED_ATTR_KEY: Partial<Record<string, string>> = {
   surface: ATTR_HOT_SURFACE,
@@ -189,8 +187,8 @@ const DOTTED_ATTR_KEY: Partial<Record<string, string>> = {
  *  Parameter typed as the index-signature-free `object`, not
  *  `Record<string, string | undefined>`: `HotAttrs` itself carries no index
  *  signature, and TS requires a *source* type to also declare one when the
- *  *target* parameter type does — the same friction T00-D11 documents for
- *  `scrub.ts`'s Faro-shape types. */
+ *  *target* parameter type does — the same friction
+ *  `scrub.ts`'s Faro-shape types run into. */
 function attrsToContext(attrs?: object): Record<string, string> | undefined {
   if (!attrs) return undefined;
   const out: Record<string, string> = {};
@@ -203,15 +201,15 @@ function attrsToContext(attrs?: object): Record<string, string> | undefined {
 
 function buildFacade(faro: Faro, pageLoadId: string): Telemetry {
   return {
-    // Z-D-H1 fix: `skipDedupe: true` on both calls below. `initializeFaro`
+    // `skipDedupe: true` on both calls below. `initializeFaro`
     // (below) passes no `dedupe` override, so faro-core's `makeCoreConfig`
     // default `dedupe = true` still applies GLOBALLY — this is what still
     // collapses a `window.onerror`/`unhandledrejection` storm for
-    // `pushError` (unaffected by this fix; `error()` below is untouched).
+    // `pushError` (unaffected here; `error()` below is untouched).
     // But faro-core's event/measurement dedupe keeps exactly ONE
     // `lastPayload` per API and skips a push whenever it deep-equals the
     // PREVIOUS push, with no time window — so two `example.saved` (or
-    // `example.open` on a guide's second example — see H1's `ref`-only
+    // `example.open` on a guide's second example — see the `ref`-only
     // taxonomy) calls with an identical attribute bag back-to-back silently
     // drop the second one before it ever leaves the browser. Server-side
     // redelivery hashing (`normalise/faro.ts`) already includes the client
@@ -250,8 +248,7 @@ export interface InitFaroOptions {
    *  runs and one after both carry the identical id for the life of the page. */
   pageLoadId: string;
   /** `resolveReporting(...).enabled` (`reportingGate.ts`) — the SAME
-   *  production/automation gate Sentry uses (task Scope: "production via
-   *  resolveReporting unchanged"). */
+   *  production/automation gate Sentry uses. */
   productionReportingEnabled: boolean;
   /** `import.meta.env.VITE_SENTRY_RELEASE` — the same full git SHA Sentry
    *  tags its events with, so a Faro `app.version` and a Sentry `release` name
@@ -300,7 +297,7 @@ export function initFaroTelemetry(options: InitFaroOptions): Telemetry | null {
   faroInstance = faro;
   const impl = buildFacade(faro, options.pageLoadId);
 
-  // Z-D-H1 e2e-only hook — same dead-code-elimination guarantee as
+  // An e2e-only hook — same dead-code-elimination guarantee as
   // `sentry.ts`'s `localTestSentryEnabled()` hooks (`__t06SentryCapture`/
   // `__t06ReportDemoEvent`) and `main.tsx`'s CrashProbe: gated on the exact
   // same build-time+host pair (`VITE_TELEMETRY_LOCAL === "1"`, a literal
@@ -309,8 +306,8 @@ export function initFaroTelemetry(options: InitFaroOptions): Telemetry | null {
   // `scripts/check-telemetry-leak.mjs`'s SENTINELS list covers
   // `__t06Telemetry` too, the durable proof it never survives a build
   // without the flag). `e2e/telemetry-faro.spec.ts` calls `event`/`metric`
-  // directly through it to prove the H1 fix (two identical repeat pushes
-  // are NOT collapsed by the facade) without having to drive the real
+  // directly through it to prove two identical repeat pushes
+  // are NOT collapsed by the facade, without having to drive the real
   // save/download UI just to fire two identical `example.saved` events.
   if (localFlag === "1" && typeof window !== "undefined" && (hostname === "localhost" || hostname === "127.0.0.1")) {
     (window as unknown as { __t06Telemetry?: Pick<Telemetry, "event" | "metric"> }).__t06Telemetry = {
