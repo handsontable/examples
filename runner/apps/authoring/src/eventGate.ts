@@ -47,13 +47,9 @@ const UNHANDLED_NOISE = [
   /Load failed/i,
 ];
 
-/**
- * True for a global `onerror`/`onunhandledrejection` (or an ErrorBoundary render
- * crash — see `telemetry/faro.ts#reportUncaughtError`) event whose message is
- * known noise. `mechanism.handled === false` is what distinguishes those from
- * anything reported on purpose (an explicit `captureException`/facade `.error()`
- * call sets `handled: true`), matching every gate in this file.
- */
+/** True for a global `onerror`/`onunhandledrejection` (or an ErrorBoundary
+ *  render crash) event whose message is known noise. `handled === false`
+ *  distinguishes those from anything reported on purpose. */
 export function isUnhandledNoise(event: ExceptionShape): boolean {
   const values = event.exception?.values ?? [];
   return values.some(
@@ -66,11 +62,9 @@ export function isUnhandledNoise(event: ExceptionShape): boolean {
 // ── Gate 0b: cross-origin frames — the preview iframe / an injected script ──────
 //
 // The preview iframe runs arbitrary example code — a typo there is product
-// output, not an app fault — and is cross-origin, so this is the backstop
-// for whatever error still arrives that way. Scoped to `handled === false`;
-// applied to every event it would discard on-purpose reports whose stack
-// merely passed through a foreign frame. `originOrigin` is passed in so
-// this stays resolvable by a bare `node --test`.
+// output, not an app fault — and is cross-origin, so this is the backstop.
+// Scoped to `handled === false`, else it would discard on-purpose reports
+// whose stack merely passed through a foreign frame.
 export function isForeignUnhandled(event: ExceptionShape, originOrigin: string): boolean {
   const values = event.exception?.values ?? [];
   return values.some(
@@ -195,15 +189,9 @@ interface TelemetryTeeTarget {
   event(name: string, attributes: Record<string, string>): void;
 }
 
-/**
- * ADR §E.2: the Faro page-load id becomes a Sentry tag, and the Sentry
- * event id is pushed as a Faro event — both directions, on every event
- * that ships. No-ops safely when telemetry never initialised.
- *
- * Wrapped in try/catch: a throw from either call would otherwise propagate
- * out of `beforeSend`, which the SDK treats as "drop this event." Always
- * returns the (possibly mutated) event, never throws.
- */
+/** ADR §E.2: the Faro page-load id becomes a Sentry tag, and the Sentry
+ *  event id is pushed as a Faro event, on every event that ships. Wrapped
+ *  in try/catch: a throw would otherwise make the SDK drop the event. */
 export function applyFaroTee<E extends TaggedEvent & { event_id?: string }>(event: E, telemetry: TelemetryTeeTarget): E {
   try {
     event.tags = { ...event.tags, page_load_id: telemetry.pageLoadId() };
