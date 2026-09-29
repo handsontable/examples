@@ -161,9 +161,9 @@ export function formatStackFrame(frame: { filename?: string; function?: string; 
   if (!frame.filename) return null;
   const fn = frame.function || "<anonymous>";
   // A `lineno < 1` (or non-finite) is not a real source position:
-  // `source-map-js#originalPositionFor` throws on it. `symbolicate.ts#resolveBody`
-  // guards this too; dropping only the position suffix keeps the existing
-  // "unresolvable, rendered as-is" shape.
+  // `@jridgewell/trace-mapping#originalPositionFor` throws on it.
+  // `symbolicate.ts#resolveBody` guards this too; dropping only the position
+  // suffix keeps the existing "unresolvable, rendered as-is" shape.
   const position =
     typeof frame.lineno === "number" &&
     typeof frame.colno === "number" &&

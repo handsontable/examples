@@ -235,9 +235,9 @@ test("faroItemToRecord body: exception carries its type, log carries its message
 
 // ---- a lineno < 1 is not a real position -------------------------------------
 //
-// `source-map-js#originalPositionFor` throws on `line: 0` at drain time
-// (`workers/o11y/src/drain/symbolicate.ts`'s own guard is the real defence
-// against that). This drops only the invalid position on the ingest side,
+// `@jridgewell/trace-mapping#originalPositionFor` throws on `line: 0` at
+// drain time (`workers/o11y/src/drain/symbolicate.ts`'s own guard is the real
+// defence against that). This drops only the invalid position on the ingest side,
 // so the drain-time regex (`symbolicate.ts#STACK_LINE_RE`) never even
 // captures a `line: 0` for a normalised record — without changing the
 // contract shape (a frame with no numeric position already renders exactly

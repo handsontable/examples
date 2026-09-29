@@ -1,11 +1,11 @@
 // Drain-time symbolication inside a Workers-shaped runtime
 // (workers/o11y/src/drain/symbolicate.ts, ADR-0041 §C.3, exit criterion 5).
 //
-// `source-map-js` builds a sort with `new Function(...)` on the first
-// lookup. workerd forbids code generation from strings, so every lookup
-// throws inside the real Worker unless guarded — a per-frame catch
-// swallowing it would leave no production frame ever resolved, invisible
-// to a Node test, since Node allows `new Function`.
+// workerd forbids code generation from strings; a map library that relies on
+// it would have every lookup throw inside the real Worker, invisible to a
+// Node test since Node allows `new Function`. `symbolicate.ts`'s own header
+// explains why it resolves maps with `@jridgewell/trace-mapping` rather than
+// a library that does.
 //
 // The first test here therefore runs the real drain (`drainBatch` with the
 // real `symbolicateResourceLogs`) in a child Node process started with

@@ -166,8 +166,8 @@ test("symbolicateResourceLogs is deterministic: two independent calls over the s
 
 // ---- a line-0 stack frame must not throw out of symbolication --------------
 //
-// `source-map-js#originalPositionFor({ line: 0, ... })` throws
-// `TypeError: Line must be greater than or equal to 1, got 0` — reachable
+// `@jridgewell/trace-mapping#originalPositionFor({ line: 0, ... })` throws
+// `` Error: `line` must be greater than 0 (lines start at line 1) `` — reachable
 // from one anonymous `POST /telemetry/collect` request with a crafted
 // `lineno: 0` exception frame (ingest does not reject it). That throw must
 // not escape `resolveBody`, then `symbolicateResourceLogs`, then

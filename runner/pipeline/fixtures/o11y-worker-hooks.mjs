@@ -18,10 +18,11 @@
 const CLOUDFLARE_WORKERS_STUB = new URL("./o11y-cloudflare-workers-stub.mjs", import.meta.url).href;
 const CLOUDFLARE_CONTAINERS_STUB = new URL("./cloudflare-containers-stub.mjs", import.meta.url).href;
 
-// `jose`, `source-map-js` (`drain/symbolicate.ts`'s own dependency,
-// borrowed the same way for `pipeline/o11y-symbolicate.test.mjs`, which
-// needs to build a real source map with `SourceMapGenerator` to test
-// against) and `@handsontable/demo-runtime` (any subpath) are
+// `jose`, `source-map-js` (a `workers/o11y` devDependency, borrowed the same
+// way for `pipeline/o11y-symbolicate.test.mjs`, which needs to build a real
+// source map with `SourceMapGenerator` to test against — `drain/symbolicate.ts`
+// itself resolves maps with `@jridgewell/trace-mapping`) and
+// `@handsontable/demo-runtime` (any subpath) are
 // `workers/o11y`'s dependencies, not the pipeline's — a plain node resolve
 // only succeeds when the importing file lives under `workers/o11y/`, which
 // every gate/normalise module does. A test file under `pipeline/` that also
