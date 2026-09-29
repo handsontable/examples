@@ -23,6 +23,7 @@ import type { Env } from "./env.js";
 import { BUILD_CONFIG } from "./frameworks.generated.js";
 import { isAtCapacityFailure } from "./session-lifecycle.js";
 import { BuildFailure, buildFailureTags, demoBuildState, getDemo, invalidateDemo, updateDemo } from "./share.js";
+import { logErrorLine, withSpan } from "./telemetry/index.js";
 
 export interface SnapshotJob {
   demoId: string;
@@ -92,15 +93,23 @@ export async function runSnapshotJob(env: Env, job: SnapshotJob): Promise<void> 
   if (!files || Object.keys(files).length === 0) {
     throw new Error(`snapshot job for ${job.demoId}: empty payload at ${job.filesKey}`);
   }
-  await updateDemo(env, {
-    id: job.demoId,
-    entry: { framework: job.framework, ...cfg },
-    files,
-    htVersion: job.htVersion,
-    // No title/description on purpose: absent means "leave the column alone",
-    // so a rename committed while the build ran is never reverted (DEV-2495).
-    now: new Date().toISOString(),
-  });
+  // `snapshot.build` (contract §5): this DO's alarm is the "detached" build
+  // path (§D); `updateDemo()` emits the `ok`/`failed` point itself, via the
+  // single emission site `share.ts#withSnapshotBuildPoint` shared with the
+  // synchronous ("inline") build in `index.ts`.
+  await withSpan("snapshot.build", () => updateDemo(
+    env,
+    {
+      id: job.demoId,
+      entry: { framework: job.framework, ...cfg },
+      files,
+      htVersion: job.htVersion,
+      // No title/description on purpose: absent means "leave the column alone",
+      // so a rename committed while the build ran is never reverted (DEV-2495).
+      now: new Date().toISOString(),
+    },
+    "detached",
+  ));
   if (job.filesKey.endsWith("__job.json")) {
     // Best effort: the build has already succeeded, and a throw from cleanup
     // would route through alarm()'s catch and record that success as a failure
@@ -121,6 +130,9 @@ export async function runSnapshotJob(env: Env, job: SnapshotJob): Promise<void> 
  */
 export async function markSnapshotFailed(env: Env, job: SnapshotJob, err: unknown): Promise<void> {
   const cause = err instanceof Error ? err.message : String(err);
+  // ADR-0041 §D: one structured line here regardless of which branch below
+  // runs; `hot.demo_id` is the contract's own key (`telemetry/lines.ts#logRequestLine`).
+  logErrorLine(env, "snapshot-job:alarm", err, { "hot.demo_id": job.demoId });
   try {
     await env.DB.prepare("UPDATE demos SET build_status='failed', build_error=?, updated_at=? WHERE id=?")
       .bind(cause.slice(0, BUILD_ERROR_MAX), new Date().toISOString(), job.demoId)

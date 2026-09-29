@@ -33,6 +33,10 @@
     "./entry-script": {
       "types": "./dist/entry-script.d.ts",
       "default": "./dist/entry-script.js"
+    },
+    "./telemetry": {
+      "types": "./dist/telemetry/index.d.ts",
+      "default": "./dist/telemetry/index.js"
     }
   },
   "scripts": {

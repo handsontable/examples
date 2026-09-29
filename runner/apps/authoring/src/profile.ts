@@ -18,6 +18,7 @@
 import { readApiJson } from "./api.js";
 import { getToken, PROFILE_CACHE_KEY } from "./auth.js";
 import { reportError } from "./sentry.js";
+import { apiHeaders } from "./telemetry/index.js";
 
 /** Mirrors `ProfileView` in `workers/api/src/profile-store.ts`. */
 export interface Profile {
@@ -36,9 +37,12 @@ export interface Profile {
 
 const CACHE_KEY = PROFILE_CACHE_KEY;
 
+/** Every one of this file's `fetch` calls is an API call, so this is also
+ *  where `x-hot-session` (T06, `apiHeaders`) rides along — one call site to
+ *  touch instead of four. */
 function authHeaders(): Record<string, string> {
   const token = getToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return Object.fromEntries(apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined).entries());
 }
 
 /** The cached profile, but only if it belongs to `email`. A stale row from a

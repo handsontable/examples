@@ -184,10 +184,16 @@ export async function requestTheme(
   if (!res.ok) {
     const requestId = res.headers.get("x-litellm-call-id") ?? "none";
     console.error(`[theme-ai] gateway ${res.status} (request id: ${requestId})`);
+    // ADR-0041 §E.1 diagnostic — same rule and the same reason as chat.ts's
+    // gateway failure: `status`/`requestId` ride on the thrown error so
+    // `index.ts` can report it, because this module (like chat.ts) is copied
+    // and imported standalone by a pipeline test that cannot resolve a
+    // sibling `./telemetry/*.js` import.
     throw new ChatUnavailableError(
       res.status === 401 || res.status === 403
         ? "styling by description is not configured"
         : "the styling assistant is unavailable",
+      { status: res.status, requestId },
     );
   }
 

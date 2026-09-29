@@ -9,6 +9,7 @@ import {
   primaryButton as primary,
 } from "./formStyles.js";
 import { reportError } from "./sentry.js";
+import { apiHeaders } from "./telemetry/index.js";
 
 /** Title + markdown description editor for a saved demo, built to `114:24410`.
  *
@@ -82,10 +83,10 @@ export function EditInfoDialog({
     try {
       const res = await fetch(`${apiBase}/api/demos/${demoId}`, {
         method: "PATCH",
-        headers: {
+        headers: apiHeaders({
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        }),
         // No `files`: that key is what makes the endpoint rebuild the snapshot.
         // Metadata alone is one UPDATE and no container.
         body: JSON.stringify({ title: next.title, description: next.description || null }),

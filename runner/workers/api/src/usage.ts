@@ -14,6 +14,10 @@ import type { Env } from "./env.js";
 export type UsageMetric =
   | "session_started"
   | "session_denied"
+  /** ADR-0040 C.1, standing per ADR-0041 §F.1: a Tier-2 session refused
+   *  because the container pool was full — `index.ts`'s `isAtCapacityFailure`
+   *  branch, beside the `session.start` outcome=`at_capacity` point. */
+  | "at_capacity"
   | "build"
   | "share_created"
   | "share_view"

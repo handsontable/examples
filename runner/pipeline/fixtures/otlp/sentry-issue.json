@@ -1,0 +1,15 @@
+{
+  "action": "created",
+  "installation": { "uuid": "11111111-2222-3333-4444-555555555555" },
+  "data": {
+    "issue": {
+      "id": "987654321",
+      "shortId": "DEMOS-42",
+      "title": "TypeError: cannot read properties of undefined",
+      "level": "error",
+      "permalink": "https://handsoncode.sentry.io/issues/987654321/?query=is%3Aunresolved",
+      "lastRelease": { "version": "abc123def456abc123def456abc123def456abc1" }
+    }
+  },
+  "actor": { "type": "application", "id": "sentry" }
+}

@@ -15,13 +15,27 @@ import type {
   DemoRuntime,
   FilesMap,
   HandsontableVersionRef,
+  SandpackBundlerUnreachableEvent,
+  SandpackCompileErrorEvent,
+  SandpackCompileTimingEvent,
   WriteFileOptions,
 } from "./types.js";
-import { isCompilerUnavailable, transpileFilesForParcel } from "./transpile.js";
+// Re-exported so existing `@handsontable/demo-runtime/sandpack` importers
+// (`apps/authoring/src/telemetry/metrics.ts`) keep working — the interfaces
+// themselves live in `types.ts`, so `DemoRuntime` can name the hook methods
+// without a circular import.
+export type {
+  SandpackBundlerUnreachableEvent,
+  SandpackCompileErrorEvent,
+  SandpackCompileTimingEvent,
+} from "./types.js";
+import { isCompilerUnavailable, isTranspileFailure, transpileFilesForParcel } from "./transpile.js";
 import { applyDepShims } from "./dep-shims.js";
 import { HTML_ENTRY_ENVS, resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import {
   MONITOR_COMPILE_MESSAGE_MAX,
+  MONITOR_MESSAGE_TYPE,
+  MONITOR_RESET,
   REPORTER_MODULE_LINE,
   injectReporter,
   redactPreviewHosts,
@@ -189,6 +203,17 @@ export class SandpackEvaluationError extends Error {
   }
 }
 
+// Observability contract §5 timing hooks: `SandpackCompileTimingEvent`,
+// `SandpackCompileErrorEvent`, `SandpackBundlerUnreachableEvent` and the
+// `onCompileTiming`/`onCompileError`/`onBundlerUnreachable` methods below are
+// declared on `DemoRuntime` itself (`types.ts`), as OPTIONAL members — this
+// module implements them, never imports `@handsontable/demo-runtime/telemetry`,
+// and `apps/authoring/src/telemetry/metrics.ts#wireRuntimeMetrics` is what
+// turns the callbacks into
+// `sandpack.compile_ms`/`sandpack.compile_error`/`sandpack.bundler_unreachable`
+// points against an injected `Telemetry`, through `runtime.onX?.(cb)` — no
+// cast to the concrete class needed at the call site.
+
 const COMPILE_ERROR_FALLBACK = "Sandpack compile error";
 
 /** Inline source maps the bundler echoes back inside a compile message. A
@@ -299,8 +324,50 @@ export class SandpackRuntime implements DemoRuntime {
    *  so a mount still in flight when we are disposed would resurrect a torn-down
    *  preview after the caller had already blanked it. */
   private disposed = false;
-  /** Our claim on the iframe, registered in `mount()` before the first await. */
-  private claim: object | null = null;
+
+  // ---- Timing hooks ---------------------------------------------------
+  private readonly compileTimingCbs = new Set<(e: SandpackCompileTimingEvent) => void>();
+  private readonly compileErrorCbs = new Set<(e: SandpackCompileErrorEvent) => void>();
+  private readonly bundlerUnreachableCbs = new Set<(e: SandpackBundlerUnreachableEvent) => void>();
+  private readonly pushOutcomeCbs = new Set<(outcome: "rerun" | "unchanged") => void>();
+  /** Pushes dispatched to the bundler whose `start` has not arrived yet. */
+  private pushesAwaitingStart = 0;
+  /** When the compile currently in flight was dispatched to the bundler — either
+   *  `loadSandpackClient`'s initial compile (mount) or `updateSandbox` (an edit or
+   *  `reload()`). Cleared once the terminal message for it arrives. Only ever one
+   *  compile is in flight at a time: `pushUpdate`'s own sequence guard means a
+   *  superseded push never reaches `updateSandbox`, and `mount()` is called once. */
+  private compileDispatchedAt: number | null = null;
+
+  /** Timing for every dispatched compile — the initial mount and every later push —
+   *  resolved once (`ok` on a clean `done`, `error` on a `SandpackCompileError`). Fires
+   *  once per real compile, never for a `sameFiles` no-op skip (nothing is dispatched,
+   *  so nothing to time) and never twice for one dispatch. */
+  onCompileTiming(cb: (e: SandpackCompileTimingEvent) => void): void {
+    this.compileTimingCbs.add(cb);
+  }
+  /** A compile diagnostic (`sandpack.compile_error`, §5) — never the evaluation-error
+   *  sibling, which is a runtime throw already reported elsewhere. */
+  onCompileError(cb: (e: SandpackCompileErrorEvent) => void): void {
+    this.compileErrorCbs.add(cb);
+  }
+  /** The hosted bundler's connection itself failed (§5 `sandpack.bundler_unreachable`) —
+   *  see the interface doc comment for what this covers. */
+  onBundlerUnreachable(cb: (e: SandpackBundlerUnreachableEvent) => void): void {
+    this.bundlerUnreachableCbs.add(cb);
+  }
+  /** See the interface doc. `unchanged` fires for the newest push only, never for a
+   *  failed transpile; `rerun` fires when the bundler starts a run. */
+  onPushOutcome(cb: (outcome: "rerun" | "unchanged") => void): void {
+    this.pushOutcomeCbs.add(cb);
+  }
+
+  private resolveCompileTiming(outcome: "ok" | "error"): void {
+    if (this.compileDispatchedAt === null) return;
+    const durationMs = Math.round(performance.now() - this.compileDispatchedAt);
+    this.compileDispatchedAt = null;
+    for (const cb of this.compileTimingCbs) cb({ durationMs, outcome });
+  }
 
   constructor(entry: CatalogEntry, opts: SandpackRuntimeOptions) {
     if (entry.engine !== "sandpack") {
@@ -528,11 +595,40 @@ export class SandpackRuntime implements DemoRuntime {
     // Claim the iframe before the first await, so a successor mounting on the same frame
     // takes ownership synchronously and this instance can tell it has been superseded.
     const claim = {};
-    this.claim = claim;
     IFRAME_OWNER.set(this.opts.iframe, claim);
 
-    const setup = await this.buildSetup(files);
-    const client = await loadSandpackClient(this.opts.iframe, setup, this.clientOptions());
+    let setup: SandboxSetup;
+    try {
+      setup = await this.buildSetup(files);
+    } catch (err) {
+      // A demo whose source does not parse at mount — a saved, shared or
+      // `?payload=` demo, or a remount of a broken workspace — is a compile
+      // error from the very first run, and counts at once (no edit burst to
+      // collapse). Reported, then rethrown unchanged: the mount still rejects
+      // exactly as before, so the error card, `preview.ready_ms
+      // outcome=error` and the Sentry capture downstream (`tier1Report`) see
+      // the same error they always did.
+      if (isTranspileFailure(err)) this.reportTranspileFailure(err);
+      throw err;
+    }
+    // The dispatch clock for the initial compile (§5 `sandpack.compile_ms`). Started
+    // right before `loadSandpackClient`, which both connects to the bundler AND runs
+    // the first compile — `buildSetup` above is our own transpile/injection work, not
+    // the bundler's, and must stay outside the measured window.
+    const dispatchedAt = performance.now();
+    this.compileDispatchedAt = dispatchedAt;
+    let client: SandpackClientInstance;
+    try {
+      client = await loadSandpackClient(this.opts.iframe, setup, this.clientOptions());
+    } catch (err) {
+      // The client never connected — distinct from a `SandpackCompileError`/
+      // `SandpackEvaluationError`, both of which only arrive over `onMessage` once a
+      // client exists. See `SandpackBundlerUnreachableEvent`.
+      if (this.compileDispatchedAt === dispatchedAt) this.compileDispatchedAt = null;
+      const durationMs = Math.round(performance.now() - dispatchedAt);
+      for (const cb of this.bundlerUnreachableCbs) cb({ durationMs });
+      throw err;
+    }
 
     // Both awaits above can outlive a `dispose()`. `loadSandpackClient` has by now pointed
     // the iframe at the bundler origin, so returning quietly is not enough — undo it, or a
@@ -560,9 +656,18 @@ export class SandpackRuntime implements DemoRuntime {
       payload?: { frames?: unknown };
     };
     switch (m.type) {
+      // `rerun` at the bundler's `start`, not at dispatch: the bundler runs one compile at
+      // a time, so what the previous run relays still arrives between the two. Only a
+      // pushed compile's start counts; the mount's own compile is not an edit's run.
+      case "start":
+        if (this.pushesAwaitingStart === 0) break;
+        this.pushesAwaitingStart -= 1;
+        for (const cb of this.pushOutcomeCbs) cb("rerun");
+        break;
       case "done":
         // (`compilatonError` is misspelled in the upstream payload. Leave it.)
-        if (m.compilatonError) return; // error surfaced via its own message
+        if (m.compilatonError) return; // error surfaced via its own message; see "show-error"
+        this.resolveCompileTiming("ok");
         this.emitReady();
         break;
       case "action":
@@ -588,6 +693,14 @@ export class SandpackRuntime implements DemoRuntime {
           const frames = m.payload?.frames;
           const evaluated = Array.isArray(frames) && frames.length > 0;
           const message = boundCompileMessage(m.message);
+          // Only a real compile diagnostic (no frames — the module never evaluated)
+          // resolves the compile clock and reports §5 `sandpack.compile_error`. An
+          // evaluation error's compile already reached "done" (`ok`) — the module ran
+          // and threw afterwards, a runtime fault, not a compile error.
+          if (!evaluated) {
+            this.resolveCompileTiming("error");
+            for (const cb of this.compileErrorCbs) cb({ message, origin: "bundler" });
+          }
           this.emitError(
             evaluated ? new SandpackEvaluationError(message) : new SandpackCompileError(message),
           );
@@ -744,7 +857,10 @@ export class SandpackRuntime implements DemoRuntime {
         //
         // `reload()` passes `force`, and its stamp guarantees a diff, so the refresh
         // button still re-runs the sandbox rather than being skipped here.
-        if (!opts.force && sameFiles(candidate, this.published)) return;
+        if (!opts.force && sameFiles(candidate, this.published)) {
+          for (const cb of this.pushOutcomeCbs) cb("unchanged");
+          return;
+        }
         // Recorded *after* the push, never before. `setupFrom` throws when the resolved
         // entry is transiently missing (mid-rename, the DEV-2130 guard), and a `published`
         // set ahead of that throw would claim the bundler holds a sandbox it never
@@ -752,11 +868,25 @@ export class SandpackRuntime implements DemoRuntime {
         // byte-identical compile this skip exists to prevent — the blank preview, back
         // again, on the rename path.
         const setup = this.setupFrom(candidate);
+        // Dispatch clock for this compile (§5 `sandpack.compile_ms`) — right before the
+        // bundler call, so `setupFrom`'s own DEV-2130 throw (caught below, not a compile
+        // dispatch at all) never starts a clock nothing will stop.
+        this.compileDispatchedAt = performance.now();
+        this.resetMonitorBudget();
         this.client.updateSandbox(setup, false);
         this.published = candidate;
+        this.pushesAwaitingStart += 1;
       })
       .catch((cause: unknown) => {
-        /* mid-edit parse error — the user is still typing.
+        /* mid-edit parse error — the user is still typing. Nothing reaches the bundler and
+         * the last good render stays on screen (no error card per keystroke).
+         *
+         * It is still the preview's compile error, though, and the only place it exists:
+         * reported to `onCompileError`, and only for the newest
+         * push — a superseded keystroke's failure is already typed past, and reporting it
+         * would put a stale diagnostic into the edit burst the authoring app collapses
+         * (`demoEventCollapse.ts`), which counts once per burst. `emitError` is NOT
+         * called: the card and the Sentry capture stay exactly as they were.
          *
          * One exception (DEV-2569): the compiler chunk itself failing to load is not the
          * visitor's half-typed code, and swallowing it here left a stranded tab silently
@@ -764,10 +894,34 @@ export class SandpackRuntime implements DemoRuntime {
          * most likely to be on. Emitted once: `loadBabel` has latched by now, so every
          * later keystroke arrives here with the same terminal error, and the card is
          * already showing it. */
+        if (isTranspileFailure(cause)) {
+          if (this.client && seq === this.updateSeq) this.reportTranspileFailure(cause);
+          return;
+        }
         if (this.compilerFailureEmitted || !isCompilerUnavailable(cause)) return;
         this.compilerFailureEmitted = true;
         this.emitError(cause as Error);
       });
+  }
+
+  /** Re-arm the in-preview reporter for the run about to be dispatched. Posted to the
+   *  same window as the compile, so it is delivered first. */
+  private resetMonitorBudget(): void {
+    if (!this.opts.monitor) return;
+    try {
+      this.opts.iframe.contentWindow?.postMessage({ type: MONITOR_MESSAGE_TYPE, reset: MONITOR_RESET }, "*");
+    } catch {
+      /* a detached frame: its next document starts with a fresh budget anyway */
+    }
+  }
+
+  /** §5 `sandpack.compile_error` for a parcel pre-transpile failure — the babel
+   *  parse error the bundler never sees. Same event, and the same bounded message, as a
+   *  bundler `show-error` diagnostic; no compile clock is involved (nothing was
+   *  dispatched, so `sandpack.compile_ms` has nothing to time). */
+  private reportTranspileFailure(cause: unknown): void {
+    const message = boundCompileMessage((cause as Error).message);
+    for (const cb of this.compileErrorCbs) cb({ message, origin: "transpile" });
   }
 
   dispose(): void {
@@ -780,6 +934,10 @@ export class SandpackRuntime implements DemoRuntime {
       this.client = null;
       this.readyCbs.clear();
       this.errorCbs.clear();
+      this.compileTimingCbs.clear();
+      this.compileErrorCbs.clear();
+      this.bundlerUnreachableCbs.clear();
+      this.compileDispatchedAt = null;
       // No reload bookkeeping to drain: `reload()` settles on its own transpile, and
       // `pushUpdate` always settles (it catches), so a dispose mid-refresh cannot leave a
       // promise hanging.

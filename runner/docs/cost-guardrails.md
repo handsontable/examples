@@ -79,7 +79,17 @@ Cloudflare's cap is also the only thing bounding *concurrency*, not just spend:
 there is no separate queue in front of the pool, so `Sandbox.max_instances` is
 exactly the number of visitors who can hold a live preview at once.
 
-### Measuring pool pressure — [ADR-0040](adr/0040-hourly-buckets-and-pool-pressure.md)
+### Measuring pool pressure — [ADR-0040](adr/0040-hourly-buckets-and-pool-pressure.md), delivered by [ADR-0041](adr/0041-observability-stack.md)
+
+> **Implemented, on the ADR-0041 observability branch.** As of this branch, both gaps
+> below are closed: the `at_capacity` refusal counter lands in `usage_daily`
+> (`recordUsageEvent(env, "at_capacity", …)` beside the 503, `workers/api/src/index.ts`)
+> exactly as ADR-0040 C.1 says, and as a `session.start` outcome=`at_capacity` point;
+> peak concurrency is a `pool.gauge` Analytics Engine point (`reason: "live"`,
+> `telemetry/cron.ts#emitPoolGauge`) sampled every 5 minutes by the API worker's `*/5`
+> cron and read by Grafana — not the `usage_hourly` D1 table or the `hour` dimension
+> this section originally proposed; ADR-0041 superseded both of those in favor of
+> Analytics Engine points, which is what actually shipped.
 
 The 5 → 10 decision above was made without the number that should have decided
 it. Daily totals cannot yield peak concurrency (13,237 sessions over 30 days
@@ -309,7 +319,7 @@ day/dimension/value):
 | `country` | two-letter code from the Cloudflare edge |
 | `device` / `browser` / `os` | three to six coarse buckets each |
 | `language` | primary subtag (`en`, `pl`, …) |
-| `hour` | hour of day the view landed, `00`–`23` UTC (ADR-0040) |
+| `hour` | *planned, not implemented* — hour of day; delivered as an Analytics Engine point per ADR-0041, not as a D1 row |
 | `bot` | requests identified as bots, excluded from every other bucket |
 
 **Never stored:** cookies or any client-side id, IP addresses, user-agent

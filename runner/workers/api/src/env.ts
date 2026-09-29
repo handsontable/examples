@@ -1,4 +1,11 @@
-import type { DurableObjectNamespace, D1Database, KVNamespace, R2Bucket } from "@cloudflare/workers-types";
+import type {
+  AnalyticsEngineDataset,
+  DurableObjectNamespace,
+  D1Database,
+  Fetcher,
+  KVNamespace,
+  R2Bucket,
+} from "@cloudflare/workers-types";
 
 // Tier-2 container sessions. `Sandbox` is the single live-preview namespace
 // required by proxyToSandbox; `SANDBOX_BUILDER` runs the share snapshotter.
@@ -59,11 +66,16 @@ export interface Env {
   BUDGET_ENFORCE?: string;
   /** Comma-separated dollar figures for the in-app spend alerts. */
   BUDGET_ALERTS_USD?: string;
+  /** ADR-0041 §G default for `settings.ts#o11yBudgetUsd` ($15/month) — the
+   *  o11y stack's own spend ceiling, separate from `BUDGET_MONTHLY_USD`. */
+  O11Y_BUDGET_USD?: string;
   /** Days of anonymous audience data to keep (visitor hashes). */
   ANALYTICS_RETENTION_DAYS?: string;
   /** Days after revocation before a demo's R2 artifacts are purged. 0 = off. */
   BUDGET_R2_GC_DAYS?: string;
-  /** Account tag for the GraphQL Analytics API (same id as wrangler.jsonc). */
+  /** Account tag for the GraphQL Analytics API (same id as wrangler.jsonc).
+   *  Reused, alongside `AE_SQL_TOKEN` below, by `reconcile.ts`'s production
+   *  Analytics Engine SQL API read for the nightly `example_daily` rollup. */
   CF_ACCOUNT_ID?: string;
   /** This Worker's script name + its R2 bucket. The nightly reconciliation
    *  scopes every analytics query to them, so a shared account's other
@@ -87,6 +99,31 @@ export interface Env {
   ALGOLIA_APP_ID?: string;
   ALGOLIA_INDEX?: string;
   ALGOLIA_API_KEY?: string;
+
+  // ---- Observability (ADR-0041) --------------------------------------
+  /** Analytics Engine dataset `runner_events` (contract §4), the same binding
+   *  name and dataset the o11y worker writes to. */
+  RUNNER_EVENTS?: AnalyticsEngineDataset;
+  /** Service binding to `handsontable-demos-o11y` — `heartbeat()` for the
+   *  watchdog cron (ADR §F.3), later `AdminReads` (ADR-0043). */
+  O11Y?: Fetcher;
+  /** `full` (default) | `uncaught` (contract §11) — which handled-error
+   *  reports also go to Sentry. See `telemetry/diagnostic.ts`. */
+  SENTRY_SCOPE?: "full" | "uncaught";
+  /** `service.version` (contract §2/§D): the full deploy `GITHUB_SHA`, set
+   *  by the `deploy` script's `--var`. See `telemetry/resource.ts#serviceVersion`
+   *  for the fallback. */
+  SERVICE_VERSION?: string;
+  /** Local-mode `RUNNER_EVENTS` stand-in (contract §10): ClickHouse HTTP
+   *  endpoint, `.dev.vars` only. Defaults to `http://localhost:8123`. See
+   *  `telemetry/resource.ts`. */
+  RUNNER_EVENTS_CLICKHOUSE_URL?: string;
+  /** Local mode: ClickHouse HTTP password for the sink above (`.dev.vars`
+   *  only). Production: the Analytics Engine SQL API token, read by
+   *  `reconcile.ts#queryExampleEventTotals` for the nightly `example_daily`
+   *  rollup; absent in production means that read throws rather than
+   *  silently returning zero rows and deleting the day. */
+  AE_SQL_TOKEN?: string;
 
   // Index signature so we can look up a binding by generated name.
   [key: string]: unknown;

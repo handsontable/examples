@@ -16,6 +16,8 @@ import type { Env } from "./env.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
 import { htmlEntryLoadsModule, snapshotBuildCommand } from "./build-command.js";
+import { htMajorFromVersion, injectLiteHtml } from "./monitor-inject.js";
+import { emitPoint } from "./telemetry/points.js";
 
 type SandboxLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
@@ -173,13 +175,15 @@ export class BuildFailure extends Error {
   // falsy sentinel to omit rather than fabricate a tag.
   readonly htRef: string | null;
   readonly framework: string | null;
+  /** The failed command's exit code, `null` when the exec result carried none. */
+  readonly exitCode: number | null;
 
   constructor(
     message: string,
     phase: "install" | "build",
     code: string,
     log = "",
-    context: { htRef?: string | null; framework?: string | null } = {},
+    context: { htRef?: string | null; framework?: string | null; exitCode?: number | null } = {},
   ) {
     super(message);
     this.phase = phase;
@@ -187,14 +191,61 @@ export class BuildFailure extends Error {
     this.log = log;
     this.htRef = context.htRef ?? null;
     this.framework = context.framework ?? null;
+    this.exitCode = context.exitCode ?? null;
   }
+}
+
+/** pnpm codes for a dependency the author named that does not resolve (contract §5). */
+const USER_INSTALL_CODES = new Set([
+  "ERR_PNPM_NO_MATCHING_VERSION",
+  "ERR_PNPM_FETCH_404",
+  "ERR_PNPM_SPEC_NOT_SUPPORTED_BY_ANY_RESOLVER",
+  "ERR_PNPM_BAD_PM_VERSION",
+]);
+
+/** Output that names our infrastructure (network, memory, a killed worker, Next's Google
+ *  Fonts fetch) whatever the exit code. A message-text rule: a tool that rewords these
+ *  lines moves its failure into the 422 class. */
+const INFRA_FAILURE_TEXT =
+  /ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|Failed to fetch|heap out of memory|signal SIGKILL|worker exited|`next\/font` error|fonts\.googleapis\.com/i;
+
+/** The demo's own input failed the build (contract §5): client input, answered 422. That
+ *  is a build command exiting 1–125, or an install refusing a dependency the author named.
+ *  Anything whose output names infrastructure, a signal kill (128+), 126/127 (not
+ *  executable, not found), a result without an exit code, and other install failures are ours. */
+export function isUserBuildError(err: unknown): boolean {
+  if (!(err instanceof BuildFailure)) return false;
+  if (INFRA_FAILURE_TEXT.test(`${err.message}\n${err.log}`)) return false;
+  if (err.phase === "install") return USER_INSTALL_CODES.has(err.code);
+  return err.exitCode !== null && err.exitCode > 0 && err.exitCode <= 125;
+}
+
+/** Longest `detail` a 422 carries; the full output stays in the Sentry `buildLog`. */
+const USER_BUILD_DETAIL_MAX = 300;
+
+/** The one-line build error shown to the author: the cause without its `build failed:`
+ *  or `install failed:` prefix, completed from the log when the cause is only headings (`error during build:
+ *  Build failed with 1 error:`), with container paths made relative and the length bounded. */
+export function userBuildErrorDetail(err: BuildFailure): string {
+  let detail = err.message.replace(/^(build|install) failed:\s*/, "");
+  const lines = err.log.split("\n").map((l) => l.trim()).filter(Boolean);
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (detail.endsWith(lines[i]!)) { at = i; break; }
+  }
+  while (/:\s*$/.test(detail) && at >= 0 && at + 1 < lines.length) {
+    at += 1;
+    detail = `${detail} ${lines[at]}`;
+  }
+  detail = detail.split(`${CONTAINER_ROOT}/`).join("");
+  return detail.length > USER_BUILD_DETAIL_MAX ? `${detail.slice(0, USER_BUILD_DETAIL_MAX - 1)}…` : detail;
 }
 
 /** Describe a failed exec as a one-line cause plus its bounded output. Exported for
  *  `pipeline/failure-log.test.mjs`, which owns the "a message is never a log" rule. */
 export function describeBuildFailure(
   phase: "install" | "build",
-  r: { stdout?: string; stderr?: string },
+  r: { stdout?: string; stderr?: string; exitCode?: number },
   context: { htRef?: string | null; framework?: string | null } = {},
 ): BuildFailure {
   const { cause, tail, code } = execFailureDetail(r, {
@@ -202,7 +253,10 @@ export function describeBuildFailure(
     maxTailChars: BUILD_LOG_MAX,
     fallback: "no output",
   });
-  return new BuildFailure(`${phase} failed: ${cause}`, phase, code, tail, context);
+  return new BuildFailure(`${phase} failed: ${cause}`, phase, code, tail, {
+    ...context,
+    exitCode: typeof r.exitCode === "number" ? r.exitCode : null,
+  });
 }
 
 /** Sentry tags for a snapshot build failure. A key is OMITTED when its value is
@@ -226,6 +280,13 @@ function base64ToBytes(b64: string): Uint8Array {
 
 /** Artifact contents: text for source/markup, raw bytes for binary assets. */
 export type ArtifactContents = string | Uint8Array;
+
+/** Byte length of one artifact's contents — `TextEncoder`, the same primitive this
+ *  file already uses for a byte count elsewhere (the lite-beacon egress record,
+ *  below), rather than `Buffer`, which is not a global in a real Workers isolate. */
+function contentsByteLength(contents: ArtifactContents): number {
+  return typeof contents === "string" ? new TextEncoder().encode(contents).length : contents.byteLength;
+}
 
 /**
  * Turbopack's browser runtime registers each chunk by stripping a compiled
@@ -446,56 +507,118 @@ export async function createPendingDemo(env: Env, args: CreateArgs): Promise<{ i
   return { id };
 }
 
-/** Build (or reuse cached build), store to R2, insert into D1, return the demo id. */
-export async function createDemo(env: Env, args: CreateArgs): Promise<{ id: string }> {
-  const hash = await filesHash(args.files);
-  const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
-
-  // Reuse a prior identical build if present.
-  const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
-    .bind(buildKey).first<{ r2_prefix: string }>();
-
-  const id = args.id ?? shortId();
-  const r2Prefix = `demos/${id}/`;
-
-  if (cached) {
-    // Copy the cached artifact under the new id's prefix (cheap; keeps ids independent).
-    const src = cached.r2_prefix;
-    const listed = await env.ARTIFACTS.list({ prefix: src });
-    for (const obj of listed.objects) {
-      const body = await env.ARTIFACTS.get(obj.key);
-      if (body) await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
-    }
-  } else {
-    const built = await runBuild(env, args.entry, args.files);
-    for (const [rel, contents] of Object.entries(built)) {
-      await env.ARTIFACTS.put(r2Prefix + rel, contents, {
-        httpMetadata: { contentType: contentTypeFor(rel) },
-      });
-    }
-    await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
-      .bind(buildKey, r2Prefix, args.now).run();
+/**
+ * Wrap a `createDemo`/`updateDemo` finalize for the §5 `snapshot.build` point:
+ * every synchronous ("inline") or detached-DO ("detached", `snapshot-jobs.ts`'s
+ * alarm) call gets exactly one `ok`/`failed` point, timed end to end. A
+ * `build_cache` hit that only copies R2 objects still emits `ok` — a cache
+ * copy answering near-instantly is a real outcome, not something to hide.
+ *
+ * `fn` is handed an `addBytes` accumulator so either caller (a fresh build's
+ * outputs, or a cache hit's copied objects) can report the built artifact's
+ * total size into `bytes` (§5) as it writes each object.
+ */
+async function withSnapshotBuildPoint<T>(
+  env: Env,
+  framework: string,
+  reason: "inline" | "detached",
+  fn: (addBytes: (n: number) => void) => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  let bytes = 0;
+  try {
+    const result = await fn((n) => { bytes += n; });
+    // `await`, not `ctx.waitUntil`/`void`: neither `createDemo`/`updateDemo` nor
+    // their callers thread an `ExecutionContext` down to here, and `emitPoint`'s
+    // own doc says a local ClickHouse-shim write only survives past the response
+    // under `waitUntil` — an unawaited write here would race the handler's
+    // return and could be cancelled before the local sink's HTTP POST lands
+    // (never throws either way, so this cannot turn a build failure silent).
+    await emitPoint(
+      env,
+      "snapshot.build",
+      { count: 1, duration_ms: Date.now() - startedAt, bytes },
+      { framework, outcome: "ok", reason },
+    );
+    return result;
+  } catch (err) {
+    await emitPoint(
+      env,
+      "snapshot.build",
+      { count: 1, duration_ms: Date.now() - startedAt },
+      { framework, outcome: "failed", reason },
+    );
+    throw err;
   }
+}
 
-  // Store the source snapshot (for forking a saved demo). Served only via the
-  // authenticated /api/demos/:id/source route, never as a public /d asset.
-  await env.ARTIFACTS.put(
-    `${r2Prefix}__source.json`,
-    JSON.stringify({ framework: args.entry.framework, files: args.files }),
-    { httpMetadata: { contentType: "application/json" } },
-  );
+/** Build (or reuse cached build), store to R2, insert into D1, return the demo id.
+ *  `buildReason` picks the §5 `snapshot.build` reason this finalize reports under —
+ *  callers on the synchronous request path leave it at its default `"inline"`;
+ *  `snapshot-jobs.ts`'s DO alarm passes `"detached"`. */
+export async function createDemo(
+  env: Env,
+  args: CreateArgs,
+  buildReason: "inline" | "detached" = "inline",
+): Promise<{ id: string }> {
+  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async (addBytes) => {
+    const hash = await filesHash(args.files);
+    const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
 
-  await env.DB.prepare(
-    `INSERT OR REPLACE INTO demos (id,title,description,framework,tier,ht_version,files_hash,r2_prefix,forked_from,visibility,revoked,created_by,created_at,updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?, ?, 0, ?,?,?)`,
-  ).bind(
-    id, args.title, args.description ?? null, args.entry.framework, args.entry.tier,
-    args.htVersion, hash, r2Prefix, args.forkedFrom ?? null, args.visibility ?? "unlisted",
-    args.createdBy, args.now, args.now,
-  ).run();
-  await invalidateDemo(env, id);
+    // Reuse a prior identical build if present.
+    const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
+      .bind(buildKey).first<{ r2_prefix: string }>();
 
-  return { id };
+    const id = args.id ?? shortId();
+    const r2Prefix = `demos/${id}/`;
+
+    if (cached) {
+      // Copy the cached artifact under the new id's prefix (cheap; keeps ids independent).
+      const src = cached.r2_prefix;
+      const listed = await env.ARTIFACTS.list({ prefix: src });
+      for (const obj of listed.objects) {
+        const body = await env.ARTIFACTS.get(obj.key);
+        if (body) {
+          const rel = obj.key.slice(src.length);
+          await env.ARTIFACTS.put(r2Prefix + rel, body.body);
+          // `body.size` is the real R2 byte length. Excludes a `__`-prefixed
+          // rel (`__source.json`, `__job.json`): those are private files, not
+          // the artifact, and would inflate "the built artifact's total size".
+          if (!rel.split("/").some((seg) => seg.startsWith("__"))) addBytes(body.size);
+        }
+      }
+    } else {
+      const built = await runBuild(env, args.entry, args.files);
+      for (const [rel, contents] of Object.entries(built)) {
+        await env.ARTIFACTS.put(r2Prefix + rel, contents, {
+          httpMetadata: { contentType: contentTypeFor(rel) },
+        });
+        addBytes(contentsByteLength(contents));
+      }
+      await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
+        .bind(buildKey, r2Prefix, args.now).run();
+    }
+
+    // Store the source snapshot (for forking a saved demo). Served only via the
+    // authenticated /api/demos/:id/source route, never as a public /d asset.
+    await env.ARTIFACTS.put(
+      `${r2Prefix}__source.json`,
+      JSON.stringify({ framework: args.entry.framework, files: args.files }),
+      { httpMetadata: { contentType: "application/json" } },
+    );
+
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO demos (id,title,description,framework,tier,ht_version,files_hash,r2_prefix,forked_from,visibility,revoked,created_by,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?, ?, 0, ?,?,?)`,
+    ).bind(
+      id, args.title, args.description ?? null, args.entry.framework, args.entry.tier,
+      args.htVersion, hash, r2Prefix, args.forkedFrom ?? null, args.visibility ?? "unlisted",
+      args.createdBy, args.now, args.now,
+    ).run();
+    await invalidateDemo(env, id);
+
+    return { id };
+  });
 }
 
 export interface UpdateArgs {
@@ -516,51 +639,68 @@ export interface UpdateArgs {
 
 /** Rebuild a saved demo in place (edit-page Save): re-run the build for the new
  *  code, overwrite the demo's R2 artifacts + source snapshot, and update its row.
- *  The demo id, prefix, owner, and lineage are preserved. */
-export async function updateDemo(env: Env, args: UpdateArgs): Promise<void> {
-  const hash = await filesHash(args.files);
-  const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
-  const r2Prefix = `demos/${args.id}/`;
+ *  The demo id, prefix, owner, and lineage are preserved. `buildReason` picks the
+ *  §5 `snapshot.build` reason this finalize reports under — synchronous callers
+ *  (the edit-page Save and MCP-fix routes in index.ts) leave it at its default
+ *  `"inline"`; `snapshot-jobs.ts`'s DO alarm, finalizing both a create and a
+ *  rebuild, passes `"detached"`. */
+export async function updateDemo(
+  env: Env,
+  args: UpdateArgs,
+  buildReason: "inline" | "detached" = "inline",
+): Promise<void> {
+  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async (addBytes) => {
+    const hash = await filesHash(args.files);
+    const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
+    const r2Prefix = `demos/${args.id}/`;
 
-  const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
-    .bind(buildKey).first<{ r2_prefix: string }>();
+    const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
+      .bind(buildKey).first<{ r2_prefix: string }>();
 
-  if (cached && cached.r2_prefix !== r2Prefix) {
-    const src = cached.r2_prefix;
-    const listed = await env.ARTIFACTS.list({ prefix: src });
-    for (const obj of listed.objects) {
-      const body = await env.ARTIFACTS.get(obj.key);
-      if (body) await env.ARTIFACTS.put(r2Prefix + obj.key.slice(src.length), body.body);
+    if (cached && cached.r2_prefix !== r2Prefix) {
+      const src = cached.r2_prefix;
+      const listed = await env.ARTIFACTS.list({ prefix: src });
+      for (const obj of listed.objects) {
+        const body = await env.ARTIFACTS.get(obj.key);
+        if (body) {
+          const rel = obj.key.slice(src.length);
+          await env.ARTIFACTS.put(r2Prefix + rel, body.body);
+          // Same `__`-prefix exclusion as createDemo's own copy loop above.
+          if (!rel.split("/").some((seg) => seg.startsWith("__"))) addBytes(body.size);
+        }
+      }
+    } else if (!cached) {
+      const built = await runBuild(env, args.entry, args.files);
+      for (const [rel, contents] of Object.entries(built)) {
+        await env.ARTIFACTS.put(r2Prefix + rel, contents, {
+          httpMetadata: { contentType: contentTypeFor(rel) },
+        });
+        addBytes(contentsByteLength(contents));
+      }
+      await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
+        .bind(buildKey, r2Prefix, args.now).run();
     }
-  } else if (!cached) {
-    const built = await runBuild(env, args.entry, args.files);
-    for (const [rel, contents] of Object.entries(built)) {
-      await env.ARTIFACTS.put(r2Prefix + rel, contents, {
-        httpMetadata: { contentType: contentTypeFor(rel) },
-      });
-    }
-    await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
-      .bind(buildKey, r2Prefix, args.now).run();
-  }
-  // (cached && cached.r2_prefix === r2Prefix): identical code already built here.
+    // (cached && cached.r2_prefix === r2Prefix): identical code already built here —
+    // nothing is written, so nothing to add; `bytes` reports 0 for this outcome.
 
-  await env.ARTIFACTS.put(
-    `${r2Prefix}__source.json`,
-    JSON.stringify({ framework: args.entry.framework, files: args.files }),
-    { httpMetadata: { contentType: "application/json" } },
-  );
+    await env.ARTIFACTS.put(
+      `${r2Prefix}__source.json`,
+      JSON.stringify({ framework: args.entry.framework, files: args.files }),
+      { httpMetadata: { contentType: "application/json" } },
+    );
 
-  // Built column by column so an absent title or description is *not written*,
-  // rather than written back as whatever the row held when the rebuild started.
-  // A completed rebuild is a ready demo whatever state preceded it, so the build
-  // columns reset unconditionally — this is also how the async path (BuildJob's
-  // alarm calls this function) flips 'building' to 'ready'.
-  const sets = ["ht_version=?", "files_hash=?", "updated_at=?", "build_status='ready'", "build_error=NULL"];
-  const binds: unknown[] = [args.htVersion, hash, args.now];
-  if (args.title !== undefined) { sets.push("title=?"); binds.push(args.title); }
-  if (args.description !== undefined) { sets.push("description=?"); binds.push(args.description ?? null); }
-  await env.DB.prepare(`UPDATE demos SET ${sets.join(", ")} WHERE id=?`).bind(...binds, args.id).run();
-  await invalidateDemo(env, args.id);
+    // Built column by column so an absent title or description is *not written*,
+    // rather than written back as whatever the row held when the rebuild started.
+    // A completed rebuild is a ready demo whatever state preceded it, so the build
+    // columns reset unconditionally — this is also how the async path (BuildJob's
+    // alarm calls this function) flips 'building' to 'ready'.
+    const sets = ["ht_version=?", "files_hash=?", "updated_at=?", "build_status='ready'", "build_error=NULL"];
+    const binds: unknown[] = [args.htVersion, hash, args.now];
+    if (args.title !== undefined) { sets.push("title=?"); binds.push(args.title); }
+    if (args.description !== undefined) { sets.push("description=?"); binds.push(args.description ?? null); }
+    await env.DB.prepare(`UPDATE demos SET ${sets.join(", ")} WHERE id=?`).bind(...binds, args.id).run();
+    await invalidateDemo(env, args.id);
+  });
 }
 
 export async function getDemo(env: Env, id: string): Promise<DemoRow | null> {
@@ -648,9 +788,21 @@ export async function getDemoSource(env: Env, id: string): Promise<DemoSource | 
   return repairEntryScript(env, row, JSON.parse(await obj.text()) as DemoSource);
 }
 
+/** §5's closed `serve.*` outcome set — `2xx`/`304`/`4xx`/`5xx`, never `3xx`:
+ *  `serveDemoAsset` never itself answers a redirect. `null` skips the point
+ *  entirely (`toAePoint` would otherwise throw on an out-of-enum value). */
+export function serveOutcome(status: number): "2xx" | "304" | "4xx" | "5xx" | null {
+  if (status === 304) return "304";
+  if (status >= 200 && status < 300) return "2xx";
+  if (status >= 400 && status < 500) return "4xx";
+  if (status >= 500 && status < 600) return "5xx";
+  return null;
+}
+
 /** Serve a built static asset for /d/:id/* (or /embed/:id/*). */
 export async function serveDemoAsset(
   env: Env,
+  ctx: ExecutionContext,
   id: string,
   subpath: string,
   opts: { embed: boolean },
@@ -662,8 +814,32 @@ export async function serveDemoAsset(
   const html = wantsHtmlError(subpath);
   const homeUrl = opts.embed ? undefined : "/";
 
+  // `serve.d`/`serve.embed` (contract §5) counts a *document* view — never
+  // an individual asset under the same prefix, or every build would inflate
+  // the count by however many files it emits. `isDocRequest` covers every
+  // early-return branch; the HTML branch also records unconditionally for a
+  // resolved `hitPath` ending in `.html` (a client-routed SPA's deep link
+  // still falls through to `index.html`, a real document view). The
+  // non-HTML branch never calls `record` — always an asset.
+  //
+  // Written here rather than at the `index.ts` call site: this is the one
+  // place that knows both the real served bytes and the outcome for every
+  // branch, without a second body read. Never blocks the response
+  // (`ctx.waitUntil`).
+  const isDocRequest = subpath === "";
+  const metric = opts.embed ? "serve.embed" : "serve.d";
+  const record = (status: number, bytes: number, demoId: string = id): void => {
+    const outcome = serveOutcome(status);
+    if (!outcome) return;
+    ctx.waitUntil(emitPoint(env, metric, { count: 1, bytes }, { outcome, demo_id: demoId }));
+  };
+
   const row = await getDemo(env, id);
   if (!row) {
+    // `id` is the URL-supplied, unresolved id — writing it into `demo_id`
+    // would let a crawler stuff arbitrary strings into that column. An empty
+    // `demo_id` still counts the 404 view, just attributes it to nothing.
+    if (isDocRequest) record(404, 0, "");
     return html
       ? errorPageResponse({
           status: 404,
@@ -674,6 +850,7 @@ export async function serveDemoAsset(
       : new Response("Not found", { status: 404 });
   }
   if (row.revoked) {
+    if (isDocRequest) record(410, 0);
     return html
       ? errorPageResponse({
           status: 410,
@@ -686,8 +863,11 @@ export async function serveDemoAsset(
 
   const clean = subpath.replace(/^\/+/, "");
   // Never serve the private source snapshot as a public asset. Stays plain text:
-  // every `__`-prefixed path is a file request, never a document one.
+  // every `__`-prefixed path is a file request, never a document one — and
+  // `isDocRequest` is always false here too (a `__`-prefixed segment requires
+  // a non-empty `subpath`), so this never records regardless.
   if (clean.split("/").some((seg) => seg.startsWith("__"))) {
+    if (isDocRequest) record(404, 0);
     return new Response("Not found", { status: 404 });
   }
   const candidates = clean === "" ? ["index.html"] : [clean, `${clean}/index.html`, "index.html"];
@@ -709,6 +889,7 @@ export async function serveDemoAsset(
   if (!obj) {
     const buildState = demoBuildState(row, Date.now());
     if (buildState === "building") {
+      if (isDocRequest) record(503, 0);
       return html
         ? errorPageResponse({
             status: 503,
@@ -723,6 +904,7 @@ export async function serveDemoAsset(
           });
     }
     if (buildState === "failed") {
+      if (isDocRequest) record(500, 0);
       return html
         ? errorPageResponse({
             status: 500,
@@ -732,6 +914,7 @@ export async function serveDemoAsset(
           })
         : new Response("This demo's build failed.", { status: 500 });
     }
+    if (isDocRequest) record(404, 0);
     return html
       ? errorPageResponse({
           status: 404,
@@ -771,9 +954,30 @@ export async function serveDemoAsset(
     // following the shell would be a visible seam against the pane it came from.
     // Inert wherever nothing posts to it — `/embed/:id` on the documentation site
     // is framed by a page that never sends the message.
-    const rewritten = injectSchemeIntoHtml(rewriteHtmlRoots(await obj.text()));
-    return new Response(rewritten, { headers });
+    //
+    // ADR §C.5: the standalone lite reporter rides the same seam, last —
+    // after the scheme/root-path rewrites settle the document's final shape, so
+    // its `insertInjectedTag` head/body detection sees exactly what ships.
+    const withScheme = injectSchemeIntoHtml(rewriteHtmlRoots(await obj.text()));
+    // R2 objects `env.ARTIFACTS.put` never carry a `Content-Encoding` (this
+    // Worker's own puts never set one) — `null` is always the real answer
+    // here, not a guess; the guard still runs, the same defence-in-depth
+    // `injectMonitor` keeps for a Tier-2 proxy response that could carry one.
+    const withLite = injectLiteHtml(withScheme, headers.get("Content-Type") ?? "text/html", null, {
+      surface: opts.embed ? "embed" : "d",
+      demo: id,
+      ht: htMajorFromVersion(row.ht_version),
+      fw: row.framework,
+    });
+    // Unconditional — a resolved `.html` is a document view even when
+    // `subpath` was not empty (the client-routed-SPA fallback case above).
+    record(200, new TextEncoder().encode(withLite).length);
+    return new Response(withLite, { headers });
   }
+  // No `record` here on purpose: everything that reaches this
+  // return is a non-HTML asset — a JS chunk, a font, an image — never the
+  // document itself, and counting one point per asset would inflate
+  // `serve.d`/`serve.embed` by however many files a build happens to emit.
   return new Response(obj.body, { headers });
 }
 
@@ -793,4 +997,4 @@ function rewriteHtmlRoots(html: string): string {
 }
 
 // R2 types (avoid importing the heavy generated types here).
-interface R2ObjectBodyText { body: ReadableStream; text(): Promise<string>; }
+interface R2ObjectBodyText { body: ReadableStream; text(): Promise<string>; size: number; }

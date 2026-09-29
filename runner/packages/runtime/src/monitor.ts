@@ -13,12 +13,17 @@
 // into workers/api — a second copy is a second set of caps to keep in sync.
 
 import { injectedScriptTag, insertInjectedTag } from "./inject-html.js";
+// ADR §C.5, contract §9: imported from the leaf modules directly, never from
+// `./telemetry/index.js` — `scrub.ts` and `fingerprint.ts` already import
+// `../monitor.js`, so a barrel import here would be a cycle.
+import { LITE_PAYLOAD_MAX_BYTES, type LiteSurface } from "./telemetry/lite.js";
+import type { Framework, HtMajor } from "./telemetry/attrs.js";
 
 /** The `postMessage` discriminator. Also the injection idempotency marker. */
 export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
 
 /**
- * Hard ceiling on relayed events per page load.
+ * Hard ceiling on relayed events per page load (per run on Tier 1, see `MONITOR_RESET`).
  *
  * The kill switch is build-time (see docs/run-and-deploy.md), so turning this
  * feature off costs a deploy. That makes the in-page ceiling the only brake that
@@ -26,6 +31,11 @@ export const MONITOR_MESSAGE_TYPE = "hot-runner-monitor";
  * every frame.
  */
 export const MONITOR_EVENT_CEILING = 20;
+
+/** What the Tier-1 runtime posts into the preview before each dispatched run
+ *  (`{ type: MONITOR_MESSAGE_TYPE, reset: MONITOR_RESET }`): the reporter's error
+ *  budget and dedupe are per run, because the preview document outlives its runs. */
+export const MONITOR_RESET = "run";
 
 /**
  * Ceiling on relayed `console-warn` events per page load, counted separately from
@@ -128,9 +138,13 @@ export const PREVIEW_HOST_PLACEHOLDER = "<preview>";
  * This is the parent's backstop. The reporter redacts its own `location.host` before
  * sending, which is the precise version; this catches whatever crossed the boundary
  * anyway, including a payload from a demo that never ran the reporter.
+ *
+ * The label is bounded to `{1,63}` (RFC 1035 §2.3.4), so a suffix-less input
+ * cannot backtrack quadratically; `pipeline/o11y-redos.test.mjs` pins the
+ * timing. Same fix class as `text-scrub.ts`'s `EMAIL_PATTERN`/`USER_AGENT_PATTERN`.
  */
 export function redactPreviewHosts(value: string): string {
-  return value.replace(/\b[a-z0-9-]+\.demos\.handsontable\.com\b/gi, PREVIEW_HOST_PLACEHOLDER);
+  return value.replace(/\b[a-z0-9-]{1,63}\.demos\.handsontable\.com\b/gi, PREVIEW_HOST_PLACEHOLDER);
 }
 
 /**
@@ -259,7 +273,7 @@ export function monitorDedupeKey(kind: string, message: string, stack?: string):
 }
 
 /**
- * A relay budget: the same ceiling and dedupe the in-page reporter applies, counted
+ * A relay budget: the in-page reporter's ceiling and dedupe, counted per page load
  * somewhere the demo cannot reach.
  *
  * The reporter's copy is not a cap. It runs *inside* the preview, alongside code
@@ -346,9 +360,18 @@ export function createMonitorBudget(ceiling: number = MONITOR_EVENT_CEILING): {
  * which still needs to parse in Safari <16.4.
  *
  * Used for the Sentry fingerprint, not for the message the issue displays.
+ *
+ * Bounded to {@link NORMALIZE_MESSAGE_INPUT_MAX} chars before any pass below
+ * runs — the result is sliced to 200 chars anyway (last line), so nothing
+ * past a few thousand input characters can survive into the output;
+ * truncating first bounds the cost of every pass on a caller-controlled
+ * message.
  */
+const NORMALIZE_MESSAGE_INPUT_MAX = 4096;
+
 export function normalizeMonitorMessage(message: string): string {
-  return message
+  const bounded = message.length > NORMALIZE_MESSAGE_INPUT_MAX ? message.slice(0, NORMALIZE_MESSAGE_INPUT_MAX) : message;
+  return bounded
     .replace(/https?:\/\/\S+/g, "<url>")
     .replace(/\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/g, "<ts>")
     .replace(/["'`][^"'`]*["'`]/g, "<str>")
@@ -356,7 +379,13 @@ export function normalizeMonitorMessage(message: string): string {
     // (`l`, `li`, `lic`, … `licenseKey` `is not defined`). Must precede the
     // number rule below (see the doc comment) and follow the quoted-string
     // rule above.
-    .replace(/[A-Za-z_$][\w$]*(?:\.[\w$]+)*(?= is not defined\b)/g, "<ident>")
+    //
+    // Both quantifiers are bounded ({0,256}/{1,32} segments): unbounded, a
+    // long identifier-shaped run with no trailing " is not defined" could
+    // backtrack quadratically (O(n²); measured via the real `fingerprint()`:
+    // 40k chars ~1.9s, 80k ~7.7s). No real identifier or dotted path is
+    // anywhere near that size.
+    .replace(/[A-Za-z_$][\w$]{0,256}(?:\.[\w$]{1,256}){0,32}(?= is not defined\b)/g, "<ident>")
     // DEV-2853 rule 2 — the partial locale in a RangeError from Intl, e.g.
     // `Invalid language tag: zh-c` ladders alongside `zh-`, `z`, and the
     // empty tail `Invalid language tag: `. `[ \t]*`, not `\s*`: `\s` matches
@@ -651,6 +680,21 @@ export const REPORTER_SOURCE = `(function () {
     });
   } catch (e) { /* ignore */ }
 
+  // A Tier-1 document is re-evaluated in place on every compile, so a typed line's
+  // prefix runs would otherwise spend the whole budget before the finished line throws.
+  // Only a reset from the parent is honoured (a demo can bypass the reporter anyway, so
+  // the parent's budget is the cap); the warning budget stays per page (breadcrumb trail).
+  try {
+    window.addEventListener("message", function (event) {
+      try {
+        var data = event.data;
+        if (event.source !== parent || !data || data.type !== TYPE || data.reset !== ${JSON.stringify(MONITOR_RESET)}) return;
+        used = 0;
+        for (var k in seen) if (k.indexOf("console-warn|") !== 0) delete seen[k];
+      } catch (e) { /* ignore */ }
+    });
+  } catch (e) { /* ignore */ }
+
   try {
     var origError = console.error;
     var origWarn = console.warn;
@@ -841,4 +885,170 @@ export function injectReporter(files: Record<string, string>, entryPath: string)
     ? injectReporterIntoHtml(source)
     : REPORTER_MODULE_LINE + "\n" + source;
   return { ...files, [entryPath]: injected };
+}
+
+// ---- The lite beacon — standalone mode for `/d` and `/embed` ------------
+// ADR §C.5, contract §9. A separate reporter from `REPORTER_SOURCE` above,
+// injected only at the `share.ts` serve seam — standalone by construction,
+// no `postMessage`-to-parent transport needed. Sends only
+// `error`/`unhandledrejection` and four sampled web vitals via
+// `navigator.sendBeacon` to same-origin `/telemetry/lite`.
+
+/** Same-origin beacon target (contract §9). */
+export const LITE_ENDPOINT = "/telemetry/lite";
+
+/** The injection idempotency marker — distinct from `MONITOR_MESSAGE_TYPE`.
+ *  Deliberately the same string as the reporter's own double-injection guard
+ *  property (`window.__hotLiteMonitor`) below, so it costs no extra bytes. */
+export const LITE_REPORTER_MARKER = "__hotLiteMonitor";
+
+/** §9: "Vitals are sampled at 10% per page view, decided once per page." */
+export const LITE_VITALS_SAMPLE_RATE = 0.1;
+
+/** Client-side truncation caps, in **UTF-8 bytes** — tighter than the
+ *  contract's own per-field ceilings, since a maxed-out stack alone already
+ *  exceeds `LITE_PAYLOAD_MAX_BYTES` (2048). Bytes, not characters: `.length`
+ *  counts UTF-16 code units, so a char-count cap could let a non-ASCII
+ *  payload exceed the byte budget. */
+export const LITE_CLIENT_NAME_MAX_BYTES = 100;
+export const LITE_CLIENT_MESSAGE_MAX = 300;
+export const LITE_CLIENT_STACK_MAX = 300;
+
+/**
+ * Size budget for the *injected script itself* — distinct from
+ * `LITE_PAYLOAD_MAX_BYTES`, which bounds one beacon body. Target was under
+ * 2 KB; measured (`pipeline/lite-beacon.test.mjs`) at ~2.8 KB for a
+ * realistic config after cutting every inline comment and non-essential
+ * whitespace. Set from the measured size, with headroom for a longer
+ * `demo`/`fw` string.
+ */
+export const LITE_REPORTER_MAX_BYTES = 3072;
+
+/** Baked into the injected script at the `share.ts` serve seam — one build's
+ *  worth of context the client cannot otherwise know (its own demo id, pinned
+ *  Handsontable major, and framework). */
+export interface LiteReporterConfig {
+  surface: LiteSurface;
+  demo: string;
+  ht: HtMajor;
+  fw: Framework;
+}
+
+/** Defence in depth for embedding `config`'s (allow-listed, but not worth
+ *  trusting blindly) strings inside an inline `<script>` body: a literal
+ *  `</script` in the JSON would otherwise close the tag early. None of §9's
+ *  `demo`/`ht`/`fw` values can contain this today (a `shortId()`, a closed
+ *  `HT_MAJORS` member, a `config/frameworks.json` key) — this is a backstop
+ *  against that staying true, not a defence this reporter currently needs. */
+function escapeScriptClose(source: string): string {
+  return source.replace(/<\/(script)/gi, "<\\/$1");
+}
+
+/**
+ * The standalone reporter, as ES5 source — parsed and executed by
+ * `pipeline/lite-beacon.test.mjs` against a fake DOM. Written with no inline
+ * comments (the shipped script has its own byte budget,
+ * {@link LITE_REPORTER_MAX_BYTES}). The four vitals are intentional
+ * approximations, not the spec metrics (e.g. LCP is the LAST candidate
+ * before hide, not the first; INP is the single longest `event` duration,
+ * not a 98th-percentile grouping) — see the test file for the exact shape
+ * each measures.
+ *
+ * `bt(s,n)` cuts to `n` chars first, THEN runs the byte loop, avoiding a
+ * per-character re-encode that would be quadratic for a huge message
+ * (measured: 10k chars ~100ms, 50k ~2.4s).
+ */
+function reporterSource(config: LiteReporterConfig): string {
+  return `(function(){
+try{if(window.__hotLiteMonitor)return;window.__hotLiteMonitor=true;}catch(e){return;}
+var EP=${JSON.stringify(LITE_ENDPOINT)},SURF=${JSON.stringify(config.surface)},DEMO=${JSON.stringify(config.demo)},HTM=${JSON.stringify(config.ht)},FWK=${JSON.stringify(config.fw)};
+var CEIL=${MONITOR_EVENT_CEILING},NMAX=${LITE_CLIENT_NAME_MAX_BYTES},MMAX=${LITE_CLIENT_MESSAGE_MAX},SMAX=${LITE_CLIENT_STACK_MAX},PMAX=${LITE_PAYLOAD_MAX_BYTES},RATE=${LITE_VITALS_SAMPLE_RATE};
+var used=0,sent={};
+function bl(s){try{return unescape(encodeURIComponent(s)).length;}catch(e){return 1e9;}}
+function bt(s,n){if(s.length>n)s=s.slice(0,n);while(bl(s)>n)s=s.slice(0,-1);return s;}
+function dv(){var u="";try{u=(navigator&&navigator.userAgent)||"";}catch(e){}
+return /ipad|tablet|playbook|silk/i.test(u)?"tablet":/mobi|iphone|ipod|android.*mobile|windows phone/i.test(u)?"mobile":"desktop";}
+var DEV=dv();
+function bc(t,f){try{
+var p={v:1,t:t,s:SURF,demo:DEMO,ht:HTM,fw:FWK,dev:DEV,ts:Date.now(),id:Math.random().toString(36).slice(2,10)};
+for(var k in f)p[k]=f[k];
+var j=JSON.stringify(p);
+if(bl(j)>PMAX)return;
+if(navigator&&typeof navigator.sendBeacon==="function")navigator.sendBeacon(EP,j);
+}catch(e){}}
+function se(n,m,st){try{
+if(used>=CEIL)return;
+used+=1;
+var f={n:bt(n||"Error",NMAX),m:bt(m||"unknown error",MMAX),val:null};
+if(st)f.st=bt(st,SMAX);
+bc("err",f);
+}catch(e){}}
+function sv(n,val){try{
+if(sent[n])return;
+if(typeof val!=="number"||!isFinite(val))return;
+sent[n]=true;
+bc("vital",{n:n,val:val});
+}catch(e){}}
+try{
+window.addEventListener("error",function(ev){try{
+if(!ev||(!ev.error&&ev.target&&ev.target!==window))return;
+var er=ev.error;
+se((er&&er.name)||"Error",(er&&er.message)||(ev&&ev.message)||"unknown error",er&&er.stack);
+}catch(e){}},true);
+window.addEventListener("unhandledrejection",function(ev){try{
+var r=ev&&ev.reason;
+se((r&&r.name)||"UnhandledRejection",r&&r.message?r.message:String(r),r&&r.stack);
+}catch(e){}});
+}catch(e){}
+var smp=false;
+try{smp=Math.random()<RATE;}catch(e){}
+if(smp){
+var lc=null,cls=0,inp=0,rep=false;
+var ob=function(t,cb,dt){try{
+var o=new PerformanceObserver(cb),op={type:t,buffered:true};
+if(dt)op.durationThreshold=dt;
+o.observe(op);
+}catch(e){}};
+ob("largest-contentful-paint",function(l){var es=l.getEntries();if(es.length)lc=es[es.length-1];});
+ob("layout-shift",function(l){var es=l.getEntries();for(var i=0;i<es.length;i++){if(!es[i].hadRecentInput)cls+=es[i].value||0;}});
+ob("event",function(l){var es=l.getEntries();for(var i=0;i<es.length;i++){var en=es[i];if(en.interactionId&&en.interactionId>0&&en.duration>inp)inp=en.duration;}},40);
+var rp=function(){
+if(rep)return;
+rep=true;
+try{if(lc)sv("LCP",lc.renderTime||lc.loadTime||0);}catch(e){}
+sv("CLS",cls);
+if(inp>0)sv("INP",inp);
+try{
+var nv=performance&&performance.getEntriesByType&&performance.getEntriesByType("navigation")[0];
+if(nv&&typeof nv.responseStart==="number")sv("TTFB",nv.responseStart);
+}catch(e){}
+};
+try{
+document.addEventListener("visibilitychange",function(){try{if(document.visibilityState==="hidden")rp();}catch(e){}});
+window.addEventListener("pagehide",rp);
+}catch(e){}
+}
+})();
+`;
+}
+
+/** True when `html` already carries the lite reporter (`LITE_REPORTER_MARKER`
+ *  survives the JSON-escaping of the source, same as `MONITOR_MESSAGE_TYPE`
+ *  does for the framed reporter — see `alreadyInjected` above). */
+function liteAlreadyInjected(html: string): boolean {
+  return html.indexOf(LITE_REPORTER_MARKER) !== -1;
+}
+
+/**
+ * Insert the standalone lite reporter into a `/d`/`/embed` document, exactly
+ * where `injectReporterIntoHtml` inserts the framed one (`insertInjectedTag`)
+ * and with the same DEV-2580 self-removing tag (`injectedScriptTag`) — the
+ * same Remix hydration constraint applies here: a `/d`/`/embed` build can be
+ * any of the same SSR frameworks.
+ *
+ * Idempotent: returns `html` unchanged when already injected.
+ */
+export function injectLiteReporterIntoHtml(html: string, config: LiteReporterConfig): string {
+  if (liteAlreadyInjected(html)) return html;
+  return insertInjectedTag(html, injectedScriptTag(escapeScriptClose(reporterSource(config))));
 }

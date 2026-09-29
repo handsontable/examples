@@ -1,0 +1,25 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "demos-api" } },
+          { "key": "service.version", "value": { "stringValue": "cafef00d" } },
+          { "key": "deployment.environment.name", "value": { "stringValue": "production" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "logRecords": [
+            {
+              "timeUnixNano": "0",
+              "observedTimeUnixNano": "0",
+              "body": { "stringValue": "a record with no real timestamp, exit criterion 3" },
+              "attributes": [{ "key": "hot.surface", "value": { "stringValue": "api" } }]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

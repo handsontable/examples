@@ -1,0 +1,33 @@
+// Size caps (ADR §B.5 "size caps"). Conservative, documented defaults, not
+// numbers derived from measured traffic:
+//
+// - `COLLECT_MAX_BYTES`: a Faro `transportBody` batch. 1 MB matches the
+//   contract's own `LOKI_REQUEST_MAX_BYTES` (inbox.ts) — a batch bigger than
+//   what one drain push can carry decompressed is already unreasonable.
+// - `OTLP_MAX_BYTES`: a Cloudflare log-export batch. 4 MB matches
+//   `PACK_AT_BYTES` (inbox.ts) for the same reason, generous because export
+//   batches are Cloudflare's own aggregation, not ours to shrink.
+// - `SMALL_JSON_MAX_BYTES`: `deploy` and `hooks/sentry` payloads are small,
+//   hand-shaped JSON objects — 64 KB is already generous.
+export const COLLECT_MAX_BYTES = 1_000_000;
+export const OTLP_MAX_BYTES = 4_000_000;
+export const SMALL_JSON_MAX_BYTES = 64_000;
+// - `GRAFANA_PROXY_MAX_BYTES`: `/grafana/*` (`grafana/proxy.ts`) request
+//   bodies — panel queries and dashboard saves. The dashboards themselves are
+//   provisioned read-only (git-managed JSON, never edited through the UI), so
+//   no legitimate request through this proxy is anywhere near this size;
+//   generous rather than tightly fit to any real payload, the same spirit
+//   `OTLP_MAX_BYTES` uses for its own batch.
+export const GRAFANA_PROXY_MAX_BYTES = 10_000_000;
+
+/** Cheap pre-check against the `Content-Length` header, when the client sent
+ *  one — not the enforcement itself (a chunked/absent `Content-Length` must
+ *  not bypass the cap), just an early exit so an obviously oversized request
+ *  never gets its body read at all. The real cap is enforced while reading
+ *  the body (`normalise/read-body.ts`'s `readCappedText`). */
+export function contentLengthExceeds(req: Request, maxBytes: number): boolean {
+  const len = req.headers.get("content-length");
+  if (!len) return false;
+  const n = Number(len);
+  return Number.isFinite(n) && n > maxBytes;
+}

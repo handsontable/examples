@@ -7,20 +7,37 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
   "compatibility_flags": ["nodejs_compat"],
-  // Head sampling bounds Workers Logs volume (billed per event, 20M/month
-  // included). Full fidelity is a spike *amplifier*: the traffic surge you most
-  // want to survive cheaply is exactly when logging costs the most. 10% keeps
-  // errors visible in aggregate; Sentry, not Workers Logs, is the fault channel.
-  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  // ADR-0041 §D: `head_sampling_rate: 1.0` is safe because proxied preview
+  // requests log nothing, and every other request emits exactly one
+  // structured line rather than the platform's per-invocation logging. Loki
+  // keeps 90 days of the exported stream (contract §E.4); Sentry, not
+  // Workers Logs, stays the fault channel. Traces sample at 1% into
+  // Cloudflare's dashboard only — no `destinations` (ADR §C.4 exports none).
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1.0,
+      "invocation_logs": false,
+      "persist": true,
+      // Empty until the `o11y-logs` Cloudflare export destination exists — it can
+      // only be created after this Worker's first deploy (run-and-deploy.md "First
+      // deploy, in order"). A follow-up deploy re-adds it once created.
+      "destinations": []
+    },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01, "persist": true }
+  },
 
   // Backstop for a runaway Worker invocation (default is 30s on Paid; stated
   // here so it is a decision rather than a default).
   "limits": { "cpu_ms": 30000 },
 
-  // Nightly cost reconciliation + revoked-artifact GC (src/reconcile.ts).
-  // 04:17 UTC: after Cloudflare's day-in-arrears usage processing, off the hour
-  // so it does not queue behind every other cron on the platform.
-  "triggers": { "crons": ["17 4 * * *"] },
+  // Nightly cost reconciliation + revoked-artifact GC (src/reconcile.ts), at
+  // 04:17 UTC (after Cloudflare's day-in-arrears usage processing, off the hour
+  // so it does not queue behind every other cron on the platform), plus the
+  // ADR-0041 §D `*/5` observability tick (pool.gauge, budget.gauge, the o11y
+  // heartbeat check — src/index.ts `scheduled()` dispatches on `controller.cron`).
+  "triggers": { "crons": ["17 4 * * *", "*/5 * * * *"] },
   // Keep the workers.dev URL enabled alongside the custom-domain routes
   // (attached at deploy time — see the `deploy` script and the routes note below).
   "workers_dev": true,
@@ -102,8 +119,24 @@
     // DocSearch app id + index for the docs page lookup. The app id is public
     // by construction — DocSearch ships it in every docs page bundle.
     "ALGOLIA_APP_ID": "MMN6OTJMGX",
-    "ALGOLIA_INDEX": "handsontable"
+    "ALGOLIA_INDEX": "handsontable",
+
+    // ---- Observability (ADR-0041) -----------------------------------------
+    // `full` | `uncaught` (contract §11): which handled-error reports also go
+    // to Sentry; read by `telemetry/scope.ts`. Default is `full` per the
+    // contract.
+    "SENTRY_SCOPE": "full"
   },
+
+  // Analytics Engine sink for runner events (contract §10), written by
+  // `telemetry/resource.ts`.
+  "analytics_engine_datasets": [{ "binding": "RUNNER_EVENTS", "dataset": "runner_events" }],
+  // `entrypoint: "O11yHeartbeat"` targets the o11y worker's named
+  // `WorkerEntrypoint` (workers/o11y/src/heartbeat.ts) directly. Without it,
+  // `env.O11Y` resolves to the o11y worker's default `fetch()` export, which
+  // has no route for the heartbeat (RPC-only, see o11y-watchdog.ts) — mirrors
+  // workers/o11y/wrangler.jsonc's own `API` binding to `entrypoint: "O11yUsage"`.
+  "services": [{ "binding": "O11Y", "service": "handsontable-demos-o11y", "entrypoint": "O11yHeartbeat" }],
 
   // Routes on demos.handsontable.com are deliberately NOT declared here — they
   // are passed via `--routes` in the `deploy` script (package.json). When routes

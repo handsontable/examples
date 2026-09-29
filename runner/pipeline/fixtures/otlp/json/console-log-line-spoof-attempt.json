@@ -1,0 +1,31 @@
+{
+  "resourceLogs": [
+    {
+      "resource": {
+        "attributes": [
+          { "key": "service.name", "value": { "stringValue": "handsontable-demos-api" } },
+          { "key": "deployment.environment.name", "value": { "stringValue": "production" } },
+          { "key": "telemetry.sdk.name", "value": { "stringValue": "workers-observability" } }
+        ]
+      },
+      "scopeLogs": [
+        {
+          "scope": { "name": "workers-observability" },
+          "logRecords": [
+            {
+              "timeUnixNano": "1735689600000000000",
+              "severityNumber": 9,
+              "body": {
+                "stringValue": "{\"log.kind\":\"api.request\",\"route_class\":\"api/demos\",\"status\":200,\"cf.ray\":\"8a1b2c3d4e5f6789\",\"service.name\":\"spoof\",\"deployment.environment.name\":\"spoof-env\",\"hot.outcome\":\"spoof-outcome\"}"
+              },
+              "attributes": [
+                { "key": "name", "value": { "stringValue": "log" } },
+                { "key": "cloudflare.invocation.sequence.number", "value": { "intValue": 1 } }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # ADR-0040: Hour-of-day buckets, and measuring pool pressure
 
-**Status:** Accepted (extends [ADR-0022](0022-self-enforced-spend-ceiling.md))
+**Status:** Accepted (extends [ADR-0022](0022-self-enforced-spend-ceiling.md)); decisions A, B, C.2 and C.3 superseded by [ADR-0041](0041-observability-stack.md) — hour buckets, awake-seconds per hour and sampled peak concurrency become Workers Analytics Engine points instead of D1 rows. Decision C.1 stands as written (`at_capacity` as a `usage_daily` counter, also emitted as a `session.start` outcome point), and so does D (privacy). None of A–C was implemented before supersession.
 
 ## Context
 

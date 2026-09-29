@@ -1,0 +1,21 @@
+{
+  "meta": {
+    "app": { "name": "demos-authoring", "version": "deadbeef1234" }
+  },
+  "events": [
+    {
+      "name": "example.open",
+      "timestamp": "2026-01-01T00:00:00.000Z",
+      "attributes": {
+        "hot.surface": "authoring",
+        "hot.framework": "react",
+        "hot.ht_major": "18",
+        "hot.bucket": "18.1",
+        "hot.metric_kind": "docs",
+        "hot.ref": "/guide/getting-started",
+        "hot.area": "getting-started",
+        "hot.reason": "entry"
+      }
+    }
+  ]
+}

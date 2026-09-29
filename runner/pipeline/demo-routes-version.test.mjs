@@ -203,7 +203,7 @@ test("a browser rebuild derives from the payload pin and replaces a stale sentin
   const { env, writes, artifacts } = makeEnv([demoRow({ ht_version: "latest" })]);
   const res = await worker.fetch(patchRequest("abc123", { files: filesWith("16.0.2") }), env, ctx);
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { ok: true, htVersion: "16.0.2" });
+  assert.deepEqual(await res.json(), { ok: true, htVersion: "16.0.2", exampleSaved: false });
   const update = findVersionUpdate(writes);
   assert.ok(update, "the rebuild must update the demos row");
   assert.equal(update.binds[0], "16.0.2", "the sentinel row is repaired to the derived ref");

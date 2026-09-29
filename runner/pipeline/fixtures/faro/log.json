@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "app": { "name": "demos-authoring", "version": "deadbeef1234" }
+  },
+  "logs": [
+    {
+      "message": "share link copied",
+      "timestamp": "2026-01-01T00:00:00.000Z",
+      "context": {
+        "hot.surface": "share",
+        "hot.demo_id": "r-react-18-0-0"
+      }
+    }
+  ]
+}

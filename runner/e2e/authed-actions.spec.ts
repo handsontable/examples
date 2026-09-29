@@ -388,6 +388,9 @@ test("the workspace save sends the code only, never the metadata", async ({ page
   expect(patches[0]).toHaveProperty("files");
   expect(patches[0]).not.toHaveProperty("title");
   expect(patches[0]).not.toHaveProperty("description");
+  // This build's telemetry gate is closed, and the API counts `example.saved`
+  // only for a save that carries this field.
+  expect(patches[0]).not.toHaveProperty("exampleHtMajor");
 });
 
 test("the Edit info dialog cannot be dismissed mid-save", async ({ page }) => {
@@ -591,6 +594,51 @@ test("a Save the server refuses on ownership says so, and is not a session promp
   await expect(page.getByText(/forbidden/i)).toHaveCount(0);
   expect(await storedToken(page)).toBe("e2e-token");
 });
+
+test("a Save whose code does not build shows the build error and keeps the edit unsaved", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  await stubProfile(page);
+  const detail = 'error during build: src/App.tsx:1:10: ERROR: Unexpected ";"';
+  await failWrite(page, "PATCH", 422, { error: `build failed: ${detail}`, code: "build_failed", detail });
+
+  await page.goto(`/edit/${DEMO_ID}`);
+  await expect(accountAvatar(page)).toBeVisible();
+  await editor(page).click();
+  await page.keyboard.type("const X = ;");
+  await saveButton(page).click();
+
+  const dialog = page.getByRole("dialog", { name: "Couldn't save" });
+  await expect(dialog).toContainText(detail);
+  await expect(dialog).toContainText("nothing was saved");
+  await expect(page.getByText(/build_failed|build failed:/)).toHaveCount(0);
+  await expect(saveButton(page)).toHaveText("Save •");
+  await dialog.getByRole("button", { name: "OK" }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
+for (const action of ["Fork", "Share"] as const) {
+  test(`a ${action} whose code does not build shows the build error`, async ({ page }) => {
+    await stubShell(page);
+    await signIn(page);
+    await stubProfile(page);
+    const detail = 'error during build: src/App.tsx:1:10: ERROR: Unexpected ";"';
+    await page.route("**/api/demos", (route) =>
+      route.fulfill({ status: 422, json: { error: `build failed: ${detail}`, code: "build_failed", detail } }),
+    );
+
+    await page.goto("/?example=react");
+    await expect(accountAvatar(page)).toBeVisible();
+    await (action === "Fork" ? forkButton(page) : shareIcon(page)).click();
+
+    const dialogTitle = action === "Fork" ? "Couldn't fork" : "Couldn't share";
+    const dialog = page.getByRole("dialog", { name: dialogTitle });
+    await expect(dialog).toContainText(detail);
+    await expect(page.getByText(/build_failed|build failed:/)).toHaveCount(0);
+    await expect(forkButton(page)).toBeEnabled();
+  });
+}
 
 // The bug the uniform early-return would have introduced. `onFork` has no
 // `finally` — the success path navigates away, and clearing `forking` first

@@ -29,10 +29,14 @@ export default defineConfig({
   },
   build: {
     // Only emitted when there is somewhere to upload them. A build without upload
-    // (local, PR CI) would otherwise leave ~12 MB of .map files in dist/ that the
-    // plugin's post-upload cleanup never runs to remove — and a manual
-    // `wrangler deploy` would publish them.
-    sourcemap: uploadEnabled,
+    // (local, PR CI) would otherwise leave ~12 MB of .map files in dist/ that would
+    // need their own cleanup — and a manual `wrangler deploy` would publish them.
+    // "hidden": the map is still built and uploaded, but no
+    // `//# sourceMappingURL=` comment is written — Workers Assets' SPA
+    // fallback (DEV-2569) answers a stray `.map` request with
+    // `200 text/html`, which would otherwise decode as JSON and fail. Maps
+    // never ship in `dist/` at all — this only removes a dead pointer.
+    sourcemap: uploadEnabled ? "hidden" : false,
     // ⚠ Do not give the @babel/standalone chunk a hash-free name (reverted from #249,
     // DEV-2569). The intent was sound — Workers Assets serves this app with
     // `not_found_handling: "single-page-application"`, so a deploy rotates the hashed chunk
@@ -63,7 +67,10 @@ export default defineConfig({
       authToken: process.env.SENTRY_AUTH_TOKEN,
       disable: !uploadEnabled,
       release: RELEASE ? { name: RELEASE } : undefined,
-      sourcemaps: { filesToDeleteAfterUpload: ["dist/**/*.map"] },
+      // No `filesToDeleteAfterUpload`: the maps must stay on disk after this
+      // plugin's Sentry upload, because the deploy workflow's next step
+      // uploads the SAME files to R2 (ADR §C.3) before deleting them.
+      sourcemaps: {},
     }),
   ],
   resolve: {
@@ -103,10 +110,17 @@ export default defineConfig({
     // `--routes` flags in workers/api/package.json), so the bare prefix was
     // always wider here than on the deployment it stands in for. `/embed` has
     // the same shape but nothing is named as a sibling of it today.
+    // The three targets below default to ":8787" but honour `API_DEV_PORT`
+    // so a walkthrough needing both the API worker and this proxy can run
+    // each on its own port block (COMMON.md) without a collision.
     proxy: {
-      "^/api(?:/|$)": { target: "http://localhost:8787" },
-      "^/d(?:/|$)": { target: "http://localhost:8787" },
-      "/embed": { target: "http://localhost:8787" },
+      "^/api(?:/|$)": { target: `http://localhost:${process.env.API_DEV_PORT ?? "8787"}` },
+      "^/d(?:/|$)": { target: `http://localhost:${process.env.API_DEV_PORT ?? "8787"}` },
+      "/embed": { target: `http://localhost:${process.env.API_DEV_PORT ?? "8787"}` },
+      // The o11y worker, same-origin reasoning as `/api` above (Faro posts
+      // to same-origin `/telemetry/collect`, contract §6). Reads
+      // `O11Y_DEV_PORT` (default 4200) so the two stay in sync.
+      "^/telemetry(?:/|$)": { target: `http://localhost:${process.env.O11Y_DEV_PORT ?? "4200"}` },
     },
   },
 });

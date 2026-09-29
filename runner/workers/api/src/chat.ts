@@ -114,6 +114,10 @@ export interface ChatAnswer {
   references: string[];
   /** What the answer cost, when the gateway tells us. */
   usd: number;
+  /** `chat.answer`'s tokens_in/tokens_out (contract §5), when the gateway's
+   *  OpenAI-compatible `usage` object reports them. 0 when it does not. */
+  tokensIn: number;
+  tokensOut: number;
 }
 
 // ---- Input validation --------------------------------------------------------
@@ -482,13 +486,23 @@ export async function requestAnswer(env: Env, req: ChatRequest, pages: DocPage[]
     // problem, not a user one, so it must be loud in the logs and vague to
     // the caller.
     console.error(`[chat] gateway ${res.status} (request id: ${requestId})`);
+    // ADR-0041 §E.1 diagnostic (an upstream failure reported with tags) —
+    // `status`/`requestId` ride on the thrown error rather than a
+    // `reportDiagnostic` call here: this module is copied and imported
+    // standalone by `pipeline/chat-sanitise.test.mjs`/`decode-entities.test.mjs`
+    // (its own header comment explains why), which cannot resolve a sibling
+    // `./telemetry/*.js` import. `index.ts`'s `ChatUnavailableError` catch is
+    // where the diagnostic capture actually happens (never the gateway body,
+    // same rule the console.error above already follows).
     throw new ChatUnavailableError(
       res.status === 401 || res.status === 403 ? "chat is not configured" : "the assistant is unavailable",
+      { status: res.status, requestId },
     );
   }
 
   const payload = (await res.json()) as {
     choices?: { message?: { tool_calls?: { function?: { name?: string; arguments?: string } }[] } }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   const call = payload.choices?.[0]?.message?.tool_calls?.find((c) => c.function?.name === "answer");
   if (typeof call?.function?.arguments !== "string") {
@@ -505,10 +519,27 @@ export async function requestAnswer(env: Env, req: ChatRequest, pages: DocPage[]
   // LiteLLM reports what the call cost; when it does, the ledger gets a real
   // number instead of an estimate (see DEV-2030).
   const usd = Number(res.headers.get("x-litellm-response-cost") ?? 0);
-  return sanitiseAnswer(parsed, req, Number.isFinite(usd) ? usd : 0);
+  const tokensIn = Number(payload.usage?.prompt_tokens ?? 0);
+  const tokensOut = Number(payload.usage?.completion_tokens ?? 0);
+  return sanitiseAnswer(parsed, req, Number.isFinite(usd) ? usd : 0, {
+    tokensIn: Number.isFinite(tokensIn) ? tokensIn : 0,
+    tokensOut: Number.isFinite(tokensOut) ? tokensOut : 0,
+  });
 }
 
-export class ChatUnavailableError extends Error {}
+export class ChatUnavailableError extends Error {
+  /** Set only for a gateway (LiteLLM) failure — `index.ts`'s diagnostic
+   *  capture reads these; every other throw site in this file leaves them
+   *  undefined (a config/parse problem, not an upstream one). */
+  readonly status?: number;
+  readonly requestId?: string;
+
+  constructor(message: string, upstream?: { status: number; requestId: string }) {
+    super(message);
+    this.status = upstream?.status;
+    this.requestId = upstream?.requestId;
+  }
+}
 
 /**
  * Whitelist everything on the way out.
@@ -525,7 +556,12 @@ export class ChatUnavailableError extends Error {}
  * Escaping belongs at the sink, and the sink already does it — so `<script>`
  * now reaches the reader as the visible text `<script>`, which is correct.
  */
-export function sanitiseAnswer(raw: unknown, req: ChatRequest, usd: number): ChatAnswer {
+export function sanitiseAnswer(
+  raw: unknown,
+  req: ChatRequest,
+  usd: number,
+  tokens: { tokensIn: number; tokensOut: number } = { tokensIn: 0, tokensOut: 0 },
+): ChatAnswer {
   const input = (raw ?? {}) as Record<string, unknown>;
 
   const message = typeof input.message === "string"
@@ -562,5 +598,5 @@ export function sanitiseAnswer(raw: unknown, req: ChatRequest, usd: number): Cha
     : [];
 
   void req; // the request is the source of truth for paths; kept for future per-file rules
-  return { message, edits, references, usd };
+  return { message, edits, references, usd, tokensIn: tokens.tokensIn, tokensOut: tokens.tokensOut };
 }

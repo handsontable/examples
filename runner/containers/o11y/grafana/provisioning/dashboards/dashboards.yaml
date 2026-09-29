@@ -1,0 +1,14 @@
+# Dashboards provider — the 8 provisioned JSON dashboards live under
+# containers/o11y/grafana/dashboards/ (ADR-0041 §F.2, ADR-0042).
+apiVersion: 1
+
+providers:
+  - name: default
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

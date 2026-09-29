@@ -9,6 +9,11 @@ export type {
   DemoRuntime,
   HandsontableVersionRef,
   WriteFileOptions,
+  SandpackCompileTimingEvent,
+  SandpackCompileErrorEvent,
+  SandpackBundlerUnreachableEvent,
+  SessionStartTimingEvent,
+  HmrRoundtripEvent,
 } from "./types.js";
 
 export {

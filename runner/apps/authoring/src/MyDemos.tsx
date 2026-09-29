@@ -47,6 +47,7 @@ import { displayNameFromEmail, initialFromEmail } from "./displayName.js";
 import { fieldInput, fieldLabel, formFooter, ghostButton, primaryButton } from "./formStyles.js";
 import { useProfile } from "./useProfile.js";
 import { reportError } from "./sentry.js";
+import { apiHeaders } from "./telemetry/index.js";
 
 /** Mirrors the `GET /api/demos` projection. The pre-T9 drawer declared a narrower
  *  shape and threw away `description`, `created_at` and `forked_from` — all three
@@ -113,7 +114,7 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
     const token = getToken();
     try {
       const res = await fetch(`${apiBase}/api/demos?scope=${scope}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined),
       });
       // `preferFallback`: this call has never rendered `body.error`, and the
       // shared helper must not start doing so on its behalf — only the 401 and
@@ -152,7 +153,7 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
     try {
       const res = await fetch(`${apiBase}/api/demos/${demo.id}`, {
         method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: apiHeaders(token ? { Authorization: `Bearer ${token}` } : undefined),
       });
       // `Response.ok` already covers the whole 2xx range, 204 included, so the
       // old `res.status === 204 ||` was redundant. `preferFallback` for the same
@@ -186,7 +187,7 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
     setError(null);
     const token = getToken();
     try {
-      const srcRes = await fetch(`${apiBase}/api/demos/${demo.id}/source`);
+      const srcRes = await fetch(`${apiBase}/api/demos/${demo.id}/source`, { headers: apiHeaders() });
       if (!srcRes.ok) throw new Error(`Couldn't read that demo's files (${srcRes.status}).`);
       const src = (await srcRes.json()) as {
         framework: string;
@@ -195,7 +196,10 @@ export function MyDemosPage({ apiBase, user, scope = "mine" }: MyDemosPageProps)
       };
       const res = await fetch(`${apiBase}/api/demos`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: apiHeaders({
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        }),
         body: JSON.stringify({
           framework: src.framework,
           files: src.files,

@@ -23,9 +23,15 @@
 //   untestable. Additive only: every symbol used in workers/api/src passes
 //   through or no-ops, so specs that assert nothing about Sentry are
 //   unaffected.
+//
+// - `cloudflare:workers`: `index.ts` re-exports `O11yUsage`
+//   (`o11y-usage.ts`), a `WorkerEntrypoint` — reuses the same structural
+//   stub `o11y-worker-hooks.mjs` uses for `workers/o11y/src`, rather than
+//   a second copy.
 
 const SANDBOX_STUB = new URL("./cloudflare-sandbox-stub.mjs", import.meta.url).href;
 const SENTRY_STUB = new URL("./sentry-cloudflare-stub.mjs", import.meta.url).href;
+const CLOUDFLARE_WORKERS_STUB = new URL("./o11y-cloudflare-workers-stub.mjs", import.meta.url).href;
 
 export async function resolve(specifier, context, nextResolve) {
   if (specifier === "@cloudflare/sandbox") {
@@ -33,6 +39,9 @@ export async function resolve(specifier, context, nextResolve) {
   }
   if (specifier === "@sentry/cloudflare") {
     return { url: SENTRY_STUB, shortCircuit: true };
+  }
+  if (specifier === "cloudflare:workers") {
+    return { url: CLOUDFLARE_WORKERS_STUB, shortCircuit: true };
   }
   if (
     specifier.startsWith(".")

@@ -1,0 +1,10 @@
+{
+  "overrides": {
+    "browser": {
+      "max_query_lookback": "720h"
+    },
+    "worker": {
+      "max_query_lookback": "2160h"
+    }
+  }
+}
