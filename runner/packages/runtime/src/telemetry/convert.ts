@@ -249,8 +249,8 @@ function beaconBody(payload: LiteBeaconPayload): string {
   return `${payload.n}=${payload.val}`;
 }
 
-/** §9's lite beacon → normalised OTLP log record, via "the same converter as
- *  Faro items" (§9) — same clamp, same resource-attribute shape. `hot.tier` is
+/** §9's lite beacon → normalised OTLP log record, through its own converter next to
+ *  `faroItemToRecord`, with the same clamp and resource-attribute shape. `hot.tier` is
  *  always `"static"`: the lite beacon only ever fires from `/d` and `/embed`,
  *  never a live editing session. */
 export function beaconToRecord(payload: LiteBeaconPayload, options: ConvertOptions): NormalisedRecord {

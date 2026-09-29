@@ -861,11 +861,13 @@ where they add information beyond what §A–§L already say:
   outcome) is what fires when the Tier-2 boot window is exceeded — the original design
   would have double-counted a session that later times out after already reporting
   `session.start` `ready` once (a design correction made before shipping, not
-  after). Several §5 metrics remain real but never observed in practice: `pool.gauge`
+  after). Two §5 reasons have no emitter at all: `pool.gauge`
   `reason="builder"` (no signal tracks `BuilderSandbox` concurrency the way live sessions
-  are tracked), `snapshot.build` `reason="inline"` (only the detached build path is
-  instrumented), `session.end` `reason="sleep_after"` (nothing observes the Sandbox SDK's
-  own idle-timeout stop) — all named gaps, not silently dropped. A cron
+  are tracked; `telemetry/cron.ts` emits `live` only) and `session.end`
+  `reason="sleep_after"` (nothing observes the Sandbox SDK's own idle-timeout stop) —
+  named gaps, not silently dropped, and no data will appear for them. `snapshot.build`
+  `reason="inline"` is emitted by the synchronous create/update path in `share.ts` and is
+  observed in production; an earlier draft of this note listed it as unobserved. A cron
   failure inside `ctx.waitUntil()` is structurally unreachable by `@sentry/cloudflare`'s
   own auto-capture (its `scheduled` instrumentation only wraps the synchronous handler
   invocation) — every cron branch calls `Sentry.captureException` explicitly in its own

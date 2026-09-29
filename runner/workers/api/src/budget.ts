@@ -331,6 +331,14 @@ export async function startSessionMeter(
   }).catch(() => { /* metering is best effort; never fail a session on it */ });
 }
 
+/** What a meter read learned about its session. */
+export interface MeterReading {
+  /** `session.end`'s `framework` blob (contract §5); absent on a KV miss. */
+  framework?: string;
+  /** Awake seconds the ledger has booked for the session, first request to this read; absent when nothing was read. */
+  awakeSeconds?: number;
+}
+
 /**
  * Book the slice of awake time since the last flush.
  * `final` (teardown) always books and then drops the meter.
@@ -344,6 +352,19 @@ export async function meterSession(
   sessionId: string,
   opts: { final?: boolean } = {},
 ): Promise<string | undefined> {
+  return (await meterSessionReading(env, sessionId, opts)).framework;
+}
+
+/**
+ * `meterSession`, keeping what it read: `session.end` needs the framework and
+ * the session's total booked awake seconds, and the final flush deletes the
+ * only KV row that holds either.
+ */
+export async function meterSessionReading(
+  env: Env,
+  sessionId: string,
+  opts: { final?: boolean } = {},
+): Promise<MeterReading> {
   // Metering is telemetry, and telemetry must never be the reason a request
   // fails. The teardown path in particular: a throw here would skip the
   // `sandbox.destroy()` that follows it and leave a container billing until
@@ -352,7 +373,7 @@ export async function meterSession(
     return await meterSessionUnsafe(env, sessionId, opts);
   } catch (err) {
     console.warn("[budget] session metering failed:", err instanceof Error ? err.message : String(err));
-    return undefined;
+    return {};
   }
 }
 
@@ -360,14 +381,14 @@ async function meterSessionUnsafe(
   env: Env,
   sessionId: string,
   opts: { final?: boolean },
-): Promise<string | undefined> {
+): Promise<MeterReading> {
   const key = meterKey(sessionId);
   const meter = (await env.CACHE.get(key, "json").catch(() => null)) as SessionMeter | null;
-  if (!meter) return undefined;
+  if (!meter) return {};
 
   const now = Date.now();
   const elapsedSeconds = Math.max(0, (now - meter.meteredThrough) / 1000);
-  if (!opts.final && elapsedSeconds < METER_FLUSH_SECONDS) return meter.framework;
+  if (!opts.final && elapsedSeconds < METER_FLUSH_SECONDS) return { framework: meter.framework };
 
   const awakeSeconds = Math.min(elapsedSeconds, MAX_UNSEEN_AWAKE_SECONDS);
   if (opts.final) {
@@ -382,7 +403,10 @@ async function meterSessionUnsafe(
     }).catch(() => { /* next ping re-books the same slice; capped above */ });
   }
   await recordContainerUsage(env, { instanceType: meter.instanceType, awakeSeconds });
-  return meter.framework;
+  // Already-flushed ticks plus the slice just booked, so an abandoned session
+  // is not credited with the hours between its last ping and a late teardown.
+  const bookedSeconds = Math.max(0, (meter.meteredThrough - meter.startedAt) / 1000) + awakeSeconds;
+  return { framework: meter.framework, awakeSeconds: bookedSeconds };
 }
 
 // ---- Traffic accumulator -----------------------------------------------------

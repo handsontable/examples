@@ -54,6 +54,7 @@ import {
   hasSessionMeter,
   invalidateBudgetState,
   meterSession,
+  meterSessionReading,
   noteTraffic,
   publicBudget,
   recordLlmUsage,
@@ -457,6 +458,10 @@ async function putTombstone(env: Env, sessionId: string, marker: string): Promis
   } catch { /* defense-in-depth only */ }
 }
 
+/** `session.end`'s doubles: `value` is left off when no meter was read, so a missing figure is not plotted as a 0 s session. */
+const sessionEndValues = (awakeSeconds: number | undefined) =>
+  awakeSeconds === undefined ? { count: 1 } : { count: 1, value: Math.round(awakeSeconds) };
+
 /**
  * Tear a live session down: close its awake window, tombstone it, destroy the
  * container. Idempotent, and never throws for a failure the platform owns.
@@ -511,7 +516,7 @@ async function teardownLiveSession(
   // `session.end` framework: the meter is the only state that lives from
   // create to teardown under this key, so its final read is also where the
   // `framework` blob comes from. `undefined` degrades to a framework-less point.
-  const framework = await meterSession(env, sessionId, { final: true });
+  const { framework, awakeSeconds } = await meterSessionReading(env, sessionId, { final: true });
   const sandbox = liveSbx(env, sessionId);
   // Releasing a container must not need one (DEV-2556, Sentry DEMOS-1).
   // When the pool is full the platform refuses `destroy()` itself, and this
@@ -526,13 +531,13 @@ async function teardownLiveSession(
     await sandbox.destroy();
     await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
     if (endReason !== "admin") {
-      void emitPoint(env, "session.end", { count: 1 }, { framework: framework ?? "", reason: endReason });
+      void emitPoint(env, "session.end", sessionEndValues(awakeSeconds), { framework: framework ?? "", reason: endReason });
     }
   } catch (err) {
     if (!isExpectedTeardownFailure(err)) throw err;
     // The destroy itself was refused — regardless of why teardown was asked
     // for, the session ends here as `teardown_failed`, not as `endReason`.
-    void emitPoint(env, "session.end", { count: 1 }, { framework: framework ?? "", reason: "teardown_failed" });
+    void emitPoint(env, "session.end", sessionEndValues(awakeSeconds), { framework: framework ?? "", reason: "teardown_failed" });
     console.warn(
       `[session] teardown for ${sessionId} declined by the platform:`,
       err instanceof Error ? err.message : String(err),
@@ -728,7 +733,7 @@ async function sessionSubrouteGuard(env: Env, sessionId: string): Promise<Respon
   // See `teardownLiveSession`'s matching comment: the meter is the only
   // place this handler — which also only ever has a `sessionId` — can read
   // the session's framework back from, for `session.end`'s `framework` blob.
-  const framework = await meterSession(env, sessionId, { final: true });
+  const { framework, awakeSeconds } = await meterSessionReading(env, sessionId, { final: true });
   await putTombstone(env, sessionId, TOMBSTONE_ATTEMPTED);
   try {
     await liveSbx(env, sessionId).destroy();
@@ -738,7 +743,7 @@ async function sessionSubrouteGuard(env: Env, sessionId: string): Promise<Respon
     await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
   } catch { /* best effort */ }
   console.log(`[budget] closed live session ${sessionId}: over the monthly ceiling`);
-  void emitPoint(env, "session.end", { count: 1 }, { framework: framework ?? "", reason: "budget_closed" });
+  void emitPoint(env, "session.end", sessionEndValues(awakeSeconds), { framework: framework ?? "", reason: "budget_closed" });
   return json({ error: "budget_exhausted", message: budgetPausedMessage, tier: "closed" }, 410);
 }
 

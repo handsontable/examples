@@ -270,6 +270,15 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `o11y.backlog` | o11y worker cron | — | value (oldest age s), bytes | — |
 | `o11y.alert` | o11y worker cron | reason (rule id), outcome | count | `fired`, `resolved` |
 
+`session.end`'s `value` is the awake seconds the cost ledger booked for the session: every
+`session-meter:` tick from the first request, plus the final slice at teardown, which is
+capped at the 300 s awake window so an abandoned session is not credited with the hours
+before a late teardown. It is omitted (read back as 0) when the KV meter is already gone,
+and the tier-2 panel excludes those rows. The admin panel's kill button emits no point.
+Two reasons in this table have no emitter and never produce data: `session.end` reason
+`sleep_after` (nothing observes the Sandbox SDK's idle-timeout stop) and `pool.gauge`
+reason `builder` (the builder pool is not metered; the `*/5` cron emits `live` only).
+
 `o11y.wake`'s `duration_ms` is wake-to-ready time — from the wake starting to the
 box's first successful `isReady()`, sourced from `wake:<wakeId>.readyMs` (§8) — on both
 the `clean` and `unclean` outcome. `duration_ms = 0` means the box never became ready
@@ -619,8 +628,10 @@ what ships on the wire, not a gate). The body itself is still JSON:
 `t` = `err` | `vital`; `s` = `embed` | `d`; for `vital`, `n` is `LCP` | `INP` | `CLS` |
 `TTFB` and `val` carries the value. No page path: docs pages send no referrer. Vitals are
 sampled at 10 % per page view, decided once per page; errors are sent up to the
-`monitor.ts` event ceiling. The o11y worker converts beacons with the same converter as
-Faro items, clamping `ts` to the receive time ± 5 minutes.
+`monitor.ts` event ceiling. The o11y worker converts beacons with `beaconToRecord`, a sibling of the Faro
+converter `faroItemToRecord` (`packages/runtime/src/telemetry/convert.ts`) that shares its
+clamp of `ts` to the receive time ± 5 minutes and its resource-attribute handling but
+builds the record from the beacon's own fields (`workers/o11y/src/lite.ts`).
 
 The dedupe hash covers the whole converted record (body with message and stack, attributes)
 plus the raw `ts` and, when present, `id`: a per-beacon random value, used only in the
