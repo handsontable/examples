@@ -1166,6 +1166,9 @@ function Authoring({
   // A failed Save, Fork or Share. A dialog, not `errorMessage`: that card only renders once
   // the preview itself has failed, and these usually fail over a preview that still runs.
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Which action `saveError` belongs to, so the shared dialog can title itself
+  // for the one that actually failed instead of always saying "save".
+  const [saveErrorAction, setSaveErrorAction] = useState<"save" | "fork" | "share">("save");
   const [versionWarning, setVersionWarning] = useState<string | null>(null);
   /** Did the floor below just cost this demo its theme module? Its own state, not
    *  a `versionWarning` string: the dirty-switch branches set that one *after*
@@ -3026,6 +3029,7 @@ function Authoring({
       // would not (DEV-2534). `finally` still clears the in-flight state.
       if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-embed");
+      setSaveErrorAction("share");
       setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setEmbedding(false);
@@ -3069,6 +3073,7 @@ function Authoring({
       setForking(false);
       if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-fork");
+      setSaveErrorAction("fork");
       setSaveError(e instanceof Error ? e.message : String(e));
     }
   }, [user, entry, version, forkedFrom, importedTitle, noteExampleAction]);
@@ -3118,6 +3123,7 @@ function Authoring({
       // still there to re-save — or to Download — once the user is back in.
       if (isSessionExpired(e)) return setSessionExpired(true);
       reportError(e, "demo-save");
+      setSaveErrorAction("save");
       setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
@@ -3550,7 +3556,10 @@ function Authoring({
       )}
 
       {saveError && (
-        <Dialog title="Couldn't save" onClose={() => setSaveError(null)}>
+        <Dialog
+          title={saveErrorAction === "fork" ? "Couldn't fork" : saveErrorAction === "share" ? "Couldn't share" : "Couldn't save"}
+          onClose={() => setSaveError(null)}
+        >
           <p style={{ ...dialogBody, overflowWrap: "anywhere" }}>{saveError}</p>
           <div style={formFooter}>
             <button type="button" data-autofocus style={primaryButton} onClick={() => setSaveError(null)}>

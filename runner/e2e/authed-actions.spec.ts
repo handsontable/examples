@@ -632,7 +632,8 @@ for (const action of ["Fork", "Share"] as const) {
     await expect(accountAvatar(page)).toBeVisible();
     await (action === "Fork" ? forkButton(page) : shareIcon(page)).click();
 
-    const dialog = page.getByRole("dialog", { name: "Couldn't save" });
+    const dialogTitle = action === "Fork" ? "Couldn't fork" : "Couldn't share";
+    const dialog = page.getByRole("dialog", { name: dialogTitle });
     await expect(dialog).toContainText(detail);
     await expect(page.getByText(/build_failed|build failed:/)).toHaveCount(0);
     await expect(forkButton(page)).toBeEnabled();
