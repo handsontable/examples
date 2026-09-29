@@ -9,6 +9,7 @@ import type { Env } from "./env.js";
 export const AE_INTERNAL_HOST = "ae.internal";
 
 const AE_API_ORIGIN = "https://api.cloudflare.com";
+// A ClickHouse SQL statement is a few KB; the cap stops the container using this route as a large-upload relay.
 const MAX_BODY_BYTES = 1_000_000;
 
 type AeOutboundEnv = Pick<Env, "CLOUDFLARE_ACCOUNT_ID" | "AE_SQL_TOKEN">;
@@ -23,6 +24,31 @@ export function aeInternalUrl(accountId: string): string {
   return `http://${AE_INTERNAL_HOST}${aeSqlPath(accountId)}`;
 }
 
+/** Reads `body` up to `limit` bytes; null (after cancelling the stream) as soon as the running total exceeds it. */
+async function readCapped(body: ReadableStream<Uint8Array> | null, limit: number): Promise<Uint8Array | null> {
+  if (!body) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
 function refuse(status: number, message: string): Response {
   return new Response(message, { status, headers: { "content-type": "text/plain" } });
 }
@@ -33,7 +59,8 @@ export async function handleAeOutbound(
   fetchImpl: typeof fetch = fetch,
 ): Promise<Response> {
   const url = new URL(req.url);
-  if (url.hostname !== AE_INTERNAL_HOST) return refuse(403, "host not allowed");
+  // One trailing dot names the same host; the SDK's ContainerProxy normalises it before dispatch too.
+  if (url.hostname.replace(/\.$/, "") !== AE_INTERNAL_HOST) return refuse(403, "host not allowed");
   if (req.method !== "GET" && req.method !== "POST") return refuse(405, "method not allowed");
   if (!env.CLOUDFLARE_ACCOUNT_ID || !env.AE_SQL_TOKEN) return refuse(503, "analytics engine access not configured");
 
@@ -41,12 +68,13 @@ export async function handleAeOutbound(
   const path = url.pathname.replace(/\/+$/, "");
   if (path !== aeSqlPath(env.CLOUDFLARE_ACCOUNT_ID)) return refuse(403, "path not allowed");
 
-  let body: ArrayBuffer | undefined;
+  let body: Uint8Array | undefined;
   if (req.method === "POST") {
     const declared = Number(req.headers.get("content-length") ?? 0);
     if (declared > MAX_BODY_BYTES) return refuse(413, "body too large");
-    body = await req.arrayBuffer();
-    if (body.byteLength > MAX_BODY_BYTES) return refuse(413, "body too large");
+    const read = await readCapped(req.body, MAX_BODY_BYTES);
+    if (!read) return refuse(413, "body too large");
+    body = read;
   }
 
   // Fresh headers: nothing the container sends, least of all Authorization, is forwarded.

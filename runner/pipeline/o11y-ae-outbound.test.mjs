@@ -7,7 +7,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
-import { hooks, defaultHooks } from "./fixtures/cloudflare-containers-stub.mjs";
+import { hooks, defaultHooks, outboundByHostRegistry, proxyLookup } from "./fixtures/cloudflare-containers-stub.mjs";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
@@ -32,8 +32,10 @@ function mockFetch(response = () => new Response('{"data":[]}', { headers: { "co
 
 // The registered handler, wired to a mocked fetch by swapping globalThis.fetch.
 async function callRegistered(req, env = ENV, response) {
-  const handler = GrafanaBox.outboundByHost["ae.internal"];
-  assert.equal(typeof handler, "function", "GrafanaBox registers an ae.internal outbound handler");
+  // Resolved the way the SDK's ContainerProxy does: by class name, from the registry.
+  // Always looked up under ae.internal so the handler's own host check is exercised for other hosts too.
+  const handler = proxyLookup("GrafanaBox", "http://ae.internal/");
+  assert.equal(typeof handler, "function", "the SDK registry has an ae.internal handler for GrafanaBox");
   const { fn, calls } = mockFetch(response);
   const original = globalThis.fetch;
   globalThis.fetch = fn;
@@ -54,6 +56,22 @@ test("GET on the allowed path is forwarded to api.cloudflare.com with the Worker
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, `https://api.cloudflare.com${PATH}?query=SELECT%201%20FORMAT%20JSON`);
   assert.equal(new Headers(calls[0].init.headers).get("authorization"), "Bearer test-ae-token");
+  assert.equal(calls[0].init.redirect, "manual", "the Worker never follows an upstream redirect on the container's behalf");
+});
+
+test("an upstream redirect is not followed and neither Location nor Set-Cookie reaches the container", async () => {
+  const { res, calls } = await callRegistered(new Request(`http://ae.internal${PATH}`), ENV, () =>
+    new Response("moved", {
+      status: 302,
+      headers: { location: "https://evil.example/steal", "set-cookie": "s=1", "content-type": "text/plain", "x-upstream": "1" },
+    }),
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(res.status, 302);
+  assert.equal(res.headers.get("location"), null);
+  assert.equal(res.headers.get("set-cookie"), null);
+  assert.equal(res.headers.get("x-upstream"), null);
+  assert.equal(res.headers.get("content-type"), "text/plain");
 });
 
 test("a client-supplied Authorization is replaced, and other client headers are not forwarded", async () => {
@@ -88,7 +106,11 @@ test("upstream status and body are passed back", async () => {
 for (const [name, url] of [
   ["another account's path", "http://ae.internal/client/v4/accounts/other/analytics_engine/sql"],
   ["a different API path", "http://ae.internal/client/v4/user/tokens/verify"],
-  ["a path-suffix extension", `http://ae.internal${PATH}/../tokens`],
+  // The Request constructor resolves `..`, so these reach the handler already collapsed to a sibling path.
+  ["a dot-dot segment that normalises to a sibling path", `http://ae.internal${PATH}/../tokens`],
+  ["a percent-encoded dot-dot that normalises to a sibling path", `http://ae.internal${PATH}/%2e%2e/tokens`],
+  ["an encoded slash after the path", `http://ae.internal${PATH}%2F`],
+  ["a leading double slash", `http://ae.internal/${PATH}`],
   ["a path with extra segments", `http://ae.internal${PATH}/extra`],
   ["another host", `http://evil.example${PATH}`],
   ["a lookalike host", `http://ae.internal.evil.example${PATH}`],
@@ -99,6 +121,18 @@ for (const [name, url] of [
     assert.equal(calls.length, 0);
   });
 }
+
+test("a dot-dot that collapses back onto the allowed path is forwarded to the canonical path only", async () => {
+  const { res, calls } = await callRegistered(new Request(`http://ae.internal/x/%2e%2e${PATH}`));
+  assert.equal(res.status, 200);
+  assert.equal(calls[0].url, `https://api.cloudflare.com${PATH}`);
+});
+
+test("a single trailing dot on the host is the same host", async () => {
+  const { res, calls } = await callRegistered(new Request(`http://ae.internal.${PATH}`));
+  assert.equal(res.status, 200);
+  assert.equal(calls[0].url, `https://api.cloudflare.com${PATH}`);
+});
 
 test("refuses methods other than GET and POST", async () => {
   for (const method of ["PUT", "DELETE", "PATCH"]) {
@@ -116,6 +150,54 @@ test("refuses an oversized POST body without calling upstream", async () => {
   assert.equal(calls.length, 0);
 });
 
+test("a declared content-length over the cap is refused before the body is read", async () => {
+  let pulled = false;
+  // highWaterMark 0: a stream is only pulled when something reads it.
+  const body = new ReadableStream(
+    {
+      pull(c) {
+        pulled = true;
+        c.enqueue(new Uint8Array(1));
+        c.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  // Node's Request never carries a content-length, so the handler is driven with the minimal request shape it reads.
+  const req = {
+    url: `http://ae.internal${PATH}`,
+    method: "POST",
+    headers: new Headers({ "content-length": "1000001" }),
+    body,
+  };
+  const { res, calls } = await callRegistered(req);
+  assert.equal(res.status, 413);
+  assert.equal(calls.length, 0);
+  assert.equal(pulled, false, "the declared length is enough; the stream is never read");
+});
+
+test("a chunked body over the cap is cut off early and never reaches upstream", async () => {
+  let pulls = 0;
+  let cancelled = false;
+  const body = new ReadableStream({
+    pull(controller) {
+      pulls++;
+      if (pulls > 50) return controller.close();
+      controller.enqueue(new Uint8Array(400_000));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const { res, calls } = await callRegistered(
+    new Request(`http://ae.internal${PATH}`, { method: "POST", body, duplex: "half" }),
+  );
+  assert.equal(res.status, 413);
+  assert.equal(calls.length, 0);
+  assert.equal(cancelled, true, "the reader cancels the stream");
+  assert.ok(pulls < 10, `stopped early (pulled ${pulls} of 50 chunks)`);
+});
+
 test("fails closed with 503 when the token is not configured", async () => {
   const { res, calls } = await callRegistered(new Request(`http://ae.internal${PATH}`), { CLOUDFLARE_ACCOUNT_ID: ACCOUNT });
   assert.equal(res.status, 503);
@@ -123,13 +205,14 @@ test("fails closed with 503 when the token is not configured", async () => {
 });
 
 test("the Worker entrypoint exports ContainerProxy, which outbound interception requires", async () => {
-  const { readFileSync } = await import("node:fs");
-  const src = readFileSync(new URL("../workers/o11y/src/index.ts", import.meta.url), "utf8");
-  assert.match(src, /export\s*\{\s*ContainerProxy\s*\}\s*from\s*"@cloudflare\/containers"/);
+  const mod = await import("../workers/o11y/src/index.ts");
+  assert.equal(typeof mod.ContainerProxy, "function");
 });
 
-test("the only registered outbound host is ae.internal", () => {
-  assert.deepEqual(Object.keys(GrafanaBox.outboundByHost), ["ae.internal"]);
+test("the only registered outbound host is ae.internal, found by class name as the SDK's ContainerProxy does", () => {
+  const registered = outboundByHostRegistry.get("GrafanaBox");
+  assert.ok(registered, "a static class field would bypass the SDK setter and leave the registry empty");
+  assert.deepEqual(Object.keys(registered), ["ae.internal"]);
 });
 
 test("local mode keeps host.docker.internal and its own ClickHouse headers", async () => {

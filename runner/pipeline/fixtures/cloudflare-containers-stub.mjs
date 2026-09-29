@@ -56,7 +56,28 @@ function parseTimeExpression(expr) {
 /** Name-only stand-in: `index.ts` re-exports it for workerd's outbound interception. */
 export class ContainerProxy {}
 
+/** `@cloudflare/containers@0.3.7` `container.js:41`: class name -> hostname -> handler. */
+export const outboundByHostRegistry = new Map();
+
+/** What the SDK's `ContainerProxy.fetch` does (`container.js:199-232`): strip trailing dots
+ *  from the hostname, then look the handler up by CLASS NAME in the registry. */
+export function proxyLookup(className, url) {
+  let hostname = new URL(url).hostname;
+  while (hostname.endsWith(".")) hostname = hostname.slice(0, -1);
+  return outboundByHostRegistry.get(className)?.[hostname];
+}
+
 export class Container {
+  // The SDK backs these with the registry (`container.js:272-277`), so a
+  // `static outboundByHost = {...}` class field (own property, bypasses the
+  // inherited setter) registers nothing and the proxy never finds the handler.
+  static get outboundByHost() {
+    return outboundByHostRegistry.get(this.name);
+  }
+  static set outboundByHost(handlers) {
+    outboundByHostRegistry.set(this.name, handlers);
+  }
+
   constructor(ctx, env, options) {
     this.ctx = ctx;
     this.env = env;

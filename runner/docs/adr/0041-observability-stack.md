@@ -142,7 +142,7 @@ box.
   dashboards), `auth.proxy` behind the Worker (§B.5), **Grafana Live disabled**, sqlite
   state disposable.
 - **Secrets reach the container** only as `envVars` set by `GrafanaBox` at start from
-  Worker secrets (`LOKI_S3_*`). `AE_SQL_TOKEN` and the Slack webhook never enter the box.
+  Worker secrets (`LOKI_S3_*`). In production `AE_SQL_TOKEN` and the Slack webhook never enter the box (local mode still passes the token via `HEADER2_VALUE`).
 - **Analytics Engine SQL goes through an outbound handler.** A container's own egress to
   `api.cloudflare.com` is refused with Cloudflare error 1000 (`dns_loop`, HTTP 403), so the
   ClickHouse datasource points at `http://ae.internal/client/v4/accounts/<id>/analytics_engine/sql`.

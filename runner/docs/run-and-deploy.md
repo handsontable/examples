@@ -534,8 +534,9 @@ npx wrangler secret put CF_ANALYTICS_TOKEN
 # this one is the production read side of the nightly `example_daily`
 # rollup (ADR-0042 §5, contract §2, `reconcile.ts#queryExampleEventTotals`),
 # not the billing GraphQL reconciliation CF_ANALYTICS_TOKEN feeds. Also set
-# on the o11y worker (step 6) for Grafana's own ClickHouse datasource — the
-# two workers need their own copies, they do not share a binding.
+# on the o11y worker (step 6), where its outbound handler uses it for
+# GrafanaBox's ClickHouse datasource — the two workers need their own copies,
+# they do not share a binding.
 npx wrangler secret put AE_SQL_TOKEN
 
 # Example chat (DEV-2047) — see docs/example-chat.md:
