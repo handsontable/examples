@@ -530,7 +530,7 @@ state would not survive a sleep.
 |---|---|---|
 | Uncaught error, new issue, regression | Sentry | seconds |
 | Spend thresholds (200/500/800) | `reconcile.ts` `captureMessage` to Sentry, as today | nightly |
-| `at_capacity` rate, 5xx rate from `api.request`, preview-ready rate per tier, session start p95, embed error rate per demo id, compile-error rate per `ht_major` day over day, inbox backlog age, a `rejected` inbox key, the o11y spend cap | o11y worker `*/10` cron over Analytics Engine and `InboxWriter` → Slack | minutes |
+| `at_capacity` rate, 5xx rate from `api.request`, preview-ready rate per tier, session start p95, embed error rate per demo id, compile-error rate per `ht_major` day over day, snapshot-build failed rate per framework, inbox backlog age, a `rejected` inbox key, the o11y spend cap | o11y worker `*/10` cron over Analytics Engine and `InboxWriter` → Slack | minutes |
 | New handled-error fingerprint | the exact first-seen registry in `InboxWriter` (not sampled data), excluding `surface = demo-runtime`, whose keystroke ladders are authored-code output | minutes |
 | The o11y stack itself stale (no cron tick or ingest for 30 min) | the API worker's `*/5` cron reads the o11y heartbeat over a service binding and sends `captureMessage` to Sentry | minutes |
 
@@ -539,7 +539,9 @@ notifies once when it fires and once when it resolves, never on every tick. Thre
 starting values, tuned after launch: preview-ready below 97 % (Tier-1) or 95 % (Tier-2)
 over 1 h; session start p95 above 20 s; `at_capacity` above 5/h; 5xx above 1 % over
 15 min; LiteLLM errors above 5 %; compile errors on one `ht_major` doubling day over
-day; an embed above 20 % errors with more than 50 views in 24 h; backlog older than 2 h.
+day; snapshot builds failing above 50 % per framework over 30 min with at least 10
+failed; an embed above 20 % errors with more than 50 views in 24 h; backlog older
+than 2 h.
 
 ### G. Cost is its own number, with its own cap
 
