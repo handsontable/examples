@@ -938,7 +938,7 @@ npx wrangler secret put O11Y_SESSION_SECRET          # step 5 above
 
 `AE_SQL_TOKEN` is the Analytics Engine SQL API token — same token shape as the
 API worker's own `CF_ANALYTICS_TOKEN` (Account → Account Analytics → Read),
-passed to the box as `GrafanaBox`'s ClickHouse datasource credential.
+added by `GrafanaBox`'s outbound handler to the ClickHouse datasource's requests; it is never passed to the box.
 
 `RATE_LIMITER` needs no dashboard step — a Workers rate-limiting binding's
 `namespace_id` (`1001`, already in `wrangler.jsonc`) is a self-chosen scoping

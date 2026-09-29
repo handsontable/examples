@@ -53,6 +53,9 @@ function parseTimeExpression(expr) {
   return match[2] === "s" ? value : match[2] === "m" ? value * 60 : value * 3600;
 }
 
+/** Name-only stand-in: `index.ts` re-exports it for workerd's outbound interception. */
+export class ContainerProxy {}
+
 export class Container {
   constructor(ctx, env, options) {
     this.ctx = ctx;

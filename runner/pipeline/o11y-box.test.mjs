@@ -252,7 +252,7 @@ test("wake(): envVars never include SLACK_WEBHOOK_URL, and the only GF_* key is 
   assert.deepEqual(gfKeys, ["GF_SERVER_ROOT_URL"]);
 });
 
-test("wake(): production ClickHouse envVars use the single Authorization: Bearer header shape", async () => {
+test("wake(): production ClickHouse envVars point at the outbound-handled host and carry no credential", async () => {
   const { box } = makeBox();
   let envVars;
   hooks.start = async (self, startOptions) => {
@@ -261,9 +261,13 @@ test("wake(): production ClickHouse envVars use the single Authorization: Bearer
   };
   await box.wake("visit");
 
-  assert.equal(envVars.O11Y_CLICKHOUSE_HEADER1_NAME, "Authorization");
-  assert.equal(envVars.O11Y_CLICKHOUSE_HEADER1_VALUE, "Bearer test-ae-token");
-  assert.match(envVars.O11Y_CLICKHOUSE_URL, /^https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/.+\/analytics_engine\/sql$/);
+  assert.equal(
+    envVars.O11Y_CLICKHOUSE_URL,
+    "http://ae.internal/client/v4/accounts/test-account-id/analytics_engine/sql",
+  );
+  assert.equal(envVars.O11Y_CLICKHOUSE_HEADER1_NAME, "");
+  assert.equal(envVars.O11Y_CLICKHOUSE_HEADER1_VALUE, "");
+  assert.ok(!JSON.stringify(envVars).includes("test-ae-token"), "AE_SQL_TOKEN must not reach the container");
   assert.match(envVars.LOKI_S3_ENDPOINT, /\.eu\.r2\.cloudflarestorage\.com$/);
   assert.equal(envVars.LOKI_S3_INSECURE, "false", "production R2 is always real TLS");
   assert.equal(
