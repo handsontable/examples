@@ -444,10 +444,8 @@ hash-only `ingestItem` (no `record`) so a retried/redelivered batch cannot doubl
 its Analytics Engine point — the same dedupe-only shape an `example.*` event already
 used above.
 
-**Scope note, not yet fixed**: §9's lite-beacon path (`workers/o11y/src/lite.ts`,
-`POST /telemetry/lite`) is a separate converter and still stores a vital beacon's record
-today (the triage's own `LCP=172` inbox-record example) — this ruling was not extended
-there. A future consistency pass may want to.
+The lite-beacon path (§9, `workers/o11y/src/lite.ts`) follows the same rule: only a `t:"err"` beacon
+stores a record, and a `t:"vital"` beacon is a hash-only item that writes its `web_vital` point alone.
 
 ## 7. Fingerprint
 
