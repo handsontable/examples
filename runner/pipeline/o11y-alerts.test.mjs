@@ -30,7 +30,7 @@ const {
   o11yCapRule,
   alertEvalErrorRule,
 } = await import("../workers/o11y/src/alerts/rules.ts");
-const { assertAllowedAeQuery, findDisallowedAeFunctions, ALLOWED_AE_FUNCTIONS } =
+const { assertAllowedAeQuery, findDisallowedAeFunctions, findUnsupportedAeConstructs, ALLOWED_AE_FUNCTIONS } =
   await import("../workers/o11y/src/alerts/ae-query.ts");
 const { inboxKeyStorageKey, AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
 const { newFingerprintWrites } = await import("../workers/o11y/src/inbox/registry.ts");
@@ -56,7 +56,7 @@ test("ae-query: refuses an undocumented aggregate (quantileTDigestWeighted)", ()
 });
 
 test("ae-query: allows every function this task's own queries use", () => {
-  for (const fn of ["sum", "avg", "quantileExactWeighted", "toStartOfInterval", "toUInt32", "now"]) {
+  for (const fn of ["sum", "sumIf", "avg", "quantileExactWeighted", "toStartOfInterval", "toUInt32", "toDateTime", "now"]) {
     assert.ok(ALLOWED_AE_FUNCTIONS.has(fn), `expected ${fn} to be allowed`);
   }
   assert.doesNotThrow(() =>
@@ -64,6 +64,29 @@ test("ae-query: allows every function this task's own queries use", () => {
       "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp >= now() - INTERVAL '3600' SECOND",
     ),
   );
+});
+
+test("ae-query: refuses the ClickHouse-only shapes Analytics Engine rejects", () => {
+  const cases = {
+    "SELECT DISTINCT blob3 FROM runner_events": "SELECT DISTINCT",
+    "SELECT blob3 FROM default.runner_events": "schema-qualified",
+    "SELECT blob3 FROM $table": "$table",
+    "SELECT a FROM runner_events JOIN other ON 1 = 1": "JOIN",
+    "SELECT a FROM runner_events UNION ALL SELECT a FROM runner_events": "UNION",
+    "WITH x AS (SELECT 1) SELECT * FROM runner_events": "WITH",
+    "SELECT a FROM (SELECT blob3 AS a FROM runner_events)": "subquery in FROM",
+    "SELECT sum(x) OVER (PARTITION BY y) FROM runner_events": "window function",
+  };
+  for (const [sql, label] of Object.entries(cases)) {
+    const found = findUnsupportedAeConstructs(sql);
+    assert.ok(found.some((f) => f.includes(label)), `expected "${label}" for: ${sql}, got ${JSON.stringify(found)}`);
+    assert.throws(() => assertAllowedAeQuery(sql), /unsupported construct/, sql);
+  }
+});
+
+test("ae-query: count(DISTINCT x) and a quoted 'union' literal are not flagged", () => {
+  assert.deepEqual(findUnsupportedAeConstructs("SELECT count(DISTINCT blob3) FROM runner_events"), []);
+  assert.deepEqual(findUnsupportedAeConstructs("SELECT sum(x) FROM runner_events WHERE blob3 = 'union'"), []);
 });
 
 // ---- alerts/inbox-state.ts: pure InboxWriter helpers ----------------------

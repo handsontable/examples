@@ -18,18 +18,27 @@
     "list": [
       {
         "name": "environment",
-        "type": "query",
+        "type": "custom",
         "label": "Environment",
-        "datasource": {
-          "type": "vertamedia-clickhouse-datasource",
-          "uid": "clickhouse-runner-events"
-        },
-        "query": "SELECT DISTINCT blob3 AS environment FROM runner_events",
-        "refresh": 1,
-        "sort": 1,
+        "query": "production,local",
         "multi": false,
         "includeAll": false,
-        "current": {}
+        "current": {
+          "text": "production",
+          "value": "production"
+        },
+        "options": [
+          {
+            "text": "production",
+            "value": "production",
+            "selected": true
+          },
+          {
+            "text": "local",
+            "value": "local"
+          }
+        ],
+        "hide": 0
       },
       {
         "name": "framework",
@@ -39,7 +48,7 @@
           "type": "vertamedia-clickhouse-datasource",
           "uid": "clickhouse-runner-events"
         },
-        "query": "SELECT DISTINCT blob6 AS framework FROM runner_events WHERE blob6 != ''",
+        "query": "SELECT blob6 AS framework FROM runner_events WHERE timestamp >= now() - INTERVAL '90' DAY AND blob6 != '' GROUP BY framework ORDER BY framework",
         "refresh": 1,
         "sort": 1,
         "multi": true,
@@ -141,7 +150,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, outcome ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, outcome ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -190,7 +199,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, reason ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, reason ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -239,7 +248,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'container.boot_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, outcome ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'container.boot_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, outcome ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -289,7 +298,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double3, toUInt32(_sample_interval)) AS p95 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.end' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, reason ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double3, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.end' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, reason ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -339,7 +348,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, sum(_sample_interval * double3) / sum(_sample_interval) AS avg_value FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, sum(_sample_interval * double3) / sum(_sample_interval) AS avg_value FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -351,7 +360,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, sum(_sample_interval * double8) / sum(_sample_interval) AS cap FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, sum(_sample_interval * double8) / sum(_sample_interval) AS cap FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",

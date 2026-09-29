@@ -31,18 +31,27 @@
     "list": [
       {
         "name": "environment",
-        "type": "query",
+        "type": "custom",
         "label": "Environment",
-        "datasource": {
-          "type": "vertamedia-clickhouse-datasource",
-          "uid": "clickhouse-runner-events"
-        },
-        "query": "SELECT DISTINCT blob3 AS environment FROM runner_events",
-        "refresh": 1,
-        "sort": 1,
+        "query": "production,local",
         "multi": false,
         "includeAll": false,
-        "current": {}
+        "current": {
+          "text": "production",
+          "value": "production"
+        },
+        "options": [
+          {
+            "text": "production",
+            "value": "production",
+            "selected": true
+          },
+          {
+            "text": "local",
+            "value": "local"
+          }
+        ],
+        "hide": 0
       },
       {
         "name": "framework",
@@ -52,7 +61,7 @@
           "type": "vertamedia-clickhouse-datasource",
           "uid": "clickhouse-runner-events"
         },
-        "query": "SELECT DISTINCT blob6 AS framework FROM runner_events WHERE blob6 != ''",
+        "query": "SELECT blob6 AS framework FROM runner_events WHERE timestamp >= now() - INTERVAL '90' DAY AND blob6 != '' GROUP BY framework ORDER BY framework",
         "refresh": 1,
         "sort": 1,
         "multi": true,
@@ -166,7 +175,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob5 AS tier, 100 * sum(_sample_interval * double1 * (blob8 = 'ready')) / sum(_sample_interval * double1) AS pct FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, tier ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob5 AS tier, 100 * sumIf(_sample_interval * double1, blob8 = 'ready') / sum(_sample_interval * double1) AS pct FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, tier ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -216,7 +225,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob5 AS tier, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, tier ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob5 AS tier, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, tier ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -266,7 +275,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, outcome ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, outcome ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -316,7 +325,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, index1 AS metric, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 IN ('error.uncaught','error.handled') AND blob3 = '$environment' AND blob4 != 'demo-runtime' GROUP BY t, metric ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, index1 AS metric, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 IN ('error.uncaught','error.handled') AND blob3 = '$environment' AND blob4 != 'demo-runtime' GROUP BY t, metric ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -366,7 +375,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, sum(_sample_interval * double3) / sum(_sample_interval) AS avg_value FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, sum(_sample_interval * double3) / sum(_sample_interval) AS avg_value FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -416,7 +425,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, sum(_sample_interval * double8) / sum(_sample_interval) AS avg_value FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, sum(_sample_interval * double8) / sum(_sample_interval) AS avg_value FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'pool.gauge' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -466,7 +475,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob10 AS route_class, sum(_sample_interval * double1) AS cnt FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'api.request' AND blob3 = '$environment' AND blob8 = '5xx' GROUP BY t, route_class ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob10 AS route_class, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'api.request' AND blob3 = '$environment' AND blob8 = '5xx' GROUP BY t, route_class ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -516,7 +525,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob10 AS route_class, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'api.request' AND blob3 = '$environment' GROUP BY t, route_class ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob10 AS route_class, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'api.request' AND blob3 = '$environment' GROUP BY t, route_class ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -566,7 +575,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS tier, sum(_sample_interval * double3) / sum(_sample_interval) AS avg_value FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'budget.gauge' AND blob3 = '$environment' GROUP BY t, tier ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS tier, sum(_sample_interval * double3) / sum(_sample_interval) AS avg_value FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'budget.gauge' AND blob3 = '$environment' GROUP BY t, tier ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -623,7 +632,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS tier, sum(_sample_interval * double4) / sum(_sample_interval) AS avg_value FROM $table WHERE $timeFilterByColumn(timestamp) AND index1 = 'budget.gauge' AND blob3 = '$environment' GROUP BY t, tier ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS tier, sum(_sample_interval * double4) / sum(_sample_interval) AS avg_value FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'budget.gauge' AND blob3 = '$environment' GROUP BY t, tier ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",

@@ -12,6 +12,7 @@
 // rather than silently answering `[]`.
 
 import { AE_COLUMNS } from "@handsontable/demo-runtime/telemetry";
+import { assertAllowedAeQuery } from "../../workers/o11y/src/alerts/ae-query.ts";
 
 const SLOT_TO_NAME = Object.fromEntries(Object.entries(AE_COLUMNS).map(([k, v]) => [v, k]));
 
@@ -26,6 +27,9 @@ export function makeFakeAeQuery(rows) {
   const calls = [];
 
   async function queryFn(_env, sql) {
+    // The real `runAeQuery` refuses these before sending; the fake must too,
+    // or a rule could ship SQL that Analytics Engine rejects with green tests.
+    assertAllowedAeQuery(sql);
     calls.push(sql);
 
     const metricMatch = /index1 = '([^']*)'/.exec(sql);

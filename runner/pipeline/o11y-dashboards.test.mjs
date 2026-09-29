@@ -10,14 +10,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LOKI_LABELS, HT_MAJORS, METRICS, AE_COLUMNS } from "../packages/runtime/dist/telemetry/index.js";
+import { LOKI_LABELS, HT_MAJORS, ENVIRONMENTS, METRICS, AE_COLUMNS } from "../packages/runtime/dist/telemetry/index.js";
 // One allowlist of Cloudflare's documented Analytics Engine SQL functions,
 // shared with `workers/o11y/src/alerts/ae-query.ts` (the alert rules' own
 // query helper) instead of two diverging copies — see that file's header
 // for the doc pages/date this set was read from. A pure, import-free
 // module, so no `o11y-worker-hooks.mjs` registration is needed to load it
 // here.
-const { ALLOWED_AE_FUNCTIONS } = await import("../workers/o11y/src/alerts/ae-query.ts");
+const { ALLOWED_AE_FUNCTIONS, findUnsupportedAeConstructs } = await import("../workers/o11y/src/alerts/ae-query.ts");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARDS_DIR = path.join(__dirname, "..", "containers", "o11y", "grafana", "dashboards");
@@ -79,7 +79,6 @@ const AE_KEYWORDS = new Set([
   "NULL",
   "TRUE",
   "FALSE",
-  "DISTINCT",
 ]);
 
 /** Strips string literals (ClickHouse `'...'`) and Grafana/vertamedia macros
@@ -125,6 +124,12 @@ function validateAeQuery(query) {
     if (KNOWN_AE_COLUMNS.has(name)) continue;
     if (declaredAliases.has(name)) continue;
     violations.push(`unknown column or identifier: "${name}"`);
+  }
+
+  // Comparison inside arithmetic (`x * (blob8 = 'ready')`) is ClickHouse's
+  // UInt8 trick; AE documents only sumIf/countIf/avgIf for a conditional sum.
+  if (/[*+\-/]\s*\(\s*\w+\s*(?:=|!=|<>|<=|>=|<|>)\s*'STR'\s*\)/.test(stripped)) {
+    violations.push("boolean arithmetic inside an aggregate (use sumIf)");
   }
 
   // §4's reading rule: double1 (the count slot) may only appear inside
@@ -364,6 +369,73 @@ function resolveDatasourceUid(dashboard, uid, knownUids, pluginQuery) {
   return null;
 }
 
+// ---- what the vertamedia plugin + Grafana actually send to AE ---------------
+//
+// The dashboards were once verified only against a local ClickHouse, then failed
+// with a 422 against Analytics Engine: a `SELECT DISTINCT` variable query left the
+// variable empty, so `IN (${framework:sqlstring})` reached AE as `IN ()`. This
+// mirrors the plugin's macro expansion (eval_query.go, v3.5.0) closely enough to
+// lint the text AE really receives, not just the JSON template.
+
+const SAMPLE_FROM = 1790663608;
+const SAMPLE_TO = 1790685208;
+const SAMPLE_INTERVAL_S = 20;
+
+/** The values a `${name:sqlstring}` reference expands to, or `null` when they
+ *  cannot be known statically (a query variable is filled from AE at runtime). */
+function staticVariableValues(dashboard, name) {
+  const v = (dashboard.templating?.list ?? []).find((x) => x.name === name);
+  if (!v) return { error: `no template variable "${name}" is declared` };
+  if (v.type === "custom") {
+    const values = (v.options ?? []).map((o) => o.value).filter((x) => x !== "$__all");
+    return { values };
+  }
+  if (v.type === "query") return { values: null };
+  return { error: `variable "${name}" has unsupported type "${v.type}"` };
+}
+
+/** The SQL text AE receives for `query`, plus every problem found on the way
+ *  (an unresolved variable, an empty expansion, a macro left unexpanded). */
+function expandForAe(dashboard, query) {
+  const problems = [];
+  let sql = query;
+  sql = sql.replace(/\$timeFilterByColumn\((\w+)\)/g, (_m, col) => `${col} >= toDateTime(${SAMPLE_FROM}) AND ${col} <= toDateTime(${SAMPLE_TO})`);
+  sql = sql.replace(/\$interval\b/g, String(SAMPLE_INTERVAL_S));
+  sql = sql.replace(/\$\{(\w+):sqlstring\}/g, (_m, name) => {
+    const { values, error } = staticVariableValues(dashboard, name);
+    if (error) {
+      problems.push(error);
+      return "?";
+    }
+    if (values === null) return "'sample'";
+    if (values.length === 0) problems.push(`variable "${name}" has no options, so it expands to an empty list`);
+    return values.map((x) => `'${x}'`).join(",");
+  });
+  sql = sql.replace(/'\$(\w+)'/g, (_m, name) => {
+    const { values, error } = staticVariableValues(dashboard, name);
+    if (error) {
+      problems.push(error);
+      return "'?'";
+    }
+    return values === null ? "'sample'" : `'${values[0] ?? ""}'`;
+  });
+  if (/\bIN\s*\(\s*\)/i.test(sql)) problems.push("empty IN () list");
+  if (/(?<![!<>])=\s*''/.test(sql)) problems.push("comparison against an empty string");
+  if (/\$/.test(sql)) problems.push(`unexpanded macro left in the query: ${sql.match(/\$[\w{(]*/)[0]}`);
+  return { sql, problems };
+}
+
+/** Every Analytics-Engine-surface violation of one query, macros expanded. */
+function validateAeSurface(dashboard, query) {
+  const { sql, problems } = expandForAe(dashboard, query);
+  return [
+    ...problems,
+    ...new Set([...findUnsupportedAeConstructs(query), ...findUnsupportedAeConstructs(sql)]),
+    ...(/\bFORMAT\b/i.test(query) ? ["query names FORMAT (the plugin appends FORMAT JSON itself)"] : []),
+    ...(/FROM\s+runner_events\b/.test(sql) ? [] : ["must read FROM the bare dataset name runner_events"]),
+  ];
+}
+
 // =============================================================================
 // The dashboards this repo actually ships
 // =============================================================================
@@ -425,6 +497,27 @@ for (const { file, dashboard } of dashboards) {
       const violations = validateMetricBlobFilters(query);
       assert.deepEqual(violations, [], `${file} / panel "${panel}": ${violations.join("; ")}\nquery: ${query}`);
     }
+  });
+
+  test(`${file}: every Analytics Engine query is safe as AE receives it (no DISTINCT/$table/empty IN (), macros expanded)`, () => {
+    for (const { panel, query } of aeTargetsOf(dashboard)) {
+      const violations = validateAeSurface(dashboard, query);
+      assert.deepEqual(violations, [], `${file} / panel "${panel}": ${violations.join("; ")}\nquery: ${query}`);
+    }
+  });
+
+  test(`${file}: no ClickHouse target enables the plugin's metadata comment`, () => {
+    for (const { panel, target } of allTargets(dashboard)) {
+      assert.notEqual(target.add_metadata, true, `${file} / panel "${panel}" sets add_metadata`);
+    }
+  });
+
+  test(`${file}: the environment variable is pinned to the contract's ENVIRONMENTS`, () => {
+    const envVar = dashboard.templating.list.find((v) => v.name === "environment");
+    assert.ok(envVar, `${file} has no "environment" template variable`);
+    assert.equal(envVar.type, "custom", "a query variable would go through AE and can come back empty");
+    assert.deepEqual(envVar.options.map((o) => o.value), [...ENVIRONMENTS]);
+    assert.equal(envVar.current.value, "production");
   });
 
   test(`${file}: every Loki query uses only contract labels and a named tenant datasource`, () => {
@@ -696,6 +789,53 @@ test("logs.json: the tenant-templated datasource resolves via resolveDatasourceU
     const violation = resolveDatasourceUid(dashboard, datasource.uid, KNOWN_DATASOURCE_UIDS);
     assert.equal(violation, null, `panel "${panel}": ${violation}`);
   }
+});
+
+// ---- the AE-surface lint fails on the shapes that broke production --------------
+
+test("the AE-surface lint fails on the captured production query (default.runner_events, empty IN (), blob3 = '')", () => {
+  const dashboard = { templating: { list: [{ name: "framework", type: "query" }] } };
+  const captured =
+    "SELECT toStartOfInterval(timestamp, INTERVAL '20' SECOND) AS t, blob5 AS tier FROM default.runner_events " +
+    "WHERE timestamp >= toDateTime(1790663608) AND blob3 = '' AND blob6 IN () GROUP BY t, tier ORDER BY t";
+  const violations = validateAeSurface(dashboard, captured);
+  assert.ok(violations.some((v) => v.includes("schema-qualified")), JSON.stringify(violations));
+  assert.ok(violations.some((v) => v.includes("empty IN ()")), JSON.stringify(violations));
+  assert.ok(violations.some((v) => v.includes("empty string")), JSON.stringify(violations));
+});
+
+test("the AE-surface lint fails on SELECT DISTINCT, $table, and a variable that expands to nothing", () => {
+  const dashboard = { templating: { list: [{ name: "framework", type: "custom", options: [] }] } };
+  const distinct = validateAeSurface(dashboard, "SELECT DISTINCT blob3 AS environment FROM runner_events");
+  assert.ok(distinct.some((v) => v.includes("SELECT DISTINCT")), JSON.stringify(distinct));
+  const table = validateAeSurface(dashboard, "SELECT sum(_sample_interval * double1) AS c FROM $table WHERE $timeFilterByColumn(timestamp)");
+  assert.ok(table.some((v) => v.includes("$table")), JSON.stringify(table));
+  const empty = validateAeSurface(
+    dashboard,
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE $timeFilterByColumn(timestamp) AND blob6 IN (${framework:sqlstring})",
+  );
+  assert.ok(empty.some((v) => v.includes("no options")), JSON.stringify(empty));
+});
+
+test("the AE-surface lint fails on a reference to an undeclared variable, and passes the fixed shape", () => {
+  const dashboard = { templating: { list: [{ name: "ht_major", type: "custom", options: [{ value: "$__all" }, { value: "18" }] }] } };
+  const undeclared = validateAeSurface(dashboard, "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE blob3 = '$environment'");
+  assert.ok(undeclared.some((v) => v.includes('"environment"')), JSON.stringify(undeclared));
+  assert.deepEqual(
+    validateAeSurface(
+      dashboard,
+      "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, 100 * sumIf(_sample_interval * double1, blob8 = 'ready') / sum(_sample_interval * double1) AS pct " +
+        "FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob7 IN (${ht_major:sqlstring}) GROUP BY t ORDER BY t",
+    ),
+    [],
+  );
+});
+
+test("the AE lint fails on boolean arithmetic inside sum() (undocumented; use sumIf)", () => {
+  const violations = validateAeQuery(
+    "SELECT sum(_sample_interval * double1 * (blob8 = 'ready')) AS c FROM runner_events WHERE $timeFilterByColumn(timestamp)",
+  );
+  assert.ok(violations.some((v) => v.includes("boolean")), JSON.stringify(violations));
 });
 
 // =============================================================================

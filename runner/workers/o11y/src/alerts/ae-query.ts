@@ -5,10 +5,12 @@
 // 2026-09-23. Never widened to "whatever local ClickHouse accepts."
 export const ALLOWED_AE_FUNCTIONS: ReadonlySet<string> = new Set([
   "sum",
+  "sumIf",
   "avg",
   "quantileExactWeighted",
   "toStartOfInterval",
   "toUInt32",
+  "toDateTime",
   "now",
 ]);
 
@@ -37,7 +39,6 @@ const AE_KEYWORDS: ReadonlySet<string> = new Set([
   "NULL",
   "TRUE",
   "FALSE",
-  "DISTINCT",
 ]);
 
 /** Strips string literals before scanning for function-call identifiers —
@@ -63,7 +64,33 @@ export function findDisallowedAeFunctions(sql: string): string[] {
   return violations;
 }
 
+/** SQL shapes Analytics Engine rejects (or, for a schema-qualified table,
+ *  is not documented to accept) but local ClickHouse runs happily. Scanned on
+ *  the literal-stripped text, so a `'union'` string never trips it. Grafana
+ *  macros are left in place: `$table` expands to `default.runner_events`. */
+const UNSUPPORTED_AE_CONSTRUCTS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bSELECT\s+DISTINCT\b/i, "SELECT DISTINCT (use GROUP BY)"],
+  [/\b(?:INNER|LEFT|RIGHT|FULL|CROSS|OUTER|ARRAY)?\s*JOIN\b/i, "JOIN"],
+  [/\bUNION\b/i, "UNION"],
+  [/^\s*WITH\b/i, "WITH (CTE)"],
+  [/\bFROM\s*\(/i, "subquery in FROM"],
+  [/\(\s*SELECT\b/i, "subquery"],
+  [/\bOVER\s*\(/i, "window function"],
+  [/\$table\b/, "$table (the plugin expands it to `default.runner_events`)"],
+  [/\bFROM\s+[A-Za-z_][A-Za-z0-9_]*\./i, "schema-qualified table name"],
+];
+
+/** Every unsupported construct found in `sql` — empty means clean. */
+export function findUnsupportedAeConstructs(sql: string): string[] {
+  const stripped = stripLiterals(sql);
+  return UNSUPPORTED_AE_CONSTRUCTS.filter(([re]) => re.test(stripped)).map(([, label]) => label);
+}
+
 export function assertAllowedAeQuery(sql: string): void {
+  const unsupported = findUnsupportedAeConstructs(sql);
+  if (unsupported.length > 0) {
+    throw new Error(`ae-query: unsupported construct(s) in query: ${unsupported.join(", ")}`);
+  }
   const disallowed = findDisallowedAeFunctions(sql);
   if (disallowed.length > 0) {
     throw new Error(`ae-query: disallowed function(s) in query: ${disallowed.join(", ")}`);
