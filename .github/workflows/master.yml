@@ -324,7 +324,7 @@ jobs:
             --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-authoring\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${VERSION_ID}\"}") \
             || true
           echo "deploy-event response: ${code:-<none>}"
-          [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-authoring did not return 200 (${code:-<none>})"
+          [ "$code" = "204" ] || [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-authoring did not return 204 (${code:-<none>})"
 
       - name: Smoke test — prod frontend serves current bundle
         working-directory: .
@@ -450,7 +450,7 @@ jobs:
             --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-api\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${VERSION_ID}\"}") \
             || true
           echo "deploy-event response: ${code:-<none>}"
-          [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-api did not return 200 (${code:-<none>})"
+          [ "$code" = "204" ] || [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-api did not return 204 (${code:-<none>})"
 
       - name: Smoke test — prod API health
         working-directory: .
@@ -538,4 +538,4 @@ jobs:
             --data "{\"event\":\"deploy\",\"service\":\"handsontable-demos-o11y\",\"sha\":\"${GITHUB_SHA}\",\"cf_version_id\":\"${VERSION_ID}\"}") \
             || true
           echo "deploy-event response: ${code:-<none>}"
-          [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-o11y did not return 200 (${code:-<none>})"
+          [ "$code" = "204" ] || [ "$code" = "200" ] || echo "::warning::deploy event for handsontable-demos-o11y did not return 204 (${code:-<none>})"

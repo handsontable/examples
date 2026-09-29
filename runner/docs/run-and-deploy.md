@@ -742,7 +742,7 @@ own stdout — `wrangler deploy` prints a trailing `Current Version ID: <uuid>`
 line; capture it with `pnpm run deploy | tee deploy.log` (`set -o pipefail` is
 on, so a piped deploy failure still fails the job) and
 `grep -oE 'Current Version ID:.*' deploy.log | awk '{print $NF}'`. **This step
-never fails the job on its own** (`-f` fails the curl on a non-2xx exit, but
+never fails the job on its own** (the route answers `204` on success, and the warning fires for any other code; `-f` fails the curl on a non-2xx exit, but
 its own exit code is deliberately not checked with `set -e` in force — a
 warning line is emitted instead): a deploy that shipped correctly must not be
 marked red because the *reporting* of it hiccuped, and on the very first
