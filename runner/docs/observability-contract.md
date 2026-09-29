@@ -270,10 +270,11 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `o11y.backlog` | o11y worker cron | — | value (oldest age s), bytes | — |
 | `o11y.alert` | o11y worker cron | reason (rule id), outcome | count | `fired`, `resolved` |
 
-`session.end`'s `value` is the awake seconds the cost ledger booked for the session: every
-`session-meter:` tick from the first request, plus the final slice at teardown, which is
-capped at the 300 s awake window so an abandoned session is not credited with the hours
-before a late teardown. It is omitted (read back as 0) when the KV meter is already gone,
+`session.end`'s `value` is the awake seconds the cost ledger booked for the session: the sum
+of every slice `recordContainerUsage` booked for it, each capped at the 300 s awake
+window, so a hidden tab or an abandoned session is not credited with the quiet gaps
+between ticks or the hours before a late teardown. Sessions whose meter predates the
+running total fall back to the wall-clock span of their ticks plus the final slice. It is omitted (read back as 0) when the KV meter is already gone,
 and the tier-2 panel excludes those rows. The admin panel's kill button emits no point.
 Two reasons in this table have no emitter and never produce data: `session.end` reason
 `sleep_after` (nothing observes the Sandbox SDK's idle-timeout stop) and `pool.gauge`

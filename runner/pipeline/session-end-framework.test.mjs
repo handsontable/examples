@@ -257,3 +257,51 @@ test("budget_closed reports the awake seconds of the session it closes", async (
   const awake = awakeOf(ends[0]);
   assert.ok(awake >= 120 && awake <= 125, `expected ~120 awake seconds, got ${awake}`);
 });
+
+test("a hidden-then-resumed tab reports the slices the ledger booked, not the wall-clock span", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() => fakeSandbox());
+
+  const createRes = await worker.fetch(sessionRequest({ framework: "vue", files: FILES }), env, ctx);
+  const { sessionId } = await createRes.json();
+
+  const status = () =>
+    worker.fetch(new Request(`https://demos.handsontable.com/api/session/${sessionId}/status`), env, ctx);
+  // The tick runs under ctx.waitUntil; let its KV writes land before the clock moves on.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  // 400 s quiet: the booked slice is capped at 300 s.
+  await withClockAhead(400_000, async () => { await status(); await settle(); });
+  // 1600 s more of quiet (2000 s in): another capped 300 s slice.
+  await withClockAhead(2_000_000, async () => {
+    await status();
+    await settle();
+    await worker.fetch(deleteRequest(sessionId), env, ctx);
+  });
+
+  const awake = awakeOf(endPoints(points)[0]);
+  assert.ok(awake >= 600 && awake <= 605, `expected 600 booked seconds (2 x 300 s), not the ~2000 s span; got ${awake}`);
+});
+
+test("a meter written before the running total existed falls back to its wall-clock ticks plus the final slice", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() => fakeSandbox());
+
+  const createRes = await worker.fetch(sessionRequest({ framework: "vue", files: FILES }), env, ctx);
+  const { sessionId } = await createRes.json();
+
+  const key = `session-meter:${sessionId}`;
+  const meter = await env.CACHE.get(key, "json");
+  assert.ok(meter, "expected the meter written at create");
+  const now = Date.now();
+  delete meter.bookedSeconds;
+  meter.startedAt = now - 1_000_000;
+  meter.meteredThrough = now - 700_000;
+  await env.CACHE.put(key, JSON.stringify(meter));
+
+  await worker.fetch(deleteRequest(sessionId), env, ctx);
+
+  // 300 s of legacy ticks (meteredThrough - startedAt) + the 300 s-capped final slice.
+  const awake = awakeOf(endPoints(points)[0]);
+  assert.ok(awake >= 600 && awake <= 605, `expected 600 (legacy 300 + final 300), got ${awake}`);
+});
