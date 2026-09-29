@@ -220,7 +220,14 @@ chars), never raw, never with its stack or URL. Unquoted prose a demo itself pas
 **Reading rule**: Analytics Engine samples at write and read time. Every count is
 `SUM(_sample_interval * double1)`, every percentile a weighted quantile, never `COUNT()`.
 Queries go through one helper that allowlists Analytics Engine's documented functions;
-the local ClickHouse shim accepts more.
+the local ClickHouse shim accepts more. Dashboard queries follow the same rule: no
+`SELECT DISTINCT`, subqueries, joins, boolean arithmetic (`sumIf` instead), a string
+literal compared with `timestamp` (wrap it in `toDateTime()`), and a literal
+`FROM runner_events` rather than the plugin's `$table`, which expands to
+`default.runner_events`. A multi-value variable in a predicate is written
+`('__all__' IN (${v:sqlstring}) OR col IN (${v:sqlstring}))` with `allValue` set to
+`'__all__'`, so an empty option list never reaches Analytics Engine as `IN ()`.
+`pipeline/o11y-dashboards.test.mjs` enforces this on the query text the plugin sends.
 
 ## 5. Metric registry
 

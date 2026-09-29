@@ -427,13 +427,8 @@ export function pivotExampleDaily(day: string, rows: readonly ExampleEventRow[])
   return [...byKey.values()];
 }
 
-/** `INTERVAL '$interval' SECOND`-style quoting: AE's SQL API documents
- *  quoted interval literals; a bare `SELECT ... WHERE timestamp >=
- *  '...'`/`< '...'` string-literal comparison against the `timestamp`
- *  column (no conversion function call at all) is the most conservative
- *  form both backends are documented to accept, so that is what this query
- *  uses rather than a `toDateTime64`/`parseDateTime` call this could not
- *  verify against a real Analytics Engine account.
+/** The window bounds are wrapped in `toDateTime(...)` because Analytics Engine
+ *  rejects a bare string compared with `timestamp` (DateTime vs String).
  */
 function exampleEventsSql(dayStart: string, dayEnd: string): string {
   const metricList = EXAMPLE_METRICS.map((m) => `'${m}'`).join(", ");
@@ -441,7 +436,7 @@ function exampleEventsSql(dayStart: string, dayEnd: string): string {
     `SELECT index1 AS metric, blob17 AS kind, blob18 AS ref, blob19 AS area, ` +
     `blob6 AS framework, blob7 AS ht_major, sum(_sample_interval * double1) AS total ` +
     `FROM runner_events ` +
-    `WHERE index1 IN (${metricList}) AND timestamp >= '${dayStart}' AND timestamp < '${dayEnd}' ` +
+    `WHERE index1 IN (${metricList}) AND timestamp >= toDateTime('${dayStart}') AND timestamp < toDateTime('${dayEnd}') ` +
     `GROUP BY index1, blob17, blob18, blob19, blob6, blob7`
   );
 }

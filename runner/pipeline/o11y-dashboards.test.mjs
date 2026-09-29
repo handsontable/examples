@@ -10,14 +10,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LOKI_LABELS, HT_MAJORS, METRICS, AE_COLUMNS } from "../packages/runtime/dist/telemetry/index.js";
+import { LOKI_LABELS, HT_MAJORS, ENVIRONMENTS, METRICS, AE_COLUMNS } from "../packages/runtime/dist/telemetry/index.js";
 // One allowlist of Cloudflare's documented Analytics Engine SQL functions,
 // shared with `workers/o11y/src/alerts/ae-query.ts` (the alert rules' own
 // query helper) instead of two diverging copies — see that file's header
 // for the doc pages/date this set was read from. A pure, import-free
 // module, so no `o11y-worker-hooks.mjs` registration is needed to load it
 // here.
-const { ALLOWED_AE_FUNCTIONS } = await import("../workers/o11y/src/alerts/ae-query.ts");
+const { ALLOWED_AE_FUNCTIONS, findUnsupportedAeConstructs } = await import("../workers/o11y/src/alerts/ae-query.ts");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARDS_DIR = path.join(__dirname, "..", "containers", "o11y", "grafana", "dashboards");
@@ -79,7 +79,6 @@ const AE_KEYWORDS = new Set([
   "NULL",
   "TRUE",
   "FALSE",
-  "DISTINCT",
 ]);
 
 /** Strips string literals (ClickHouse `'...'`) and Grafana/vertamedia macros
@@ -125,6 +124,12 @@ function validateAeQuery(query) {
     if (KNOWN_AE_COLUMNS.has(name)) continue;
     if (declaredAliases.has(name)) continue;
     violations.push(`unknown column or identifier: "${name}"`);
+  }
+
+  // Comparison inside arithmetic (`x * (blob8 = 'ready')`) is ClickHouse's
+  // UInt8 trick; AE documents only sumIf/countIf/avgIf for a conditional sum.
+  if (/[*+\-/]\s*\(\s*\w+\s*(?:=|!=|<>|<=|>=|<|>)\s*'STR'\s*\)/.test(stripped)) {
+    violations.push("boolean arithmetic inside an aggregate (use sumIf)");
   }
 
   // §4's reading rule: double1 (the count slot) may only appear inside
@@ -364,6 +369,130 @@ function resolveDatasourceUid(dashboard, uid, knownUids, pluginQuery) {
   return null;
 }
 
+// ---- what the vertamedia plugin + Grafana actually send to AE ---------------
+//
+// A local ClickHouse accepts SQL that Analytics Engine answers with a 422, so
+// this mirrors the plugin's macro expansion (eval_query.go, v3.5.0) closely
+// enough to lint the text AE really receives, not just the JSON template.
+
+const SAMPLE_FROM = 1790663608;
+const SAMPLE_TO = 1790685208;
+const SAMPLE_INTERVAL_S = 20;
+
+/** The value a custom `allValue` must have: Grafana does not quote or format it. */
+const ALL_SENTINEL = "'__all__'";
+
+function findVariable(dashboard, name) {
+  return (dashboard.templating?.list ?? []).find((x) => x.name === name);
+}
+
+/** What `'$name'` expands to: the first option of a custom variable, or a
+ *  stand-in for a query variable (filled from AE at runtime). */
+function singleVariableValue(dashboard, name) {
+  const v = findVariable(dashboard, name);
+  if (!v) return { error: `no template variable "${name}" is declared` };
+  if (v.type === "custom") return { value: (v.options ?? []).map((o) => o.value).find((x) => x !== "$__all") ?? "" };
+  if (v.type === "query") return { value: "sample" };
+  return { error: `variable "${name}" has unsupported type "${v.type}"` };
+}
+
+/** Every text a `${name:sqlstring}` reference can expand to, one per state the
+ *  variable can be in when a panel runs: All, one value, several values, and a
+ *  cleared selection, each for a populated option list and (query variables) a
+ *  query that returned zero rows. Grafana quotes chosen values but not a
+ *  custom `allValue`. A cleared multi-select is assumed to fall back to All
+ *  when `includeAll` is on, and to expand to nothing otherwise. */
+function variableExpansions(dashboard, name) {
+  const v = findVariable(dashboard, name);
+  if (!v) return { error: `no template variable "${name}" is declared` };
+  if (v.type !== "custom" && v.type !== "query") return { error: `variable "${name}" has unsupported type "${v.type}"` };
+  const quote = (xs) => xs.map((x) => `'${x}'`).join(",");
+  const optionSets =
+    v.type === "custom"
+      ? [["options", (v.options ?? []).map((o) => o.value).filter((x) => x !== "$__all")]]
+      : [["query rows", ["a", "b"]], ["zero query rows", []]];
+  const states = [];
+  for (const [label, options] of optionSets) {
+    const all = v.allValue ?? quote(options);
+    if (v.includeAll) states.push([`${label} / All`, all]);
+    if (options.length > 0) states.push([`${label} / one value`, quote(options.slice(0, 1))]);
+    if (options.length > 1 && v.multi) states.push([`${label} / several values`, quote(options.slice(0, 2))]);
+    states.push([`${label} / cleared selection`, v.includeAll ? all : ""]);
+  }
+  return { states };
+}
+
+/** Expands the macros of `query` with `choice` (variable name -> the text its
+ *  `${name:sqlstring}` becomes) and reports every problem in the result. */
+function expandForAe(dashboard, query, choice = {}) {
+  const problems = [];
+  let sql = query;
+  sql = sql.replace(/\$timeFilterByColumn\((\w+)\)/g, (_m, col) => `${col} >= toDateTime(${SAMPLE_FROM}) AND ${col} <= toDateTime(${SAMPLE_TO})`);
+  sql = sql.replace(/\$interval\b/g, String(SAMPLE_INTERVAL_S));
+  sql = sql.replace(/\$\{(\w+):sqlstring\}/g, (_m, name) => choice[name] ?? "?");
+  sql = sql.replace(/'\$(\w+)'/g, (_m, name) => {
+    const { value, error } = singleVariableValue(dashboard, name);
+    if (error) {
+      problems.push(error);
+      return "'?'";
+    }
+    return `'${value}'`;
+  });
+  if (/\bIN\s*\(\s*\)/i.test(sql)) problems.push("empty IN () list");
+  if (/(?<![!<>])=\s*''/.test(sql)) problems.push("comparison against an empty string");
+  if (/\$/.test(sql)) problems.push(`unexpanded macro left in the query: ${sql.match(/\$[\w{(]*/)[0]}`);
+  return { sql, problems };
+}
+
+/** A `${name:sqlstring}` reference is only allowed inside
+ *  `('__all__' IN (${name:sqlstring}) OR col IN (${name:sqlstring}))`, with the
+ *  variable's `allValue` set to the sentinel: All then means "no filter" and an
+ *  empty option list can never reach AE as `IN ()`. */
+const GUARDED_PREDICATE = /\('__all__' IN \(\$\{(\w+):sqlstring\}\) OR \w+ IN \(\$\{\1:sqlstring\}\)\)/g;
+
+function variableGuardProblems(dashboard, query) {
+  const problems = [];
+  const names = [...new Set([...query.matchAll(/\$\{(\w+):sqlstring\}/g)].map((m) => m[1]))];
+  if (query.replace(GUARDED_PREDICATE, "").match(/\$\{\w+:sqlstring\}/)) {
+    problems.push("a ${var:sqlstring} predicate is not wrapped as ('__all__' IN (${var:sqlstring}) OR col IN (${var:sqlstring}))");
+  }
+  for (const name of names) {
+    const v = findVariable(dashboard, name);
+    if (v && v.allValue !== ALL_SENTINEL) problems.push(`variable "${name}" must set allValue to ${ALL_SENTINEL}`);
+  }
+  return { problems, names };
+}
+
+/** Every Analytics-Engine-surface violation of one query: the template text
+ *  itself, then the SQL that results from every combination of states the
+ *  referenced variables can be in. */
+function validateAeSurface(dashboard, query) {
+  const { problems: guardProblems, names } = variableGuardProblems(dashboard, query);
+  const violations = [...guardProblems];
+  let combos = [{ label: "", choice: {} }];
+  for (const name of names) {
+    const { states, error } = variableExpansions(dashboard, name);
+    if (error) {
+      violations.push(error);
+      continue;
+    }
+    combos = combos.flatMap((c) =>
+      states.map(([label, text]) => ({ label: `${c.label}${c.label ? ", " : ""}${name}: ${label}`, choice: { ...c.choice, [name]: text } })),
+    );
+  }
+  for (const { label, choice } of combos) {
+    const { problems } = expandForAe(dashboard, query, choice);
+    for (const p of problems) violations.push(label ? `${p} [${label}]` : p);
+  }
+  const { sql } = expandForAe(dashboard, query, Object.fromEntries(names.map((n) => [n, "'x'"])));
+  return [
+    ...new Set(violations),
+    ...new Set([...findUnsupportedAeConstructs(query), ...findUnsupportedAeConstructs(sql)]),
+    ...(/\bFORMAT\b/i.test(query) ? ["query names FORMAT (the plugin appends FORMAT JSON itself)"] : []),
+    ...(/FROM\s+runner_events\b/.test(sql) ? [] : ["must read FROM the bare dataset name runner_events"]),
+  ];
+}
+
 // =============================================================================
 // The dashboards this repo actually ships
 // =============================================================================
@@ -425,6 +554,31 @@ for (const { file, dashboard } of dashboards) {
       const violations = validateMetricBlobFilters(query);
       assert.deepEqual(violations, [], `${file} / panel "${panel}": ${violations.join("; ")}\nquery: ${query}`);
     }
+  });
+
+  test(`${file}: every Analytics Engine query is safe as AE receives it (no DISTINCT/$table/empty IN (), macros expanded)`, () => {
+    for (const { panel, query } of aeTargetsOf(dashboard)) {
+      const violations = validateAeSurface(dashboard, query);
+      assert.deepEqual(violations, [], `${file} / panel "${panel}": ${violations.join("; ")}\nquery: ${query}`);
+    }
+  });
+
+  // add_metadata makes the plugin prepend a comment to the query; whether AE
+  // accepts that is unverified, so the dashboards keep it off.
+  test(`${file}: no ClickHouse target enables the plugin's metadata comment`, () => {
+    for (const { panel, target } of allTargets(dashboard)) {
+      assert.notEqual(target.add_metadata, true, `${file} / panel "${panel}" sets add_metadata`);
+    }
+  });
+
+  test(`${file}: the environment variable is pinned to the contract's ENVIRONMENTS`, () => {
+    const envVar = dashboard.templating.list.find((v) => v.name === "environment");
+    assert.ok(envVar, `${file} has no "environment" template variable`);
+    assert.equal(envVar.type, "custom", "a query variable would go through AE and can come back empty");
+    assert.deepEqual(envVar.options.map((o) => o.value), [...ENVIRONMENTS]);
+    // Grafana rebuilds a custom variable's options from `query`, not from `options`.
+    assert.equal(envVar.query, ENVIRONMENTS.join(","));
+    assert.equal(envVar.current.value, "production");
   });
 
   test(`${file}: every Loki query uses only contract labels and a named tenant datasource`, () => {
@@ -696,6 +850,116 @@ test("logs.json: the tenant-templated datasource resolves via resolveDatasourceU
     const violation = resolveDatasourceUid(dashboard, datasource.uid, KNOWN_DATASOURCE_UIDS);
     assert.equal(violation, null, `panel "${panel}": ${violation}`);
   }
+});
+
+// ---- the AE-surface lint fails on the shapes that broke production --------------
+
+test("the AE-surface lint fails on the captured production query (default.runner_events, empty IN (), blob3 = '')", () => {
+  const dashboard = { templating: { list: [{ name: "framework", type: "query" }] } };
+  const captured =
+    "SELECT toStartOfInterval(timestamp, INTERVAL '20' SECOND) AS t, blob5 AS tier FROM default.runner_events " +
+    "WHERE timestamp >= toDateTime(1790663608) AND blob3 = '' AND blob6 IN () GROUP BY t, tier ORDER BY t";
+  const violations = validateAeSurface(dashboard, captured);
+  assert.ok(violations.some((v) => v.includes("schema-qualified")), JSON.stringify(violations));
+  assert.ok(violations.some((v) => v.includes("empty IN ()")), JSON.stringify(violations));
+  assert.ok(violations.some((v) => v.includes("empty string")), JSON.stringify(violations));
+});
+
+test("the AE-surface lint fails on SELECT DISTINCT and $table", () => {
+  const dashboard = { templating: { list: [] } };
+  const distinct = validateAeSurface(dashboard, "SELECT DISTINCT blob3 AS environment FROM runner_events");
+  assert.ok(distinct.some((v) => v.includes("SELECT DISTINCT")), JSON.stringify(distinct));
+  const table = validateAeSurface(dashboard, "SELECT sum(_sample_interval * double1) AS c FROM $table WHERE $timeFilterByColumn(timestamp)");
+  assert.ok(table.some((v) => v.includes("$table")), JSON.stringify(table));
+});
+
+// A `framework` variable whose query returns zero rows (production today: no
+// event carries a framework yet) must not leave `IN ()` in the SQL AE receives.
+const FRAMEWORK_QUERY_VARIABLE = { name: "framework", type: "query", multi: true, includeAll: true };
+const FRAMEWORK_QUERY = "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE $timeFilterByColumn(timestamp) AND ";
+const BARE_FRAMEWORK_PREDICATE = "blob6 IN (${framework:sqlstring})";
+const GUARDED_FRAMEWORK_PREDICATE = "('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring}))";
+
+test("the AE-surface lint fails a bare ${var:sqlstring} predicate on a variable that can be empty", () => {
+  const dashboard = { templating: { list: [FRAMEWORK_QUERY_VARIABLE] } };
+  const violations = validateAeSurface(dashboard, FRAMEWORK_QUERY + BARE_FRAMEWORK_PREDICATE);
+  assert.ok(violations.some((v) => v.includes("not wrapped")), JSON.stringify(violations));
+  assert.ok(violations.some((v) => v.includes("empty IN () list") && v.includes("zero query rows / All")), JSON.stringify(violations));
+});
+
+test("the AE-surface lint fails the guarded predicate when the variable lacks allValue, and passes it with allValue for a zero-row variable", () => {
+  const withoutAllValue = validateAeSurface({ templating: { list: [FRAMEWORK_QUERY_VARIABLE] } }, FRAMEWORK_QUERY + GUARDED_FRAMEWORK_PREDICATE);
+  assert.ok(withoutAllValue.some((v) => v.includes("must set allValue")), JSON.stringify(withoutAllValue));
+  assert.ok(withoutAllValue.some((v) => v.includes("empty IN () list")), JSON.stringify(withoutAllValue));
+
+  const withAllValue = { templating: { list: [{ ...FRAMEWORK_QUERY_VARIABLE, allValue: "'__all__'" }] } };
+  assert.deepEqual(validateAeSurface(withAllValue, FRAMEWORK_QUERY + GUARDED_FRAMEWORK_PREDICATE), []);
+});
+
+test("the AE-surface lint models All, one value, several values and a cleared selection, and fails an empty list in any of them", () => {
+  const guarded = { ...FRAMEWORK_QUERY_VARIABLE, allValue: "'__all__'" };
+  const { states } = variableExpansions({ templating: { list: [guarded] } }, "framework");
+  assert.deepEqual(Object.fromEntries(states), {
+    "query rows / All": "'__all__'",
+    "query rows / one value": "'a'",
+    "query rows / several values": "'a','b'",
+    "query rows / cleared selection": "'__all__'",
+    "zero query rows / All": "'__all__'",
+    "zero query rows / cleared selection": "'__all__'",
+  });
+  // Without includeAll a cleared selection has nothing to fall back to.
+  const noAll = variableExpansions({ templating: { list: [{ ...guarded, includeAll: false }] } }, "framework").states;
+  assert.equal(Object.fromEntries(noAll)["query rows / cleared selection"], "");
+  const violations = validateAeSurface({ templating: { list: [{ ...guarded, includeAll: false }] } }, FRAMEWORK_QUERY + GUARDED_FRAMEWORK_PREDICATE);
+  assert.ok(violations.some((v) => v.includes("empty IN () list") && v.includes("cleared selection")), JSON.stringify(violations));
+});
+
+test("every shipped multi-value variable that reaches an AE predicate sets allValue to the sentinel", () => {
+  for (const { file, dashboard } of dashboards) {
+    const used = new Set();
+    for (const { query } of aeTargetsOf(dashboard)) for (const m of query.matchAll(/\$\{(\w+):sqlstring\}/g)) used.add(m[1]);
+    for (const name of used) {
+      const v = dashboard.templating.list.find((x) => x.name === name);
+      assert.equal(v?.allValue, ALL_SENTINEL, `${file}: variable "${name}" must set allValue`);
+    }
+  }
+});
+
+test("the AE-surface lint fails on a reference to an undeclared variable, and passes the fixed shape", () => {
+  const dashboard = {
+    templating: {
+      list: [{ name: "ht_major", type: "custom", multi: true, includeAll: true, allValue: "'__all__'", options: [{ value: "$__all" }, { value: "18" }] }],
+    },
+  };
+  const undeclared = validateAeSurface(dashboard, "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE blob3 = '$environment'");
+  assert.ok(undeclared.some((v) => v.includes('"environment"')), JSON.stringify(undeclared));
+  assert.deepEqual(
+    validateAeSurface(
+      dashboard,
+      "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, 100 * sumIf(_sample_interval * double1, blob8 = 'ready') / sum(_sample_interval * double1) AS pct " +
+        "FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY t ORDER BY t",
+    ),
+    [],
+  );
+});
+
+test("the epoch-millisecond time column fallback passes the AE guard (allowlisted functions only)", () => {
+  const dashboard = { templating: { list: [] } };
+  assert.deepEqual(
+    validateAeSurface(
+      dashboard,
+      "SELECT toUInt32(toStartOfInterval(timestamp, INTERVAL '$interval' SECOND)) * 1000 AS t, blob9 AS route, sum(_sample_interval * double1) AS n " +
+        "FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'x' GROUP BY t, route ORDER BY t",
+    ),
+    [],
+  );
+});
+
+test("the AE lint fails on boolean arithmetic inside sum() (undocumented; use sumIf)", () => {
+  const violations = validateAeQuery(
+    "SELECT sum(_sample_interval * double1 * (blob8 = 'ready')) AS c FROM runner_events WHERE $timeFilterByColumn(timestamp)",
+  );
+  assert.ok(violations.some((v) => v.includes("boolean")), JSON.stringify(violations));
 });
 
 // =============================================================================

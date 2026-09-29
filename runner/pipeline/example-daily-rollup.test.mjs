@@ -243,6 +243,32 @@ test("queryExampleEventTotals: production, a 200 response with no data array THR
   }
 });
 
+test("queryExampleEventTotals: production sends a half-open UTC-day window with toDateTime() bounds, which the AE guard accepts", async () => {
+  // Analytics Engine answers a bare string compared with `timestamp` with
+  // "cannot combine the DateTime and String types", so the bounds must be wrapped.
+  const { findUnsupportedAeConstructs, findDisallowedAeFunctions } = await import("../workers/o11y/src/alerts/ae-query.ts");
+  const { start, end } = previousUtcDay(new Date("2026-09-29T02:00:00Z"));
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    sent.push(String(init.body));
+    return new Response(JSON.stringify({ data: [] }), { status: 200 });
+  };
+  try {
+    const env = { PREVIEW_HOST: "demos.handsontable.com", AE_SQL_TOKEN: "tok", CF_ACCOUNT_ID: "acct" };
+    await queryExampleEventTotals(env, start, end);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(sent.length, 1);
+  assert.match(
+    sent[0],
+    /timestamp >= toDateTime\('2026-09-28 00:00:00'\) AND timestamp < toDateTime\('2026-09-29 00:00:00'\)/,
+  );
+  assert.deepEqual(findUnsupportedAeConstructs(sent[0]), []);
+  assert.deepEqual(findDisallowedAeFunctions(sent[0]), []);
+});
+
 test("rollupExampleDaily: a misconfigured production read is refused loudly and never deletes the day's rows", async () => {
   const db = freshDb();
   // `rollupExampleDaily` computes its own `previousUtcDay()` internally, from

@@ -234,6 +234,14 @@ Expect delays and gaps, not a bug, when running multi-browser local traffic.
 Production keys on each visitor's own `cf-connecting-ip`, so this is
 local-only (see "Ingest rate limit" below for the per-IP budget).
 
+**Local Grafana opens on empty panels until you pick `local`.** Every
+dashboard's Environment variable defaults to `production`, but the local
+stack writes its events with `environment = local`, so every Analytics
+Engine panel is empty until you switch the Environment dropdown to `local`.
+Defaulting to `local` without touching production would need a local-only
+provisioning override (a second dashboards provider path that patches
+`templating.list[environment].current`); this repo does not have one.
+
 **Local Slack alerts.** `dev:full` starts
 `node scripts/o11y-slack-capture.mjs --port <O11Y_SLACK_CAPTURE_PORT>` — a
 tiny local HTTP server (no real Slack workspace involved) that prints and
