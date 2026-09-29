@@ -1443,11 +1443,9 @@ function Authoring({
 
   const dirtyRef = useRef(dirty);
   const sourceLoadedRef = useRef(sourceLoaded);
-  /** True once this page's first workspace has settled (loaded or refused).
-   *  ADR-0042's "page's first load" reason logic reads this, never
-   *  `sourceLoadedRef` — `selectExample` resets that ref on every pick so the
-   *  starter effect re-fetches, and a picker pick must not read back as the
-   *  page's first load because of it. Set once below and never cleared. */
+  /** ADR-0042's "page's first load" flag: `selectExample` clears
+   *  `sourceLoadedRef` to force a refetch, so this needs its own ref that
+   *  never clears. */
   const firstLoadSettledRef = useRef(false);
   const activeDocsBucketRef = useRef<string | null>(activeDocsBucket);
   const activeDocsManifestRef = useRef<DocsManifest | null>(activeDocsManifest);
