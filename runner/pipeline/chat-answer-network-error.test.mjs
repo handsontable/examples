@@ -1,10 +1,9 @@
 // A network-level throw from the LiteLLM fetch in `/api/chat` must not
 // vanish: `requestAnswer` (chat.ts) can reject with a real `TypeError` (DNS,
-// refused, reset — never a `ChatUnavailableError`), and the route's
-// `if (err instanceof ChatUnavailableError)` guard used to only emit the
-// `chat.answer` point inside that branch, so a raw fetch throw fell straight
-// to `throw err` with no point at all — contract §5 promises one on every
-// outcome, `error` included, matching `theme.ai`'s twin catch.
+// refused, reset — never a `ChatUnavailableError`), and the route's catch
+// must emit the `chat.answer` point for that throw too, not only inside its
+// `if (err instanceof ChatUnavailableError)` branch — contract §5 promises a
+// point on every outcome, `error` included, matching `theme.ai`'s twin catch.
 //
 // Driven through the real router (`workers/api/src/index.ts`'s default
 // export) — a re-declared copy of the catch would not catch this regressing.
