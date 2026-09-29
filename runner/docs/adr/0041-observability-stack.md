@@ -530,7 +530,7 @@ state would not survive a sleep.
 |---|---|---|
 | Uncaught error, new issue, regression | Sentry | seconds |
 | Spend thresholds (200/500/800) | `reconcile.ts` `captureMessage` to Sentry, as today | nightly |
-| `at_capacity` rate, 5xx rate from `api.request`, preview-ready rate per tier, session start p95, embed error rate per demo id, compile-error rate per `ht_major` day over day, snapshot-build failed rate per framework, inbox backlog age, a `rejected` inbox key, the o11y spend cap | o11y worker `*/10` cron over Analytics Engine and `InboxWriter` → Slack | minutes |
+| `at_capacity` rate, 5xx rate from `api.request`, preview-ready rate per tier, session start p95, embed error rate per demo id, compile-error rate per `ht_major` day over day, snapshot-build failed rate per framework, LiteLLM error rate (`chat.answer` + `theme.ai`), inbox backlog age, a `rejected` inbox key, the o11y spend cap | o11y worker `*/10` cron over Analytics Engine and `InboxWriter` → Slack | minutes |
 | New handled-error fingerprint | the exact first-seen registry in `InboxWriter` (not sampled data), excluding `surface = demo-runtime`, whose keystroke ladders are authored-code output | minutes |
 | The o11y stack itself stale (no cron tick or ingest for 30 min) | the API worker's `*/5` cron reads the o11y heartbeat over a service binding and sends `captureMessage` to Sentry | minutes |
 
