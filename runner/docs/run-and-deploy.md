@@ -826,14 +826,10 @@ npx wrangler secret put LOKI_S3_SECRET_ACCESS_KEY
 
 ### 4. Export destination (`o11y-logs`) + `O11Y_EXPORT_SECRET`
 
-**Do this after the first deploy of both Workers, not before** — creating the
-destination runs a pre-flight `POST` to
-`https://demos.handsontable.com/telemetry/v1/logs`, which answers 405 until the
-o11y worker's `/telemetry/*` routes are actually deployed. `workers/api/wrangler.jsonc`
-ships with `observability.logs.destinations: []` for exactly this reason; a
-follow-up deploy adds `"o11y-logs"` back once the destination exists (see "First
-deploy, in order" below). Create it once, in the dashboard: **Workers & Pages →
-Observability → Telemetry → Add destination**.
+The API worker's own `wrangler.jsonc` already names the destination
+(`observability.logs.destinations: ["o11y-logs"]`) — it does not exist until
+created once, in the dashboard: **Workers & Pages → Observability →
+Telemetry → Add destination**.
 
 - Destination Name: `o11y-logs`
 - Destination Type: **Logs**
@@ -1060,22 +1056,6 @@ push) — so from the first merge onward this is handled without a manual step.
 The same order applies to a throwaway sandbox probe of either worker: stand
 up the probe o11y worker (or a stub) before the probe API worker if the
 probe exercises the mutual binding at all.
-
-**The `o11y-logs` export destination follows one deploy later, for the same
-reason.** Creating it also runs a pre-flight `POST` to `/telemetry/v1/logs`,
-which 405s until the o11y worker's routes are live, so it cannot exist before
-either Worker's first deploy:
-
-1. This merge ships the API worker with `observability.logs.destinations: []`
-   — no destination named yet.
-2. Once `master.yml` has deployed both Workers, an operator creates
-   `o11y-logs` in the dashboard ("One-time setup" step 4 above).
-3. A follow-up, one-line PR adds `"destinations": ["o11y-logs"]` back to
-   `workers/api/wrangler.jsonc`; its deploy turns the export on.
-
-Until step 3 lands, the API worker's structured log lines still reach Workers
-Logs (`persist: true`), just not Loki — the worker-tenant Grafana panels
-(§F.2) stay empty until then.
 
 ## Launch plan (ADR-0041 §L)
 
