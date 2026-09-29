@@ -1443,6 +1443,12 @@ function Authoring({
 
   const dirtyRef = useRef(dirty);
   const sourceLoadedRef = useRef(sourceLoaded);
+  /** True once this page's first workspace has settled (loaded or refused).
+   *  ADR-0042's "page's first load" reason logic reads this, never
+   *  `sourceLoadedRef` — `selectExample` resets that ref on every pick so the
+   *  starter effect re-fetches, and a picker pick must not read back as the
+   *  page's first load because of it. Set once below and never cleared. */
+  const firstLoadSettledRef = useRef(false);
   const activeDocsBucketRef = useRef<string | null>(activeDocsBucket);
   const activeDocsManifestRef = useRef<DocsManifest | null>(activeDocsManifest);
   const docsRequestSeqRef = useRef(0);
@@ -1457,6 +1463,7 @@ function Authoring({
   docsPathRef.current = docsPath;
   dirtyRef.current = dirty;
   sourceLoadedRef.current = sourceLoaded;
+  if (sourceLoaded) firstLoadSettledRef.current = true;
   activeDocsBucketRef.current = activeDocsBucket;
   activeDocsManifestRef.current = activeDocsManifest;
   savedIdRef.current = savedId;
@@ -2058,7 +2065,7 @@ function Authoring({
     if (route.mode === "share" || !versionsResolved) return;
     const requestSeq = ++docsRequestSeqRef.current;
     const openPath = docsPathRef.current;
-    const initialLoad = !!initialDocs && !sourceLoadedRef.current;
+    const initialLoad = !!initialDocs && !firstLoadSettledRef.current;
     const plan = planDocsBucket({ selectedVersion: version, nextVersion, bucketKeys: docsBuckets });
 
     setDocsItems([]);
@@ -2318,7 +2325,7 @@ function Authoring({
 
     // ADR-0042 `entry`: a deep link only when `?example=` was in the URL
     // (see `hadUrlExample`); later runs are a picker pick or version switch.
-    const starterIsInitialLoad = !sourceLoadedRef.current;
+    const starterIsInitialLoad = !firstLoadSettledRef.current;
     const starterOpenReason: ExampleOpenReason = starterIsInitialLoad
       ? "deep-link"
       : entry.framework === framework
