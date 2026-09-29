@@ -126,3 +126,182 @@ test("a session id that was never created still tears down (no meter) with an em
   assert.equal(ends[0].blobs[8], "pagehide");
   assert.equal(ends[0].blobs[5], "", "no meter ever existed, so this degrades to today's framework-less point");
 });
+
+// ---- `session.end` value: booked awake seconds (contract §5, double3) ----------
+
+/** Runs `fn` with `Date.now()` shifted forward by `ms`, restoring it after. */
+async function withClockAhead(ms, fn) {
+  const real = Date.now;
+  Date.now = () => real() + ms;
+  try {
+    return await fn();
+  } finally {
+    Date.now = real;
+  }
+}
+
+/** double3 is the `value` slot of `session.end` (`metrics.ts`: doubles [count, value]). */
+const awakeOf = (point) => point.doubles[2];
+
+test("a clean teardown reports the seconds the session was awake as session.end's value", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() => fakeSandbox());
+
+  const createRes = await worker.fetch(sessionRequest({ framework: "angular", files: FILES }), env, ctx);
+  const { sessionId } = await createRes.json();
+
+  await withClockAhead(90_000, () => worker.fetch(deleteRequest(sessionId), env, ctx));
+
+  const ends = endPoints(points);
+  assert.equal(ends.length, 1);
+  const awake = awakeOf(ends[0]);
+  assert.ok(awake >= 90 && awake <= 95, `expected ~90 awake seconds in double3, got ${awake}`);
+});
+
+test("an abandoned session is credited at most one awake window, not the hours until a late teardown", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() => fakeSandbox());
+
+  const createRes = await worker.fetch(sessionRequest({ framework: "vue", files: FILES }), env, ctx);
+  const { sessionId } = await createRes.json();
+
+  await withClockAhead(3 * 3600_000, () => worker.fetch(deleteRequest(sessionId), env, ctx));
+
+  assert.equal(awakeOf(endPoints(points)[0]), 300, "capped at AWAKE_WINDOW_SECONDS");
+});
+
+test("awake seconds already booked by keepalive pings are not lost from the final figure", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() => fakeSandbox());
+
+  const createRes = await worker.fetch(sessionRequest({ framework: "vue", files: FILES }), env, ctx);
+  const { sessionId } = await createRes.json();
+
+  await withClockAhead(200_000, async () => {
+    await worker.fetch(new Request(`https://demos.handsontable.com/api/session/${sessionId}/status`), env, ctx);
+    // The tick runs under ctx.waitUntil; let its KV writes land before the clock moves on.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  });
+  await withClockAhead(250_000, () => worker.fetch(deleteRequest(sessionId), env, ctx));
+
+  const awake = awakeOf(endPoints(points)[0]);
+  assert.ok(awake >= 250 && awake <= 255, `expected ~250 awake seconds (200 ticked + 50 final), got ${awake}`);
+});
+
+test("a declined destroy() still reports the awake seconds on teardown_failed", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() =>
+    fakeSandbox({ destroyError: new Error("The container service is unreachable, try again later") }),
+  );
+
+  const createRes = await worker.fetch(sessionRequest({ framework: "vue", files: FILES }), env, ctx);
+  const { sessionId } = await createRes.json();
+
+  await withClockAhead(60_000, () => worker.fetch(deleteRequest(sessionId), env, ctx));
+
+  const ends = endPoints(points);
+  assert.equal(ends[0].blobs[8], "teardown_failed");
+  const awake = awakeOf(ends[0]);
+  assert.ok(awake >= 60 && awake <= 65, `expected ~60 awake seconds, got ${awake}`);
+});
+
+test("a session with no meter reports no awake seconds instead of a fabricated 0", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() => fakeSandbox());
+
+  await worker.fetch(deleteRequest("react-js-invented-id"), env, ctx);
+
+  const ends = endPoints(points);
+  assert.equal(ends.length, 1);
+  assert.ok(!(awakeOf(ends[0]) > 0), "no meter means no value");
+});
+
+test("budget_closed reports the awake seconds of the session it closes", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() => fakeSandbox());
+
+  const createRes = await worker.fetch(sessionRequest({ framework: "angular", files: FILES }), env, ctx);
+  const { sessionId } = await createRes.json();
+
+  // The ceiling state the subroute guard reads from KV.
+  await env.CACHE.put(
+    "budget:state",
+    JSON.stringify({
+      tier: "closed",
+      spendUsd: 100,
+      limitUsd: 50,
+      pct: 2,
+      reconciled: true,
+      enforced: true,
+      settings: {},
+      asOf: Date.now(),
+    }),
+  );
+
+  const res = await withClockAhead(120_000, () =>
+    worker.fetch(
+      new Request(`https://demos.handsontable.com/api/session/${sessionId}/file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: "a.txt", contents: "x" }),
+      }),
+      env,
+      ctx,
+    ),
+  );
+  assert.equal(res.status, 410);
+
+  const ends = endPoints(points);
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].blobs[8], "budget_closed");
+  const awake = awakeOf(ends[0]);
+  assert.ok(awake >= 120 && awake <= 125, `expected ~120 awake seconds, got ${awake}`);
+});
+
+test("a hidden-then-resumed tab reports the slices the ledger booked, not the wall-clock span", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() => fakeSandbox());
+
+  const createRes = await worker.fetch(sessionRequest({ framework: "vue", files: FILES }), env, ctx);
+  const { sessionId } = await createRes.json();
+
+  const status = () =>
+    worker.fetch(new Request(`https://demos.handsontable.com/api/session/${sessionId}/status`), env, ctx);
+  // The tick runs under ctx.waitUntil; let its KV writes land before the clock moves on.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  // 400 s quiet: the booked slice is capped at 300 s.
+  await withClockAhead(400_000, async () => { await status(); await settle(); });
+  // 1600 s more of quiet (2000 s in): another capped 300 s slice.
+  await withClockAhead(2_000_000, async () => {
+    await status();
+    await settle();
+    await worker.fetch(deleteRequest(sessionId), env, ctx);
+  });
+
+  const awake = awakeOf(endPoints(points)[0]);
+  assert.ok(awake >= 600 && awake <= 605, `expected 600 booked seconds (2 x 300 s), not the ~2000 s span; got ${awake}`);
+});
+
+test("a meter written before the running total existed falls back to its wall-clock ticks plus the final slice", async () => {
+  const { env, points } = countingEnv();
+  setSandboxFactory(() => fakeSandbox());
+
+  const createRes = await worker.fetch(sessionRequest({ framework: "vue", files: FILES }), env, ctx);
+  const { sessionId } = await createRes.json();
+
+  const key = `session-meter:${sessionId}`;
+  const meter = await env.CACHE.get(key, "json");
+  assert.ok(meter, "expected the meter written at create");
+  const now = Date.now();
+  delete meter.bookedSeconds;
+  meter.startedAt = now - 1_000_000;
+  meter.meteredThrough = now - 700_000;
+  await env.CACHE.put(key, JSON.stringify(meter));
+
+  await worker.fetch(deleteRequest(sessionId), env, ctx);
+
+  // 300 s of legacy ticks (meteredThrough - startedAt) + the 300 s-capped final slice.
+  const awake = awakeOf(endPoints(points)[0]);
+  assert.ok(awake >= 600 && awake <= 605, `expected 600 (legacy 300 + final 300), got ${awake}`);
+});

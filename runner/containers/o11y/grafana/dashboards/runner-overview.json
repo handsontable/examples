@@ -359,7 +359,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "Pool gauge vs cap",
-      "description": "pool.gauge — awake containers (double3) against the cap (double8), by reason (live/builder). Sampling-correct average, not sum.",
+      "description": "pool.gauge — awake containers (double3) against the cap (double8), by reason (only live is emitted; builder has no emitter). Sampling-correct average, not sum.",
       "gridPos": {
         "h": 8,
         "w": 12,

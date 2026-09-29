@@ -273,6 +273,10 @@ export interface SessionMeter {
    *  written before this field existed round-trips with it absent. Carried
    *  here because teardown call sites only ever have a `sessionId`. */
   framework?: string;
+  /** Cumulative awake seconds `recordContainerUsage` has booked for this session,
+   *  so `session.end` reports the ledger's figure and not the wall-clock span.
+   *  Optional: a meter written before this field existed lacks it. */
+  bookedSeconds?: number;
 }
 
 const meterKey = (sessionId: string) => `${KV_METER_PREFIX}${sessionId}`;
@@ -331,6 +335,14 @@ export async function startSessionMeter(
   }).catch(() => { /* metering is best effort; never fail a session on it */ });
 }
 
+/** What a meter read learned about its session. */
+export interface MeterReading {
+  /** `session.end`'s `framework` blob (contract §5); absent on a KV miss. */
+  framework?: string;
+  /** Awake seconds the ledger has booked for the session, first request to this read; absent when nothing was read. */
+  awakeSeconds?: number;
+}
+
 /**
  * Book the slice of awake time since the last flush.
  * `final` (teardown) always books and then drops the meter.
@@ -344,6 +356,19 @@ export async function meterSession(
   sessionId: string,
   opts: { final?: boolean } = {},
 ): Promise<string | undefined> {
+  return (await meterSessionReading(env, sessionId, opts)).framework;
+}
+
+/**
+ * `meterSession`, keeping what it read: `session.end` needs the framework and
+ * the session's total booked awake seconds, and the final flush deletes the
+ * only KV row that holds either.
+ */
+export async function meterSessionReading(
+  env: Env,
+  sessionId: string,
+  opts: { final?: boolean } = {},
+): Promise<MeterReading> {
   // Metering is telemetry, and telemetry must never be the reason a request
   // fails. The teardown path in particular: a throw here would skip the
   // `sandbox.destroy()` that follows it and leave a container billing until
@@ -352,28 +377,35 @@ export async function meterSession(
     return await meterSessionUnsafe(env, sessionId, opts);
   } catch (err) {
     console.warn("[budget] session metering failed:", err instanceof Error ? err.message : String(err));
-    return undefined;
+    return {};
   }
 }
+
+/** Meters written before `bookedSeconds` existed have no running total; the wall-clock span is the closest available figure for those only. */
+const wallClockBooked = (meter: SessionMeter): number => Math.max(0, (meter.meteredThrough - meter.startedAt) / 1000);
 
 async function meterSessionUnsafe(
   env: Env,
   sessionId: string,
   opts: { final?: boolean },
-): Promise<string | undefined> {
+): Promise<MeterReading> {
   const key = meterKey(sessionId);
   const meter = (await env.CACHE.get(key, "json").catch(() => null)) as SessionMeter | null;
-  if (!meter) return undefined;
+  if (!meter) return {};
 
   const now = Date.now();
   const elapsedSeconds = Math.max(0, (now - meter.meteredThrough) / 1000);
-  if (!opts.final && elapsedSeconds < METER_FLUSH_SECONDS) return meter.framework;
+  if (!opts.final && elapsedSeconds < METER_FLUSH_SECONDS) return { framework: meter.framework };
 
   const awakeSeconds = Math.min(elapsedSeconds, MAX_UNSEEN_AWAKE_SECONDS);
   if (opts.final) {
     await env.CACHE.delete(key).catch(() => { /* TTL cleans it up */ });
   } else {
-    const ticked: SessionMeter = { ...meter, meteredThrough: now };
+    const ticked: SessionMeter = {
+      ...meter,
+      meteredThrough: now,
+      bookedSeconds: (meter.bookedSeconds ?? wallClockBooked(meter)) + awakeSeconds,
+    };
     await env.CACHE.put(key, JSON.stringify(ticked), {
       expirationTtl: KV_METER_TTL_SECONDS,
       // Re-stamped on every tick, which is what makes the metadata a liveness
@@ -382,7 +414,10 @@ async function meterSessionUnsafe(
     }).catch(() => { /* next ping re-books the same slice; capped above */ });
   }
   await recordContainerUsage(env, { instanceType: meter.instanceType, awakeSeconds });
-  return meter.framework;
+  // Exactly what the ledger holds for this session, so an abandoned or hidden-tab
+  // session is not credited with the quiet gaps between its capped slices.
+  const bookedSeconds = (meter.bookedSeconds ?? wallClockBooked(meter)) + awakeSeconds;
+  return { framework: meter.framework, awakeSeconds: bookedSeconds };
 }
 
 // ---- Traffic accumulator -----------------------------------------------------
