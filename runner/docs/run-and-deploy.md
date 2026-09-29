@@ -1031,10 +1031,12 @@ http.host eq "demos.handsontable.com" and (starts_with(http.request.uri.path, "/
 
 Verify the same way as the `/api/*` exception — a body the Worker itself
 refuses, so `401`/`400` proves the request arrived and `403` proves the edge
-still ate it:
+still ate it. `/telemetry/collect` runs the browser gates first (`workers/o11y/src/gates/browser.ts`), which answer a Worker-issued `403` (`{"error":"host"}`) when the request carries neither an `Origin` nor a `Referer` naming `demos.handsontable.com`, and `403` (`{"error":"bot"}`) when the `User-Agent` matches the bot filter (curl's does), so the probe sends both headers and a bare `curl` would get a `403` from the Worker, not the WAF:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://demos.handsontable.com/telemetry/collect \
+  -H 'Origin: https://demos.handsontable.com' \
+  -H 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' \
   -H 'Content-Type: application/json' --data '{"malformed": "<script>should 400, not 403</script>"}'
 ```
 
