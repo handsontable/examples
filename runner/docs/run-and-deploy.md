@@ -534,8 +534,9 @@ npx wrangler secret put CF_ANALYTICS_TOKEN
 # this one is the production read side of the nightly `example_daily`
 # rollup (ADR-0042 §5, contract §2, `reconcile.ts#queryExampleEventTotals`),
 # not the billing GraphQL reconciliation CF_ANALYTICS_TOKEN feeds. Also set
-# on the o11y worker (step 6) for Grafana's own ClickHouse datasource — the
-# two workers need their own copies, they do not share a binding.
+# on the o11y worker (step 6), where its outbound handler uses it for
+# GrafanaBox's ClickHouse datasource — the two workers need their own copies,
+# they do not share a binding.
 npx wrangler secret put AE_SQL_TOKEN
 
 # Example chat (DEV-2047) — see docs/example-chat.md:
@@ -938,7 +939,8 @@ npx wrangler secret put O11Y_SESSION_SECRET          # step 5 above
 
 `AE_SQL_TOKEN` is the Analytics Engine SQL API token — same token shape as the
 API worker's own `CF_ANALYTICS_TOKEN` (Account → Account Analytics → Read),
-passed to the box as `GrafanaBox`'s ClickHouse datasource credential.
+added by `GrafanaBox`'s outbound handler to the ClickHouse datasource's requests; it is never passed to the box.
+If the outbound interception setup fails at wake (for example `ContainerProxy` is not exported), the box starts without the `ae.internal` route and the Worker logs an `o11y.ae_outbound.degraded` event with the wake id and error; look for that event when the ClickHouse datasource errors while Grafana and Loki are fine.
 
 `RATE_LIMITER` needs no dashboard step — a Workers rate-limiting binding's
 `namespace_id` (`1001`, already in `wrangler.jsonc`) is a self-chosen scoping

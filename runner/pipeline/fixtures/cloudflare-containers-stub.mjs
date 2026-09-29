@@ -15,6 +15,10 @@ export function defaultHooks() {
     async start(self, _startOptions, _waitOptions) {
       self._state = { status: "running", lastChange: Date.now() };
     },
+    // (self) -> void. The SDK's `applyOutboundInterception()`; a test makes it
+    // throw to model a missing `ctx.exports.ContainerProxy` or a rejected
+    // `interceptOutboundHttp`.
+    async applyOutboundInterception(_self) {},
     // (self, port|undefined, cancellationOptions|undefined, startOptions|undefined) -> void
     async startAndWaitForPorts(self) {
       self._state = { status: "healthy", lastChange: Date.now() };
@@ -53,7 +57,31 @@ function parseTimeExpression(expr) {
   return match[2] === "s" ? value : match[2] === "m" ? value * 60 : value * 3600;
 }
 
+/** Name-only stand-in: `index.ts` re-exports it for workerd's outbound interception. */
+export class ContainerProxy {}
+
+/** `@cloudflare/containers@0.3.7` `container.js:41`: class name -> hostname -> handler. */
+export const outboundByHostRegistry = new Map();
+
+/** What the SDK's `ContainerProxy.fetch` does (`container.js:199-232`): strip trailing dots
+ *  from the hostname, then look the handler up by CLASS NAME in the registry. */
+export function proxyLookup(className, url) {
+  let hostname = new URL(url).hostname;
+  while (hostname.endsWith(".")) hostname = hostname.slice(0, -1);
+  return outboundByHostRegistry.get(className)?.[hostname];
+}
+
 export class Container {
+  // The SDK backs these with the registry (`container.js:272-277`), so a
+  // `static outboundByHost = {...}` class field (own property, bypasses the
+  // inherited setter) registers nothing and the proxy never finds the handler.
+  static get outboundByHost() {
+    return outboundByHostRegistry.get(this.name);
+  }
+  static set outboundByHost(handlers) {
+    outboundByHostRegistry.set(this.name, handlers);
+  }
+
   constructor(ctx, env, options) {
     this.ctx = ctx;
     this.env = env;
@@ -75,6 +103,11 @@ export class Container {
     // assertion.
     if (!this.ctx.container) this.ctx.container = { running: false };
     this._state = { status: "stopped", lastChange: Date.now() };
+    // SDK `container.js:344`/`:361-369`: a public, writable field, armed once
+    // in the constructor when the class registered an outbound handler (the
+    // SDK does it inside `blockConcurrencyWhile`, after its first await;
+    // nothing here reads it before that settles).
+    this.usingInterception = outboundByHostRegistry.get(this.constructor.name) !== undefined;
   }
 
   get _state() {
@@ -91,6 +124,12 @@ export class Container {
   }
 
   async start(startOptions, waitOptions) {
+    // SDK `doStartContainer` (`container.js:1373-1377`): the interception is
+    // refreshed before `container.start()` and only when the container is not
+    // yet running and `usingInterception` is set; a throw there escapes `start()`.
+    if (!this.ctx.container.running && this.usingInterception) {
+      await hooks.applyOutboundInterception(this);
+    }
     return hooks.start(this, startOptions, waitOptions);
   }
 

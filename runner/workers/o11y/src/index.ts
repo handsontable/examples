@@ -28,6 +28,7 @@ import { handleGrafana } from "./grafana/proxy.js";
 import { handleReopen } from "./grafana/reopen.js";
 import { handleCallback, handleLogin, handleLogout, handleLogoutPage, handleSession } from "./grafana/login.js";
 
+export { ContainerProxy } from "@cloudflare/containers";
 export { GrafanaBox } from "./box.js";
 export { InboxWriter } from "./inbox/writer.js";
 export { O11yHeartbeat } from "./heartbeat.js";

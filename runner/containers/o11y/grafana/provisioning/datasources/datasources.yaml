@@ -44,8 +44,9 @@ datasources:
   # different header shapes (ClickHouse HTTP: X-ClickHouse-User/-Key;
   # AE SQL API: a single `Authorization: Bearer <token>`), so the header
   # NAMES are env-driven too, not just the values — compose.yml supplies
-  # the local pair; GrafanaBox's envVars (phase 2) supply the production
-  # pair. Never hard-code either shape here.
+  # the local pair. In production both headers are empty: GrafanaBox's
+  # outbound handler adds the bearer token Worker-side. Never hard-code
+  # either shape here.
   - name: ClickHouse (runner_events)
     uid: clickhouse-runner-events
     type: vertamedia-clickhouse-datasource

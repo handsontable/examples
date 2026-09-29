@@ -142,7 +142,16 @@ box.
   dashboards), `auth.proxy` behind the Worker (§B.5), **Grafana Live disabled**, sqlite
   state disposable.
 - **Secrets reach the container** only as `envVars` set by `GrafanaBox` at start from
-  Worker secrets (`LOKI_S3_*`, `AE_SQL_TOKEN`). The Slack webhook never enters the box.
+  Worker secrets (`LOKI_S3_*`). In production `AE_SQL_TOKEN` and the Slack webhook never enter the box (local mode still passes the token via `HEADER2_VALUE`).
+- **Analytics Engine SQL goes through an outbound handler.** A container's own egress to
+  `api.cloudflare.com` is refused with Cloudflare error 1000 (`dns_loop`, HTTP 403), so the
+  ClickHouse datasource points at `http://ae.internal/client/v4/accounts/<id>/analytics_engine/sql`.
+  `GrafanaBox.outboundByHost` (`src/ae-outbound.ts`) intercepts that host, accepts only GET/POST on that
+  one path, adds `Authorization: Bearer ${AE_SQL_TOKEN}` in the Worker and makes the real
+  request. The Worker must export `ContainerProxy` for the interception to work. If the
+  interception setup fails at wake, the box still starts, without the `ae.internal` route
+  (the ClickHouse datasource errors, Grafana and Loki work), and the Worker logs
+  `o11y.ae_outbound.degraded`.
 
 **Wake.** Two triggers only:
 

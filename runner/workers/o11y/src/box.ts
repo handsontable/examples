@@ -12,6 +12,7 @@ import { toAePoint, type HotAttrs, type Tenant } from "@handsontable/demo-runtim
 import { drainBatch, type DrainDeps } from "./drain/drain.js";
 import { symbolicateResourceLogs } from "./drain/symbolicate.js";
 import type { Env } from "./env.js";
+import { AE_INTERNAL_HOST, aeInternalUrl, handleAeOutbound } from "./ae-outbound.js";
 import { reportAwakeSeconds } from "./cost.js";
 import { PUBLIC_ORIGIN } from "./gates/session.js";
 
@@ -315,7 +316,7 @@ export class GrafanaBox extends Container<Env> {
     // still needs its cap.
     await this.schedule(new Date(Date.now() + WAKE_HARD_CAP_MS), HARD_CAP_SCHEDULE, { wakeId: record.wakeId });
     try {
-      await withDeadline(this.start({ envVars }), this.startDeadlineMs, "GrafanaBox.start()");
+      await withDeadline(this.#startFailOpen(record.wakeId, envVars), this.startDeadlineMs, "GrafanaBox.start()");
     } catch (err) {
       if (err instanceof DeadlineExceeded) this.#resetWedgedInstance(record.wakeId, err);
       throw err;
@@ -326,6 +327,30 @@ export class GrafanaBox extends Container<Env> {
     // here, unawaited, so `wake()` itself still returns fast.
     void this.startAndWaitForPorts({ ports: this.requiredPorts }).catch(() => {});
     return record;
+  }
+
+  /**
+   * The library's `start()` sets up outbound interception for `ae.internal`
+   * before it starts the container and throws when that setup fails, but the
+   * interception only serves the ClickHouse datasource, so Grafana, Loki and
+   * the drain must still come up: retry once with interception off.
+   */
+  async #startFailOpen(wakeId: string, envVars: Record<string, string>): Promise<void> {
+    const interception = this.usingInterception;
+    try {
+      await this.start({ envVars });
+    } catch (err) {
+      // A running container means the failure came after the interception
+      // setup, so it is not ours to swallow.
+      if (!interception || this.ctx.container?.running) throw err;
+      console.error(JSON.stringify({ event: "o11y.ae_outbound.degraded", wakeId, message: String(err) }));
+      this.usingInterception = false;
+      try {
+        await this.start({ envVars });
+      } finally {
+        this.usingInterception = interception;
+      }
+    }
   }
 
   /**
@@ -888,6 +913,12 @@ function toInspectableRequest(
   }
 }
 
+// Assigned after the class (not a class field) so the SDK's inherited static
+// setter registers it.
+GrafanaBox.outboundByHost = {
+  [AE_INTERNAL_HOST]: (req, env) => handleAeOutbound(req, env as unknown as Env),
+};
+
 /**
  * Every env var the container receives, rebuilt from scratch on every
  * start — never merged with a previous call's values: a stale value
@@ -923,13 +954,12 @@ function buildEnvVars(env: Env, wakeId: string): Record<string, string> {
     // (containers/o11y/compose.yml).
     LOKI_S3_INSECURE: "false",
     GF_SERVER_ROOT_URL: `${PUBLIC_ORIGIN}/grafana/`,
-    // vertamedia-clickhouse-datasource against Analytics Engine SQL API: a
-    // single `Authorization: Bearer <token>` header, never host/port/user
-    // fields (see datasources.yaml). HEADER2 is unused in production.
-    O11Y_CLICKHOUSE_URL: `https://api.cloudflare.com/client/v4/accounts/${accountId}/analytics_engine/sql`,
+    // The Analytics Engine SQL API is reached through the outbound handler
+    // above, which adds the bearer token: no credential header enters the box.
+    O11Y_CLICKHOUSE_URL: aeInternalUrl(accountId),
     O11Y_CLICKHOUSE_DATABASE: "",
-    O11Y_CLICKHOUSE_HEADER1_NAME: "Authorization",
-    O11Y_CLICKHOUSE_HEADER1_VALUE: env.AE_SQL_TOKEN ? `Bearer ${env.AE_SQL_TOKEN}` : "",
+    O11Y_CLICKHOUSE_HEADER1_NAME: "",
+    O11Y_CLICKHOUSE_HEADER1_VALUE: "",
     O11Y_CLICKHOUSE_HEADER2_NAME: "",
     O11Y_CLICKHOUSE_HEADER2_VALUE: "",
     // Tuned for a same-host MinIO round trip; against real R2, a stop that
