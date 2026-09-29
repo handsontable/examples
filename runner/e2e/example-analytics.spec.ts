@@ -385,8 +385,7 @@ test("landing on /edit/:id?fork=1 (onFork's own destination) fires example.open 
 });
 
 // `example.saved` is the API worker's (contract §5): the browser hands it the
-// open example's `ht_major` in the Save request, and counts the Save itself
-// only when the response lacks the API's `exampleSaved` marker.
+// open example's `ht_major` in the Save request and never emits the event.
 const SAVED_DEMO_ID = "e2esave01";
 
 /** Opens a stubbed saved demo, edits and Saves it against a PATCH answering
@@ -433,7 +432,7 @@ async function saveOnce(page: Page, saveResponse: Record<string, unknown>) {
   return { patches, events, open };
 }
 
-test("a Save sends the open example's ht_major to the API and, with the API's marker, emits no example.saved itself", async ({ page }) => {
+test("a Save sends the open example's ht_major to the API and emits no example.saved itself", async ({ page }) => {
   const { patches, events, open } = await saveOnce(page, { ok: true, htVersion: "18.0.0", exampleSaved: true });
   expect(patches).toHaveLength(1);
   expect(patches[0]).toHaveProperty("files");
@@ -442,13 +441,10 @@ test("a Save sends the open example's ht_major to the API and, with the API's ma
   expect(events.filter((e) => e.name === "example.saved")).toHaveLength(0);
 });
 
-test("a Save answered without the exampleSaved marker (an API that does not count it) emits one browser example.saved", async ({ page }) => {
-  const { events } = await saveOnce(page, { ok: true, htVersion: "18.0.0" });
-  const saved = events.filter((e) => e.name === "example.saved");
-  expect(saved).toHaveLength(1);
-  expect(saved[0].attributes?.["hot.metric_kind"]).toBe("saved");
-  expect(saved[0].attributes?.["hot.ref"]).toBe(SAVED_DEMO_ID);
-  expect(saved[0].attributes?.["hot.ht_major"]).toBe("18");
+test("a Save answered without an exampleSaved marker emits no browser example.saved", async ({ page }) => {
+  const { patches, events } = await saveOnce(page, { ok: true, htVersion: "18.0.0" });
+  expect(patches).toHaveLength(1);
+  expect(events.filter((e) => e.name === "example.saved")).toHaveLength(0);
 });
 
 // A starter picked from the picker is a real, later `example.open` — never

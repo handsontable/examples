@@ -8,7 +8,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  browserCountsSave,
   consumeForkMarker,
   exampleActionAttrs,
   exampleOpenAttrs,
@@ -166,16 +165,4 @@ test("consumeForkMarker: one-shot -- reading the stripped search a second time n
   const second = consumeForkMarker(first.search);
   assert.equal(first.isFork, true);
   assert.equal(second.isFork, false, "a manual reload of the same (already-stripped) URL must not re-count as a fork");
-});
-
-// ---- browserCountsSave ---------------------------------------------------------
-
-test("browserCountsSave: a Save response carrying the API's exampleSaved marker is never counted by the browser", () => {
-  assert.equal(browserCountsSave({ ok: true, htVersion: "18.0.0", exampleSaved: true }), false);
-  assert.equal(browserCountsSave({ ok: true, htVersion: "18.0.0", exampleSaved: false }), false);
-});
-
-test("browserCountsSave: a Save response without the marker (an API that does not count saves) is counted once by the browser", () => {
-  assert.equal(browserCountsSave({ ok: true, htVersion: "18.0.0" }), true);
-  assert.equal(browserCountsSave(null), true);
 });
