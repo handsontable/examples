@@ -273,10 +273,11 @@ panel carries no message text. `reportDemoEvent` files the preview relay as
 a `preview.runtime_error` count metric (a Faro measurement, `toFacade` →
 `telemetry.metric` → `pushMeasurement`) — per the ruling above (§6),
 every measurement is Analytics-Engine-only, so this produces no Loki line
-at all any more, not even a count-only one. The one demo-runtime Loki line
-that still exists is the Tier-1 compile-failure branch, whose message is
-always the constant `"Tier-1 compile failed"` — the real diagnostic detail
-goes to `extra` there, and for everything else lives in Sentry, when
+at all any more, not even a count-only one. Each collapsed demo-runtime
+report (one per fingerprint per edit burst) is also filed as a handled Faro exception
+(`emitCollapsedDemoEvent` in `apps/authoring/src/sentry.ts`), which is the Loki line, and its message
+is the fingerprint shape, never the relayed text; the Tier-1 compile-failure branch's message is
+the constant `"Tier-1 compile failed"`, with the diagnostic detail in `extra`. The full text lives in Sentry, when
 `MONITOR_DEMOS`/`VITE_MONITOR_DEMOS` is on.) `/admin`'s
 header also has an **Open Grafana** link
 (otherwise nothing in the app points at it): `href={GRAFANA_URL}` in
@@ -299,6 +300,21 @@ Viewer save a change back to a provisioned dashboard or datasource — those
 stay read-only, and Grafana's state is disposable anyway (a fresh DB on
 every wake).
 
+**What the `browser` tenant holds.** Exceptions, handled or uncaught, including the
+demo-runtime relays above; Faro logs; Faro events not named `example.*` (in the authoring app,
+`sentry.event` and `versions_fetch_unreachable`); and lite-beacon `t:"err"` records from `/d` and
+`/embed`. Everything else goes to Analytics Engine only and never reaches Loki: every measurement
+(web-vitals, `preview.ready_ms`, `sandpack.compile_ms`, `preview.runtime_error`), every `example.*`
+event, and lite `t:"vital"` beacons. So an open, healthy demo produces no Loki lines until
+something throws. To force a probe line, add `throw new Error("o11y probe")` to the demo code in the
+editor (a throw from the DevTools console skips the demo-runtime relay), wait 60 s for the pack,
+let the box stop after its 15 min idle timeout or wait for the next wake, then query
+`{service_name="demos-authoring"}` over the last 24 h in Explore.
+
+**Explore on the Analytics Engine datasource.** The ClickHouse plugin's default Format As is
+Time series, which drops string columns and shows the time as NaN for a query that is not a
+time series. Set Format As to Table for ad-hoc queries in Explore.
+
 **Logs are only as fresh as the last wake.** The box drains its packed
 objects into Loki once, right after it wakes, and nothing re-arms that
 drain while it stays awake (ADR-0041 §B.3's out-of-order window assumes the
@@ -306,7 +322,9 @@ drain replays into an empty ingester, which only holds true at wake start).
 So any ingest that arrives *while* the box is already up sits undrained and
 invisible in Grafana/Explore until the *next* wake. There is no staleness
 indicator on the dashboards for this; treat Logs/Explore as "as of the last
-wake started", not live — a design change may follow.
+wake started", not live — a design change may follow. A new browser error can therefore take
+until the next wake to appear; the cron forces one when the oldest inbox key is over 1 h old or the
+backlog exceeds 64 MB (`workers/o11y/src/index.ts`).
 
 **Bot traffic is filtered locally too.** The o11y worker's bot gate drops
 any request whose user agent matches `HeadlessChrome` — including local
