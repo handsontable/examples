@@ -15,6 +15,10 @@ export function defaultHooks() {
     async start(self, _startOptions, _waitOptions) {
       self._state = { status: "running", lastChange: Date.now() };
     },
+    // (self) -> void. The SDK's `applyOutboundInterception()`; a test makes it
+    // throw to model a missing `ctx.exports.ContainerProxy` or a rejected
+    // `interceptOutboundHttp`.
+    async applyOutboundInterception(_self) {},
     // (self, port|undefined, cancellationOptions|undefined, startOptions|undefined) -> void
     async startAndWaitForPorts(self) {
       self._state = { status: "healthy", lastChange: Date.now() };
@@ -99,6 +103,11 @@ export class Container {
     // assertion.
     if (!this.ctx.container) this.ctx.container = { running: false };
     this._state = { status: "stopped", lastChange: Date.now() };
+    // SDK `container.js:344`/`:361-369`: a public, writable field, armed once
+    // in the constructor when the class registered an outbound handler (the
+    // SDK does it inside `blockConcurrencyWhile`, after its first await;
+    // nothing here reads it before that settles).
+    this.usingInterception = outboundByHostRegistry.get(this.constructor.name) !== undefined;
   }
 
   get _state() {
@@ -115,6 +124,12 @@ export class Container {
   }
 
   async start(startOptions, waitOptions) {
+    // SDK `doStartContainer` (`container.js:1373-1377`): the interception is
+    // refreshed before `container.start()` and only when the container is not
+    // yet running and `usingInterception` is set; a throw there escapes `start()`.
+    if (!this.ctx.container.running && this.usingInterception) {
+      await hooks.applyOutboundInterception(this);
+    }
     return hooks.start(this, startOptions, waitOptions);
   }
 

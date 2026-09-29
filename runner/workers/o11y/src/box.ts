@@ -316,7 +316,7 @@ export class GrafanaBox extends Container<Env> {
     // still needs its cap.
     await this.schedule(new Date(Date.now() + WAKE_HARD_CAP_MS), HARD_CAP_SCHEDULE, { wakeId: record.wakeId });
     try {
-      await withDeadline(this.start({ envVars }), this.startDeadlineMs, "GrafanaBox.start()");
+      await withDeadline(this.#startFailOpen(record.wakeId, envVars), this.startDeadlineMs, "GrafanaBox.start()");
     } catch (err) {
       if (err instanceof DeadlineExceeded) this.#resetWedgedInstance(record.wakeId, err);
       throw err;
@@ -327,6 +327,30 @@ export class GrafanaBox extends Container<Env> {
     // here, unawaited, so `wake()` itself still returns fast.
     void this.startAndWaitForPorts({ ports: this.requiredPorts }).catch(() => {});
     return record;
+  }
+
+  /**
+   * The library's `start()` sets up outbound interception for `ae.internal`
+   * before it starts the container and throws when that setup fails, but the
+   * interception only serves the ClickHouse datasource, so Grafana, Loki and
+   * the drain must still come up: retry once with interception off.
+   */
+  async #startFailOpen(wakeId: string, envVars: Record<string, string>): Promise<void> {
+    const interception = this.usingInterception;
+    try {
+      await this.start({ envVars });
+    } catch (err) {
+      // A running container means the failure came after the interception
+      // setup, so it is not ours to swallow.
+      if (!interception || this.ctx.container?.running) throw err;
+      console.error(JSON.stringify({ event: "o11y.ae_outbound.degraded", wakeId, message: String(err) }));
+      this.usingInterception = false;
+      try {
+        await this.start({ envVars });
+      } finally {
+        this.usingInterception = interception;
+      }
+    }
   }
 
   /**
