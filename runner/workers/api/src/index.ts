@@ -2191,14 +2191,18 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             pages,
           });
         } catch (err) {
+          // §5's `chat.answer` row promises a point on every outcome, `error`
+          // included: a network-level throw from `requestAnswer`'s `fetch`,
+          // not only a `ChatUnavailableError`, must not skip it. Mirrors the
+          // `theme.ai` catch below (same fix for its own raw `fetch`).
+          void emitPoint(
+            env,
+            "chat.answer",
+            { count: 1, duration_ms: Date.now() - chatStartedAt },
+            { model: env.LITELLM_MODEL ?? "unknown", outcome: "error" },
+          );
           if (err instanceof ChatUnavailableError) {
             ctx.waitUntil(recordUsageEvent(env, "chat_error", knownFramework(parsed.value.framework)));
-            void emitPoint(
-              env,
-              "chat.answer",
-              { count: 1, duration_ms: Date.now() - chatStartedAt },
-              { model: env.LITELLM_MODEL ?? "unknown", outcome: "error" },
-            );
             // Configuration faults (no `status`) are already logged in chat.ts;
             // a gateway failure (`status` set) is the ADR-0041 §E.1 diagnostic.
             if (err.status !== undefined) {
@@ -2266,7 +2270,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // §5's `theme.ai` row promises a point on every outcome, `error`
           // included: a network-level throw from `requestTheme`'s `fetch`,
           // not only a `ChatUnavailableError`, must not skip it. Mirrors the
-          // `chat.answer` catch above (same gap for its own raw `fetch`).
+          // `chat.answer` catch above (same fix for its own raw `fetch`).
           void emitPoint(
             env,
             "theme.ai",
