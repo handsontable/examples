@@ -53,6 +53,7 @@
         "sort": 1,
         "multi": true,
         "includeAll": true,
+        "allValue": "'__all__'",
         "current": {
           "text": "All",
           "value": [
@@ -108,6 +109,7 @@
         ],
         "hide": 0,
         "includeAll": true,
+        "allValue": "'__all__'",
         "multi": true
       }
     ]
@@ -150,7 +152,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT blob6 AS framework, blob7 AS ht_major, sum(_sample_interval * double1) AS samples, 100 * sumIf(_sample_interval * double1, blob8 = 'ready') / sum(_sample_interval * double1) AS ready_pct, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95_ms FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY framework, ht_major ORDER BY framework, ht_major",
+          "query": "SELECT blob6 AS framework, blob7 AS ht_major, sum(_sample_interval * double1) AS samples, 100 * sumIf(_sample_interval * double1, blob8 = 'ready') / sum(_sample_interval * double1) AS ready_pct, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95_ms FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'preview.ready_ms' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY framework, ht_major ORDER BY framework, ht_major",
           "format": "table",
           "table": "runner_events",
           "round": "0s",
@@ -185,7 +187,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob7 AS ht_major, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'sandpack.compile_error' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, ht_major ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob7 AS ht_major, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'sandpack.compile_error' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY t, ht_major ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -254,7 +256,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob7 AS ht_major, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'version.switch' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, ht_major ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob7 AS ht_major, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'version.switch' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY t, ht_major ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",

@@ -66,6 +66,7 @@
         "sort": 1,
         "multi": true,
         "includeAll": true,
+        "allValue": "'__all__'",
         "current": {
           "text": "All",
           "value": [
@@ -121,6 +122,7 @@
         ],
         "hide": 0,
         "includeAll": true,
+        "allValue": "'__all__'",
         "multi": true
       }
     ]

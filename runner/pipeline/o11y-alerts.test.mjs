@@ -84,9 +84,76 @@ test("ae-query: refuses the ClickHouse-only shapes Analytics Engine rejects", ()
   }
 });
 
-test("ae-query: count(DISTINCT x) and a quoted 'union' literal are not flagged", () => {
-  assert.deepEqual(findUnsupportedAeConstructs("SELECT count(DISTINCT blob3) FROM runner_events"), []);
+test("ae-query: refuses WITH TOTALS / WITH FILL / WITH ROLLUP / WITH CUBE (not documented as supported)", () => {
+  const cases = {
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events GROUP BY blob3 WITH TOTALS": "WITH TOTALS",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events GROUP BY blob3 ORDER BY blob3 WITH FILL": "WITH FILL",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events GROUP BY blob3 WITH ROLLUP": "WITH ROLLUP",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events GROUP BY blob3 WITH CUBE": "WITH CUBE",
+  };
+  for (const [sql, label] of Object.entries(cases)) {
+    const found = findUnsupportedAeConstructs(sql);
+    assert.deepEqual(found, [label], sql);
+    assert.throws(() => assertAllowedAeQuery(sql), /unsupported construct/, sql);
+  }
+});
+
+test("ae-query: refuses a string literal compared with timestamp (AE: cannot combine DateTime and String), accepts toDateTime() bounds", () => {
+  const bad = [
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp >= '2026-09-28 00:00:00'",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp < '2026-09-29 00:00:00'",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp<='2026-09-29'",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp > '2026-09-29'",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp = '2026-09-29'",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE '2026-09-29' <= timestamp",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp BETWEEN '2026-09-28' AND '2026-09-29'",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp BETWEEN toDateTime('2026-09-28 00:00:00') AND '2026-09-29'",
+  ];
+  for (const sql of bad) {
+    const found = findUnsupportedAeConstructs(sql);
+    assert.ok(found.some((f) => f.includes("string literal compared with timestamp")), `${sql} -> ${JSON.stringify(found)}`);
+  }
+  const good = [
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp >= toDateTime('2026-09-28 00:00:00') AND timestamp < toDateTime('2026-09-29 00:00:00')",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE timestamp BETWEEN toDateTime('2026-09-28 00:00:00') AND toDateTime('2026-09-29 00:00:00') AND blob3 = 'x'",
+    "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE blob3 = 'timestamp' AND timestamp >= now() - INTERVAL '1' DAY",
+  ];
+  for (const sql of good) assert.deepEqual(findUnsupportedAeConstructs(sql), [], sql);
+});
+
+test("ae-query: a quoted 'union' literal is not a construct", () => {
   assert.deepEqual(findUnsupportedAeConstructs("SELECT sum(x) FROM runner_events WHERE blob3 = 'union'"), []);
+});
+
+test("ae-query: SQL comments are ignored by both scans (line and block)", () => {
+  const sql =
+    "SELECT sum(_sample_interval * double1) AS c -- SELECT DISTINCT, count(x), JOIN, $table\n" +
+    "FROM runner_events /* UNION ALL SELECT 1 FROM default.t WITH TOTALS, quantile(1)(x) */ WHERE blob3 = 'x'";
+  assert.deepEqual(findUnsupportedAeConstructs(sql), []);
+  assert.deepEqual(findDisallowedAeFunctions(sql), []);
+  assert.doesNotThrow(() => assertAllowedAeQuery(sql));
+  // A construct after the comment on the next line is still found.
+  assert.ok(findUnsupportedAeConstructs("SELECT a -- harmless\nFROM runner_events JOIN t ON 1 = 1").includes("JOIN"));
+  // A comment marker inside a literal is not a comment: the JOIN after it is still found.
+  assert.ok(findUnsupportedAeConstructs("SELECT '--' FROM runner_events JOIN t ON 1 = 1").includes("JOIN"));
+  assert.ok(findUnsupportedAeConstructs("SELECT '/*' FROM runner_events JOIN t ON 1 = 1").includes("JOIN"));
+});
+
+test("ae-query: a backslash-escaped quote does not end the string literal", () => {
+  // The literal is `it\'s UNION ALL`; a scanner that ends it at the escaped quote reads UNION as SQL.
+  const escaped = "SELECT sum(_sample_interval * double1) AS c FROM runner_events WHERE blob3 = 'it\\'s UNION ALL JOIN foo('";
+  assert.deepEqual(findUnsupportedAeConstructs(escaped), []);
+  assert.deepEqual(findDisallowedAeFunctions(escaped), []);
+  // The SQL after the literal is still scanned.
+  assert.ok(findUnsupportedAeConstructs(`${escaped} UNION SELECT 1`).includes("UNION"));
+});
+
+test("ae-query: a quoted identifier named like a keyword is not a construct", () => {
+  for (const q of ["`join`", '"join"', '"union"', "`over`"]) {
+    const sql = `SELECT sum(_sample_interval * double1) AS ${q} FROM runner_events`;
+    assert.deepEqual(findUnsupportedAeConstructs(sql), [], sql);
+  }
+  assert.ok(findUnsupportedAeConstructs("SELECT a FROM runner_events JOIN t ON 1 = 1").includes("JOIN"));
 });
 
 // ---- alerts/inbox-state.ts: pure InboxWriter helpers ----------------------

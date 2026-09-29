@@ -1,4 +1,4 @@
-# Dashboards provider — the 8 provisioned JSON dashboards live under
+# Dashboards provider — the 9 provisioned JSON dashboards live under
 # containers/o11y/grafana/dashboards/ (ADR-0041 §F.2, ADR-0042).
 apiVersion: 1
 

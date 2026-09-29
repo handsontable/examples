@@ -427,9 +427,8 @@ export function pivotExampleDaily(day: string, rows: readonly ExampleEventRow[])
   return [...byKey.values()];
 }
 
-/** The window bounds use `toDateTime('YYYY-MM-DD HH:MM:SS')`, the form the
- *  Analytics Engine billing recipe documents, and that ClickHouse accepts
- *  too; a bare string compared against `timestamp` is documented nowhere.
+/** The window bounds are wrapped in `toDateTime(...)` because Analytics Engine
+ *  rejects a bare string compared with `timestamp` (DateTime vs String).
  */
 function exampleEventsSql(dayStart: string, dayEnd: string): string {
   const metricList = EXAMPLE_METRICS.map((m) => `'${m}'`).join(", ");

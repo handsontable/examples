@@ -53,6 +53,7 @@
         "sort": 1,
         "multi": true,
         "includeAll": true,
+        "allValue": "'__all__'",
         "current": {
           "text": "All",
           "value": [
@@ -108,6 +109,7 @@
         ],
         "hide": 0,
         "includeAll": true,
+        "allValue": "'__all__'",
         "multi": true
       }
     ]
@@ -150,7 +152,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT blob18 AS guide, sumIf(_sample_interval * double1, index1 = 'example.open') AS opens, sumIf(_sample_interval * double1, index1 = 'example.engaged') AS engaged FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 IN ('example.open', 'example.engaged') AND blob17 = 'docs' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY guide ORDER BY opens DESC LIMIT 20",
+          "query": "SELECT blob18 AS guide, sumIf(_sample_interval * double1, index1 = 'example.open') AS opens, sumIf(_sample_interval * double1, index1 = 'example.engaged') AS engaged FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 IN ('example.open', 'example.engaged') AND blob17 = 'docs' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY guide ORDER BY opens DESC LIMIT 20",
           "format": "table",
           "table": "runner_events",
           "round": "0s",
@@ -185,7 +187,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob19 AS area, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob17 = 'docs' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, area ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob19 AS area, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob17 = 'docs' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY t, area ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -235,7 +237,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT blob18 AS guide, blob6 AS framework, sum(_sample_interval * double1) AS opens FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob17 = 'docs' AND blob3 = '$environment' AND blob7 IN (${ht_major:sqlstring}) GROUP BY guide, framework ORDER BY opens DESC LIMIT 50",
+          "query": "SELECT blob18 AS guide, blob6 AS framework, sum(_sample_interval * double1) AS opens FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob17 = 'docs' AND blob3 = '$environment' AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY guide, framework ORDER BY opens DESC LIMIT 50",
           "format": "table",
           "table": "runner_events",
           "round": "0s",
@@ -270,7 +272,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT blob18 AS starter, sum(_sample_interval * double1) AS opens FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob17 = 'starter' AND blob3 = '$environment' AND blob7 IN (${ht_major:sqlstring}) GROUP BY starter ORDER BY opens DESC",
+          "query": "SELECT blob18 AS starter, sum(_sample_interval * double1) AS opens FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob17 = 'starter' AND blob3 = '$environment' AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY starter ORDER BY opens DESC",
           "format": "table",
           "table": "runner_events",
           "round": "0s",
@@ -305,7 +307,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob7 AS ht_major, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, ht_major ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob7 AS ht_major, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) GROUP BY t, ht_major ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -355,7 +357,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT blob19 AS area, sumIf(_sample_interval * double1, index1 = 'example.open') AS opens, sumIf(_sample_interval * double1, index1 = 'example.engaged') AS engaged, sumIf(_sample_interval * double1, index1 = 'example.saved') AS saved, sumIf(_sample_interval * double1, index1 = 'example.shared') AS shared, sumIf(_sample_interval * double1, index1 = 'example.forked') AS forked, sumIf(_sample_interval * double1, index1 = 'example.downloaded') AS downloaded FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 IN ('example.open', 'example.engaged', 'example.saved', 'example.shared', 'example.forked', 'example.downloaded') AND blob17 = 'docs' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY area ORDER BY opens DESC",
+          "query": "SELECT blob19 AS area, sumIf(_sample_interval * double1, index1 = 'example.open') AS opens, sumIf(_sample_interval * double1, index1 = 'example.engaged') AS engaged, sumIf(_sample_interval * double1, index1 = 'example.saved') AS saved, sumIf(_sample_interval * double1, index1 = 'example.shared') AS shared, sumIf(_sample_interval * double1, index1 = 'example.forked') AS forked, sumIf(_sample_interval * double1, index1 = 'example.downloaded') AS downloaded FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 IN ('example.open', 'example.engaged', 'example.saved', 'example.shared', 'example.forked', 'example.downloaded') AND blob17 = 'docs' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY area ORDER BY opens DESC",
           "format": "table",
           "table": "runner_events",
           "round": "0s",
@@ -390,7 +392,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, 100 * sumIf(_sample_interval * double1, blob9 = 'deep-link') / sum(_sample_interval * double1) AS deep_link_pct FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, 100 * sumIf(_sample_interval * double1, blob9 = 'deep-link') / sum(_sample_interval * double1) AS deep_link_pct FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'example.open' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY t ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",

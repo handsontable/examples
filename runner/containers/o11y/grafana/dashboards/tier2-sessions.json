@@ -53,6 +53,7 @@
         "sort": 1,
         "multi": true,
         "includeAll": true,
+        "allValue": "'__all__'",
         "current": {
           "text": "All",
           "value": [
@@ -108,6 +109,7 @@
         ],
         "hide": 0,
         "includeAll": true,
+        "allValue": "'__all__'",
         "multi": true
       }
     ]
@@ -150,7 +152,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, outcome ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY t, outcome ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -199,7 +201,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) AND blob7 IN (${ht_major:sqlstring}) GROUP BY t, reason ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.start_ms' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) AND ('__all__' IN (${ht_major:sqlstring}) OR blob7 IN (${ht_major:sqlstring})) GROUP BY t, reason ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -248,7 +250,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'container.boot_ms' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, outcome ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob8 AS outcome, quantileExactWeighted(0.95)(double2, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'container.boot_ms' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) GROUP BY t, outcome ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",
@@ -298,7 +300,7 @@
             "type": "vertamedia-clickhouse-datasource",
             "uid": "clickhouse-runner-events"
           },
-          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double3, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.end' AND blob3 = '$environment' AND blob6 IN (${framework:sqlstring}) GROUP BY t, reason ORDER BY t",
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, quantileExactWeighted(0.95)(double3, toUInt32(_sample_interval)) AS p95 FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'session.end' AND blob3 = '$environment' AND ('__all__' IN (${framework:sqlstring}) OR blob6 IN (${framework:sqlstring})) GROUP BY t, reason ORDER BY t",
           "format": "time_series",
           "table": "runner_events",
           "round": "0s",

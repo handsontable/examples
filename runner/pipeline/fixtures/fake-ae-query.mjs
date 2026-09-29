@@ -27,8 +27,8 @@ export function makeFakeAeQuery(rows) {
   const calls = [];
 
   async function queryFn(_env, sql) {
-    // The real `runAeQuery` refuses these before sending; the fake must too,
-    // or a rule could ship SQL that Analytics Engine rejects with green tests.
+    // The real `runAeQuery` refuses these before sending, so the fake does too;
+    // this proves the SQL passes our guard, not that Analytics Engine accepts it.
     assertAllowedAeQuery(sql);
     calls.push(sql);
 
