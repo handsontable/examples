@@ -6,8 +6,11 @@ import { HT_MAJORS, type HotAttrs, type HtMajor } from "@handsontable/demo-runti
 
 /**
  * The point's attrs, or null when the request carries no valid `exampleHtMajor`.
- * The field is what gates the count (contract §5): the editor sends it only
- * while its telemetry gate is open, and a caller that omits it is not counted.
+ * What gates the count (contract §5) is a successful save whose request
+ * carries a valid `exampleHtMajor`, whoever sends it: the editor sends it
+ * only while its own telemetry gate is open, but an API-token caller can send
+ * it too and is counted exactly the same way. A caller that omits it is not
+ * counted.
  */
 export function exampleSavedAttrs(demoId: string, framework: string, exampleHtMajor: unknown): HotAttrs | null {
   if (typeof exampleHtMajor !== "string" || !(HT_MAJORS as readonly string[]).includes(exampleHtMajor)) return null;
