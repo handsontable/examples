@@ -453,68 +453,67 @@ test("a Save answered without the exampleSaved marker (an API that does not coun
 
 // A starter picked from the picker is a real, later `example.open` — never
 // the page's own silent first load, and never a no-op for the `example.*`
-// actions that follow it. Both entry files below open on boot (same oracle
-// blank-starter.spec.ts uses), so each pick is checked against the actually
-// loaded artifact, not just an event existing.
+// actions that follow it (ADR-0042). Both entry files below open on boot
+// (same oracle blank-starter.spec.ts uses), so each pick is checked against
+// the actually loaded artifact, not just an event existing.
 const REACT_LABEL = /React \(Vite, TS\)/;
 const BLANK_LABEL = "Blank (JavaScript)";
 
 test("a bare / visit, then a picker pick of a different starter, fires one example.open with entry=picker whose taxonomy a later example.engaged reuses", async ({ page }) => {
   await stubShell(page);
   const events = captureTelemetryEvents(page);
+  const opens = () => events.filter((e) => e.name === "example.open");
+  const engaged = () => events.filter((e) => e.name === "example.engaged");
 
   // No ?example= in the URL — the default react starter's own landing must
-  // stay silent (ADR-0042: a bare `/` visit is not a pick), so this poll is
-  // the count BEFORE the pick, guarding against a regression that fires it
-  // twice instead of the reported zero.
+  // stay silent (ADR-0042: a bare `/` visit is not a pick). `flushFaro`
+  // forces the queue out before this check, the same way the deep-link
+  // test above proves "none on re-render".
   await page.goto(`${BASE_URL}/`);
   await expect(page.locator('[data-pane-active="true"] .cm-content')).toContainText("createRoot");
-  await page.waitForTimeout(500);
-  expect(events.filter((e) => e.name === "example.open")).toHaveLength(0);
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  expect(opens()).toHaveLength(0);
 
   await pickStarter(page, REACT_LABEL, BLANK_LABEL);
   await expect(page.locator('[data-pane-active="true"] .cm-content')).toContainText(
     "new Handsontable(container",
   );
-
-  await expect.poll(() => events.filter((e) => e.name === "example.open").length).toBe(1);
-  const [open] = events.filter((e) => e.name === "example.open");
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  expect(opens()).toHaveLength(1);
+  const [open] = opens();
   expect(open.attributes?.["hot.reason"]).toBe("picker");
   expect(open.attributes?.["hot.metric_kind"]).toBe("starter");
   expect(open.attributes?.["hot.ref"]).toBe("blank");
   expect(open.attributes?.["hot.framework"]).toBe("blank");
   expect(open.attributes?.["hot.ht_major"]).toBe("18");
 
-  // The taxonomy the picked starter's example.open carried is not a dead
-  // end: a first edit's example.engaged reads it back off the same ref the
-  // reported bug cleared to null on every picker pick.
+  // A first edit's example.engaged reads the same taxonomy back off this ref.
   await page.locator('[data-pane-active="true"] .cm-content').click();
   await page.keyboard.type("// edit");
-  await expect
-    .poll(() => events.filter((e) => e.name === "example.engaged").length)
-    .toBe(1);
-  const [engaged] = events.filter((e) => e.name === "example.engaged");
-  expect(engaged.attributes?.["hot.metric_kind"]).toBe("starter");
-  expect(engaged.attributes?.["hot.ref"]).toBe("blank");
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  expect(engaged()).toHaveLength(1);
+  expect(engaged()[0].attributes?.["hot.metric_kind"]).toBe("starter");
+  expect(engaged()[0].attributes?.["hot.ref"]).toBe("blank");
 });
 
 test("a ?example= deep-link visit, then a picker pick of a different starter, fires entry=picker (not deep-link) for the pick", async ({ page }) => {
   await stubShell(page);
   const events = captureTelemetryEvents(page);
+  const opens = () => events.filter((e) => e.name === "example.open");
 
   await page.goto(`${BASE_URL}/?example=blank&v=18.0.0`);
   await expect(page.locator('[data-pane-active="true"] .cm-content')).toContainText(
     "new Handsontable(container",
   );
-  await expect.poll(() => events.filter((e) => e.name === "example.open").length).toBe(1);
-  expect(events[0].attributes?.["hot.reason"]).toBe("deep-link");
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  expect(opens()).toHaveLength(1);
+  expect(opens()[0].attributes?.["hot.reason"]).toBe("deep-link");
 
   await pickStarter(page, new RegExp(BLANK_LABEL.replace(/[()]/g, "\\$&")), "React (Vite, TS)");
   await expect(page.locator('[data-pane-active="true"] .cm-content')).toContainText("createRoot");
-
-  await expect.poll(() => events.filter((e) => e.name === "example.open").length).toBe(2);
-  const [, pick] = events.filter((e) => e.name === "example.open");
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  expect(opens()).toHaveLength(2);
+  const pick = opens()[1];
   expect(pick.attributes?.["hot.reason"]).toBe("picker");
-  expect(pick.attributes?.["hot.reason"]).not.toBe("deep-link");
   expect(pick.attributes?.["hot.ref"]).toBe("react");
 });
