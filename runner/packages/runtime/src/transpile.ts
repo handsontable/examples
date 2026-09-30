@@ -315,6 +315,26 @@ export function rearmCompilerLoad(): void {
 const SOURCE_RE = /\.(tsx|ts|jsx|js)$/;
 
 /**
+ * Rewrite regex literals babel 6 cannot parse into `new RegExp("<same source>", flags)`.
+ * The bundler runs regexpu over `u`-flag literals and its parser has no lookbehind or
+ * named groups ("Expected atom at position 16"), so a string is the only form that
+ * reaches the browser's own engine untouched.
+ */
+function regexConstructorPlugin({ types: t }: { types: any }) {
+  return {
+    visitor: {
+      RegExpLiteral(path: any) {
+        const { pattern, flags } = path.node as { pattern: string; flags: string };
+        if (!/\(\?<[=!A-Za-z_$]/.test(pattern)) return;
+        path.replaceWith(
+          t.newExpression(t.identifier("RegExp"), [t.stringLiteral(pattern), t.stringLiteral(flags)]),
+        );
+      },
+    },
+  };
+}
+
+/**
  * Compile a plain-JS dependency dist down to the babel 6 parse floor (used by
  * dep-shims.ts for packages whose published dist uses post-ES2017 syntax).
  * `sourceType: "unambiguous"` keeps UMD bundles in script mode so their
@@ -324,6 +344,7 @@ export async function transpileDependencyDist(code: string, filename: string): P
   const babel = await loadBabel();
   const compiled = babel.transform(code, {
     filename,
+    plugins: [regexConstructorPlugin],
     presets: [["env", { targets: TARGETS, modules: false, include: ["transform-classes"] }]],
     sourceType: "unambiguous",
     sourceMaps: false,
