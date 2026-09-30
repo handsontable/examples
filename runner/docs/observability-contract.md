@@ -366,9 +366,7 @@ What gates the count is a successful rebuild whose request carries a valid
 field only while its own telemetry gate is open (§10). The rebuild and the point are
 registered with `ctx.waitUntil`, so a client disconnect within the 30 s grace does not
 cancel them. Every rebuild response carries `exampleSaved` (whether the point was
-written). The editor emits the browser `example.saved` only when a response lacks that
-key, i.e. an API that does not count saves; that fallback can be removed once every
-deployed API sends the marker.
+written). The API is the only emitter of `example.saved`; the editor never emits it.
 
 A build that fails on the demo's own input is client input (`isUserBuildError` in
 `workers/api/src/share.ts`), on any route that builds inline: `POST /api/demos`, `PATCH

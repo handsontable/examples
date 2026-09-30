@@ -94,7 +94,6 @@ import {
 } from "./telemetry/metrics.js";
 import {
   consumeForkMarker,
-  browserCountsSave,
   exampleActionAttrs,
   exampleOpenAttrs,
   exampleOpenKey,
@@ -3136,8 +3135,6 @@ function Authoring({
       });
       await assertApiOk(res, `save failed (${res.status})`);
       if (filesRef.current === sentFiles) clearDirty();
-      // Fallback for an API without the marker; remove once every deployed API sends it.
-      if (browserCountsSave(await res.json().catch(() => null))) noteExampleAction("example.saved");
     } catch (e) {
       // Losing a save is the worst outcome in the app — the user's edits are only
       // in this tab's memory until the PATCH lands. Which is exactly why an
