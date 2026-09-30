@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { abortSandpackHosts } from "./helpers";
 
 // A demo that exports a file has to be able to hand it over (DEV-2203, reported by
 // Aleksandra).
@@ -29,8 +30,7 @@ async function stubShell(page: Page) {
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0"] } }),
   );
   // The bundler is not needed: the frame exists before anything is bundled into it.
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   await page.route("**/broker/login**", (route) => route.abort());
 }
 

@@ -59,6 +59,16 @@ test("toAePoint lets an explicit count override the default 1 (a pre-aggregated 
   assert.equal(point.doubles[doubleIndex("count")], 5);
 });
 
+test("toAePoint writes the bucket of a sandpack.compile_error point", () => {
+  const point = toAePoint(
+    "sandpack.compile_error",
+    {},
+    { ...SERVICE, framework: "react", ht_major: "18", fingerprint: "sandpack.compile_error:0123456789abcdef", bucket: "18.1" },
+  );
+  const blobIndex = (col) => Number(AE_COLUMNS[col].replace("blob", "")) - 1;
+  assert.equal(point.blobs[blobIndex("bucket")], "18.1");
+});
+
 test("toAePoint rejects an outcome not in the metric's allowed set", () => {
   assert.throws(
     () => toAePoint("sandpack.compile_ms", {}, { ...SERVICE, tier: "1", framework: "react", ht_major: "18", outcome: "bogus" }),

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { workspaceFiles } from "./helpers";
+import { workspaceFiles, abortSandpackHosts } from "./helpers";
 
 // Multi-file editor tabs (DEV-2169 / T12, ADR-0025 §3). The strip shipped styled
 // but single-file in T4; here it opens many, closes them, and dots the ones with
@@ -30,8 +30,7 @@ async function stubShell(page: Page) {
   await page.route("**/api/versions", (route) =>
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
   );
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   await page.route("**/broker/login**", (route) => route.abort());
 }
 

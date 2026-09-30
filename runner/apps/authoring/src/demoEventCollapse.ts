@@ -14,6 +14,10 @@ export const DEMO_EDIT_SETTLE_MS = 2000;
  *  that posts crafted, ever-different payloads with no edit in between. */
 export const DEMO_COLLAPSE_CEILING = 50;
 
+/** Ceiling for `compile:` keys, counted apart from runtime reports so a long
+ *  edit session of runtime errors cannot silence compile errors (or the reverse). */
+export const DEMO_COMPILE_CEILING = 50;
+
 /** Distinct keys held for one burst. Anything past this is dropped — the
  *  final run of a real demo has a handful of distinct faults, not dozens. */
 const DEMO_COLLAPSE_PENDING_MAX = 20;
@@ -25,6 +29,7 @@ export interface DemoEventCollapseOptions<T> {
   clearTimer: (handle: unknown) => void;
   settleMs?: number;
   ceiling?: number;
+  compileCeiling?: number;
   pendingMax?: number;
 }
 
@@ -64,6 +69,7 @@ export interface DemoEventCollapse<T> {
 export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): DemoEventCollapse<T> {
   const settleMs = opts.settleMs ?? DEMO_EDIT_SETTLE_MS;
   const ceiling = opts.ceiling ?? DEMO_COLLAPSE_CEILING;
+  const compileCeiling = opts.compileCeiling ?? DEMO_COMPILE_CEILING;
   const pendingMax = opts.pendingMax ?? DEMO_COLLAPSE_PENDING_MAX;
   /** Keys already emitted since the last edit/reset. */
   const counted = new Set<string>();
@@ -71,6 +77,7 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
   let pending = new Map<string, T>();
   let timer: unknown = null;
   let used = 0;
+  let compileUsed = 0;
   /** The open burst's newest edit failed to compile: its reports are from
    *  code already typed past, until the next edit. */
   let runReplaced = false;
@@ -86,11 +93,13 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
   // key cannot already be counted — `counted` is cleared when the burst opens
   // and nothing is emitted until it closes.
   function emit(key: string, item: T): void {
-    if (used >= ceiling) return;
+    const isCompile = key.startsWith("compile:");
+    if (isCompile ? compileUsed >= compileCeiling : used >= ceiling) return;
     const current = running.get(key);
     if (current) current.emitted = true;
     counted.add(key);
-    used += 1;
+    if (isCompile) compileUsed += 1;
+    else used += 1;
     opts.emit(item);
   }
 

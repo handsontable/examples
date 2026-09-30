@@ -9,6 +9,7 @@ import {
   MONITOR_MESSAGE_MAX,
   MONITOR_MESSAGE_TYPE,
   MONITOR_RESET,
+  postMonitorReset,
   MONITOR_STACK_MAX,
   MONITOR_URL_MAX,
   REPORTER_MODULE_LINE,
@@ -747,6 +748,20 @@ test("reporter stops at the ceiling", () => {
     h.fire("error", { error: new Error(`distinct ${i}`) });
   }
   assert.equal(h.sent.length, MONITOR_EVENT_CEILING);
+});
+
+test("the reset postMonitorReset posts re-arms a spent reporter, and a detached frame is tolerated", () => {
+  const h = runReporter();
+  for (let i = 0; i < MONITOR_EVENT_CEILING; i++) h.fire("error", { error: new Error(`spent ${i}`) });
+  h.fire("error", { error: new Error("dropped") });
+  assert.equal(h.sent.length, MONITOR_EVENT_CEILING, "guard: the 21st distinct error is dropped");
+
+  postMonitorReset({ postMessage: (data, origin) => { assert.equal(origin, "*"); h.fire("message", { source: h.parent, data }); } });
+  h.fire("error", { error: new Error("dropped") });
+  assert.equal(h.sent.length, MONITOR_EVENT_CEILING + 1, "the same error relays once the reset lands");
+
+  postMonitorReset(null);
+  postMonitorReset({ postMessage() { throw new Error("detached"); } });
 });
 
 test("a reset from the parent re-arms the error budget and dedupe for the next run, not the warning budget", () => {

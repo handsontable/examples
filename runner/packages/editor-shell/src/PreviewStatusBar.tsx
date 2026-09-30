@@ -31,6 +31,8 @@ export interface PreviewStatusBarProps {
   frameworkName?: string;
   /** Bare version; the `Handsontable` prefix belongs to this bar (`48:6707`). */
   version: string;
+  /** The preview shows the last successful run; the bar says so. */
+  stale?: boolean;
   /** Start the sign-in flow (DEV-2505). It lives here, not in the top bar, because
    *  the login is `@handsontable.com`-only: most visitors to this page cannot use
    *  it, and a top-bar button read as a call to action aimed at them. Passed only
@@ -39,7 +41,7 @@ export interface PreviewStatusBarProps {
   onSignIn?: () => void;
 }
 
-export function PreviewStatusBar({ status, frameworkName, version, onSignIn }: PreviewStatusBarProps) {
+export function PreviewStatusBar({ status, frameworkName, version, stale, onSignIn }: PreviewStatusBarProps) {
   return (
     // Not `role="status"`/`aria-live`: booting → ready fires on every example switch and
     // every version change, and announcing each one is noise. The machine-readable
@@ -49,6 +51,7 @@ export function PreviewStatusBar({ status, frameworkName, version, onSignIn }: P
       <span style={left}>
         <span style={{ ...dot, background: DOT[status] }} />
         {status}
+        {stale && <span style={staleNote}>· Showing last successful run</span>}
       </span>
       <span style={right}>
         {frameworkName && <span style={clamp}>{frameworkName}</span>}
@@ -66,6 +69,8 @@ export function PreviewStatusBar({ status, frameworkName, version, onSignIn }: P
     </div>
   );
 }
+
+const staleNote: CSSProperties = { marginLeft: 4, color: theme.color.textMuted };
 
 const left: CSSProperties = { display: "flex", alignItems: "center", gap: 4 };
 

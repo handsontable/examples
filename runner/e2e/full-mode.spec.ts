@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { abortSandpackHosts } from "./helpers";
 
 // Full mode in `play` (ADR-0027 §13). Deterministic — no `E2E_LIVE=1`: every
 // assertion here is about chrome and the URL, and `PreviewPane` renders its
@@ -17,8 +18,7 @@ async function openPlayground(page: Page, query = "?example=react") {
   await page.route("**/api/versions", (route) =>
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
   );
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   await page.goto(`/${query}`);
   await expect(page.frameLocator("iframe[title='Demo preview']").owner()).toBeVisible();
 }
@@ -162,8 +162,7 @@ test("maximize opens a tab that inherits the session, so it is still signed in",
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
   );
   await page.route("**/broker/userinfo", (route) => route.fulfill({ json: { email: "e2e@handsontable.com" } }));
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
 
   // `/share/:id` rather than `/edit/:id`: it reaches the same `onMaximize` (both are
   // `route.mode !== "play"`) without an auth gate to satisfy first, so the test stays

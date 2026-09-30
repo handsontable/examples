@@ -390,9 +390,8 @@ test("a blocked compiler chunk cards, and Restart preview really recovers", asyn
   );
   test.setTimeout(120_000);
   // Deterministic in the strict sense: `stubShell` alone is not enough here. A `parcel`
-  // sandbox loads its bundler from a *versioned* host (measured: 2-19-8-sandpack.codesandbox.io)
-  // plus jsdelivr and prod-packager-packages, none of which stubShell's two globs match — so
-  // this case would have quietly depended on the external bundler. Everything off-localhost is
+  // sandbox also loads jsdelivr and prod-packager-packages, which stubShell does not abort, so
+  // this case would quietly depend on the external bundler. Everything off-localhost is
   // aborted instead, which costs the `ready` end-state (that one is the E2E_LIVE case below)
   // and keeps a sharper oracle: with the bundler unreachable, `booting` means our transpile
   // finished and handed the sandbox over, and `error` means it did not.

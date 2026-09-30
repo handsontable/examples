@@ -12,6 +12,7 @@
 // as falsy and falling back to `meta.ht_version` puts the sentinel straight back.
 
 import { test, expect, type Page } from "@playwright/test";
+import { abortSandpackHosts } from "./helpers";
 
 const SAVED_ID = "e2ever0001";
 const DEMO_FILES = {
@@ -41,8 +42,7 @@ async function stubSavedDemo(page: Page, htVersion: string | null) {
     }),
   );
   // No live bundler in CI, and the boot is not what these tests are about.
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   await page.route("**/broker/login**", (route) => route.abort());
 }
 

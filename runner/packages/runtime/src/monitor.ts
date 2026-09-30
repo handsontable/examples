@@ -37,6 +37,16 @@ export const MONITOR_EVENT_CEILING = 20;
  *  budget and dedupe are per run, because the preview document outlives its runs. */
 export const MONITOR_RESET = "run";
 
+/** Re-arm the reporter in `target`'s document; a detached frame is ignored because its
+ *  next document starts with a fresh budget anyway. */
+export function postMonitorReset(target: { postMessage(message: unknown, origin: string): void } | null | undefined): void {
+  try {
+    target?.postMessage({ type: MONITOR_MESSAGE_TYPE, reset: MONITOR_RESET }, "*");
+  } catch {
+    /* detached frame */
+  }
+}
+
 /**
  * Ceiling on relayed `console-warn` events per page load, counted separately from
  * `MONITOR_EVENT_CEILING` (DEV-2539).

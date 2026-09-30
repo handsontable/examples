@@ -34,6 +34,8 @@ export interface PreviewPaneProps {
   syncing?: boolean;
   /** A row-2 refresh is in flight (`72:26445`). */
   refreshing?: boolean;
+  /** The frame shows the last successful run; exposed as `data-preview-stale`. */
+  stale?: boolean;
 }
 
 /** Clean a raw boot log into a few readable recent lines.
@@ -76,6 +78,7 @@ export function PreviewPane({
   onRetry,
   syncing,
   refreshing,
+  stale,
 }: PreviewPaneProps) {
   const booting = status === "booting";
   const failed = status === "error";
@@ -91,7 +94,7 @@ export function PreviewPane({
     // break the suite again. Both it and `aria-label` are a test contract
     // (`e2e/starter-matrix.spec.ts:144`, `e2e/docs-examples.spec.ts:305`) — leave them,
     // and leave the iframe a descendant of this section.
-    <section style={s.previewPane} aria-label="Preview" data-preview-status={status}>
+    <section style={s.previewPane} aria-label="Preview" data-preview-status={status} data-preview-stale={stale ? "true" : undefined}>
       {showSyncing && (
         <div style={syncPill}>
           <Spinner onAccent />

@@ -1,7 +1,7 @@
 import { test, expect, type Route, type Page } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { activeEditor, flushFaro, previewReady, stubShell } from "./helpers.js";
+import { activeEditor, flushFaro, previewReady, stubShell, abortSandpackHosts } from "./helpers.js";
 import { fingerprint } from "../packages/runtime/src/telemetry/fingerprint.js";
 
 // Faro in the authoring app. Gated: needs a dist built with
@@ -424,8 +424,7 @@ test.describe("Faro in the authoring app", () => {
 
   test("reportError (a handled diagnostic) reaches Faro, fingerprinted by its context, tagged handled=true", async ({ page }) => {
     await page.route("**/api/versions", (route) => route.fulfill({ status: 500, body: "boom" }));
-    await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-    await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+    await abortSandpackHosts(page);
     await page.route("**/broker/login**", (route) => route.abort());
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -498,8 +497,7 @@ test.describe("Faro in the authoring app", () => {
 
   test("no captured payload carries a query string, a user-agent string, an email, console text, or a Babel code frame", async ({ page }) => {
     await page.route("**/api/versions", (route) => route.fulfill({ status: 500, body: "boom" }));
-    await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-    await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+    await abortSandpackHosts(page);
     await page.route("**/broker/login**", (route) => route.abort());
     const captured = captureTelemetry(page);
     // A harmless query param + fragment on the page URL itself — `App.tsx`
@@ -562,8 +560,7 @@ test.describe("Faro in the authoring app", () => {
 
   test("reportError reaches Sentry under full scope", async ({ page }) => {
     await page.route("**/api/versions", (route) => route.fulfill({ status: 500, body: "boom" }));
-    await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-    await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+    await abortSandpackHosts(page);
     await page.route("**/broker/login**", (route) => route.abort());
     await page.goto("/");
     await expect.poll(() => readSentryEvents(page).then((e) => e.length)).toBeGreaterThan(0);
@@ -1004,8 +1001,7 @@ test.describe("Sentry scope switch = uncaught", () => {
 
   test("reportError does NOT reach Sentry under uncaught scope, but still reaches the facade", async ({ page }) => {
     await page.route("**/api/versions", (route) => route.fulfill({ status: 500, body: "boom" }));
-    await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-    await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+    await abortSandpackHosts(page);
     await page.route("**/broker/login**", (route) => route.abort());
     const captured = captureTelemetry(page);
     await page.goto("/");

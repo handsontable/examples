@@ -514,3 +514,43 @@ test("without the monitor injected, no reset is posted into the preview", async 
   await settle();
   assert.deepEqual(posted, []);
 });
+
+test("a failed transpile marks the preview stale; a rerun start, an unchanged push or a clean done clears it", async () => {
+  const { runtime } = mountedParcel();
+  const changes = [];
+  runtime.onStaleChange((stale) => changes.push(stale));
+  const broken = () => runtime.writeFile("/index.js", BASE_SOURCE + "const R9C = ;\n");
+
+  broken();
+  await settle();
+  broken();
+  await settle();
+  assert.deepEqual(changes, [true], "reported once, not per keystroke");
+
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n");
+  await settle();
+  assert.deepEqual(changes, [true], "dispatched but not yet running: still the old render");
+  runtime.onMessage({ type: "start" });
+  assert.deepEqual(changes, [true, false], "the bundler started the fixed run");
+
+  broken();
+  await settle();
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n"); // back to what the bundler holds
+  await settle();
+  assert.deepEqual(changes, [true, false, true, false], "undoing the break re-runs nothing and clears it");
+
+  broken();
+  await settle();
+  runtime.onMessage({ type: "done" });
+  assert.deepEqual(changes.slice(4), [true, false], "a clean done clears it");
+});
+
+test("a superseded keystroke's transpile failure does not mark the preview stale", async () => {
+  const { runtime } = mountedParcel();
+  const changes = [];
+  runtime.onStaleChange((stale) => changes.push(stale));
+  runtime.writeFile("/index.js", BASE_SOURCE + "const R9C = \n");
+  runtime.writeFile("/index.js", BASE_SOURCE + "const R9C = 1;\n");
+  await settle();
+  assert.deepEqual(changes, []);
+});

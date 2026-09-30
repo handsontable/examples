@@ -118,7 +118,7 @@ const REGISTRY_DATA = {
   },
   "sandpack.compile_error": {
     emittedBy: "browser",
-    blobs: ["framework", "ht_major", "fingerprint"],
+    blobs: ["framework", "ht_major", "fingerprint", "bucket"],
     doubles: ["count"],
   },
   "sandpack.bundler_unreachable": {

@@ -67,6 +67,7 @@ import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
 import { ApiTokensPage } from "./ApiTokens.js";
 import { useProfile } from "./useProfile.js";
+import { DEMO_EDIT_SETTLE_MS } from "./demoEventCollapse.js";
 import {
   diagnosticsGoToSentry,
   monitorDemos,
@@ -1196,6 +1197,9 @@ function Authoring({
   const refreshSeqRef = useRef(0);
   const containerModeRef = useRef(false);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The edit that broke the build has settled and the preview still shows the last good run.
+  const [previewStale, setPreviewStale] = useState(false);
+  const staleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Bumped whenever the whole workspace is replaced (example switch or fork) so
   // the runtime remounts even when the framework is unchanged.
   const [mountGen, setMountGen] = useState(0);
@@ -2571,6 +2575,8 @@ function Authoring({
     setStatus("booting");
     setBootLog("");
     setSyncing(false);
+    if (staleTimerRef.current) clearTimeout(staleTimerRef.current);
+    setPreviewStale(false);
     // A remount supersedes any refresh. Bump the sequence as well as clearing the flag,
     // so the superseded promise's own settle can't turn the spinner back off later.
     refreshSeqRef.current += 1;
@@ -2608,11 +2614,26 @@ function Authoring({
     // `demoContext()`'s engine-derived value, never the catalog `entry.tier`
     // (the two disagree for the UI-library starters). Compile errors go
     // through the same edit-burst collapse as the preview's runtime relays.
-    wireRuntimeMetrics(runtime, { framework: entry.framework, versionRef: v.value.ref }, telemetry, {
-      collapseCompileError,
-    });
+    wireRuntimeMetrics(
+      runtime,
+      {
+        framework: entry.framework,
+        versionRef: v.value.ref,
+        bucket: () => (docsPath ? activeDocsBucketRef.current : activeStarterBucketRef.current) ?? undefined,
+      },
+      telemetry,
+      { collapseCompileError },
+    );
     // An edit that re-runs nothing must not leave its burst without the running sandbox's errors.
     if (runtime instanceof SandpackRuntime) runtime.onPushOutcome(noteDemoPushOutcome);
+    // Surfaced only once the edit burst has settled, not per broken keystroke.
+    if (runtime instanceof SandpackRuntime) {
+      runtime.onStaleChange((stale) => {
+        if (staleTimerRef.current) clearTimeout(staleTimerRef.current);
+        if (!stale) return setPreviewStale(false);
+        staleTimerRef.current = setTimeout(() => !cancelled && setPreviewStale(true), DEMO_EDIT_SETTLE_MS);
+      });
+    }
     const previewTracker = trackPreviewReady(
       runtime,
       {
@@ -3340,6 +3361,7 @@ function Authoring({
         }
         syncing={syncing}
         refreshing={refreshing}
+        stale={previewStale}
         version={version}
         versionOptions={docsPath ? versionOptions : versionsForEntry(versionOptions, entry.minCoreMajor)}
         onVersionChange={changeVersion}
