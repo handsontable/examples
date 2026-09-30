@@ -45,6 +45,7 @@ import {
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
 import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } from "./import-url.js";
+import { VERSION_QUERY_RE, sessionIdFits } from "./storage-key.js";
 import { BuildFailure, buildFailureTags, createDemo, createPendingDemo, demoBuildState, getDemo, getDemoSource, hasCachedBuild, invalidateDemo, isUserBuildError, serveDemoAsset, shortId, updateDemo, userBuildErrorDetail, withEntryScript, type DemoRow } from "./share.js";
 import { BuildJobBase, scheduleSnapshotBuild } from "./snapshot-jobs.js";
 import {
@@ -912,6 +913,10 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         const cfg = BUILD_CONFIG[body.framework];
         if (!dev || !cfg) return json({ error: `Tier-2 not wired for framework: ${body.framework}` }, 400);
         const files = validateFiles(body.files);
+        // The id becomes a KV key suffix and a DO name; an overlong one is a client mistake, not a 500.
+        if (typeof body.sessionId === "string" && body.sessionId.trim() && !sessionIdFits(body.sessionId.trim())) {
+          return json({ error: "invalid session id" }, 400);
+        }
         // `session.start` (contract §5, "all outcomes"): one point per create
         // attempt regardless of how it ends, timed from here.
         const createStartedAt = Date.now();
@@ -1244,6 +1249,10 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // covered by default instead of each hand-copying the check.
       if (parts[0] === "api" && parts[1] === "session" && parts.length >= 4) {
         const sessionId = parts[2]!;
+        // An overlong id makes the tombstone/meter KV reads throw, which those
+        // helpers swallow as "no marker" / "metered", waving an invented id
+        // through to a sandbox boot.
+        if (!sessionIdFits(sessionId)) return json({ error: "invalid session id" }, 400);
         const gateRequest = { method: request.method, sub: parts[3] };
         const refuse = (verdict: ReturnType<typeof sessionGateVerdict>) =>
           verdict === "noop" ? cors(new Response(null, { status: 204 })) : json({ error: "session closed" }, 410);
@@ -1337,6 +1346,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // discards the response); the admin panel's kill button goes through the
       // same `teardownLiveSession`.
       if (request.method === "DELETE" && parts[0] === "api" && parts[1] === "session" && parts.length === 3) {
+        if (!sessionIdFits(parts[2]!)) return json({ error: "invalid session id" }, 400);
         await teardownLiveSession(env, parts[2]!);
         return cors(new Response(null, { status: 204 }));
       }
@@ -1948,6 +1958,10 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       if (request.method === "GET" && parts[0] === "api" && parts[1] === "versions" && parts[2] === "exists") {
         const v = url.searchParams.get("v")?.trim() ?? "";
         if (!v) return json({ error: "v is required" }, 400);
+        // Shape-check before the KV read: a KV key is capped at 512 bytes, so an
+        // overlong `v` makes `get` throw and an anonymous caller would mint a 500.
+        // Real versions and dist-tags are short ASCII.
+        if (!VERSION_QUERY_RE.test(v)) return json({ error: "v is not a valid version" }, 400);
         const cacheKey = `version-exists:${v}`;
         const cached = await env.CACHE.get(cacheKey, "json");
         if (cached) return cors(cacheableJson(cached));

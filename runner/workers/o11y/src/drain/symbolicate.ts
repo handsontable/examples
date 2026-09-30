@@ -63,6 +63,8 @@ function isBabelChunk(filename: string): boolean {
   }
 }
 
+const R2_KEY_MAX_BYTES = 1024;
+
 /** `sourcemaps/<service.version>/<original asset path>.map` (ADR §C.3).
  *  `null` when `filename` is not a parseable URL — a preview-host frame
  *  correctly never resolves to a real map. */
@@ -73,7 +75,9 @@ function mapKeyFor(filename: string, serviceVersion: string): string | null {
     // without this the symbolicator would fetch a nonexistent map and
     // report it as missing.
     if (url.pathname.endsWith("/")) return null;
-    return `sourcemaps/${serviceVersion}${url.pathname}.map`;
+    const key = `sourcemaps/${serviceVersion}${url.pathname}.map`;
+    // R2 throws on a key over 1024 bytes; the frame's path is browser-supplied, so it cannot name a map.
+    return new TextEncoder().encode(key).length > R2_KEY_MAX_BYTES ? null : key;
   } catch {
     return null;
   }

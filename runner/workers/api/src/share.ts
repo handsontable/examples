@@ -18,6 +18,7 @@ import { recordContainerUsage, SESSION_INSTANCE_TYPE } from "./budget.js";
 import { htmlEntryLoadsModule, snapshotBuildCommand } from "./build-command.js";
 import { htMajorFromVersion, injectLiteHtml } from "./monitor-inject.js";
 import { emitPoint } from "./telemetry/points.js";
+import { kvKeyFits, r2KeyFits } from "./storage-key.js";
 
 type SandboxLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
@@ -723,6 +724,8 @@ export async function updateDemo(
 
 export async function getDemo(env: Env, id: string): Promise<DemoRow | null> {
   const cacheKey = `demo:${id}`;
+  // A KV key is capped at 512 bytes; no minted id is near that, so an overlong one is a miss.
+  if (!kvKeyFits(cacheKey)) return null;
   const cached = await env.CACHE.get(cacheKey, "json");
   if (cached) return cached as DemoRow;
   const row = await env.DB.prepare("SELECT * FROM demos WHERE id = ?").bind(id).first<DemoRow>();
@@ -888,7 +891,9 @@ export async function serveDemoAsset(
     if (isDocRequest) record(404, 0);
     return new Response("Not found", { status: 404 });
   }
-  const candidates = clean === "" ? ["index.html"] : [clean, `${clean}/index.html`, "index.html"];
+  // R2 throws on an object key over 1024 bytes; an overlong path cannot name an object, so skip it.
+  const candidates = (clean === "" ? ["index.html"] : [clean, `${clean}/index.html`, "index.html"])
+    .filter((c) => r2KeyFits(row.r2_prefix + c));
 
   let obj: R2ObjectBodyText | null = null;
   let hitPath = "index.html";
