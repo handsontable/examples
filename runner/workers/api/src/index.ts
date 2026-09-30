@@ -38,6 +38,7 @@ import {
   isAtCapacityFailure,
   isContainerStartingFailure,
   isExpectedTeardownFailure,
+  sessionGateVerdict,
   TOMBSTONE_ATTEMPTED,
   TOMBSTONE_DESTROYED,
   TOMBSTONE_TTL_SECONDS,
@@ -1243,19 +1244,21 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // covered by default instead of each hand-copying the check.
       if (parts[0] === "api" && parts[1] === "session" && parts.length >= 4) {
         const sessionId = parts[2]!;
-        if (await isTombstoned(env, sessionId)) {
-          // A file delete against a torn-down session is a satisfied no-op;
-          // everything else reports the session gone.
-          if (request.method === "DELETE" && parts[3] === "file") {
-            return cors(new Response(null, { status: 204 }));
-          }
-          return json({ error: "session closed" }, 410);
-        }
+        const gateRequest = { method: request.method, sub: parts[3] };
+        const refuse = (verdict: ReturnType<typeof sessionGateVerdict>) =>
+          verdict === "noop" ? cors(new Response(null, { status: 204 })) : json({ error: "session closed" }, 410);
+        const tombstoneVerdict = sessionGateVerdict({ tombstoned: await isTombstoned(env, sessionId), metered: true }, gateRequest);
+        if (tombstoneVerdict !== "pass") return refuse(tombstoneVerdict);
         // The cost ceiling belongs here too, for the same reason the tombstone
         // check does: every subroute below reaches the sandbox, and every
-        // sandbox RPC boots a container.
+        // sandbox RPC boots a container. Ahead of the meter check so an unknown
+        // id at `anon_blocked`/`new_blocked` still gets the budget's own 401/503.
         const overBudget = await sessionSubrouteGuard(env, sessionId);
         if (overBudget) return overBudget;
+        // No meter (a torn-down id whose tombstone has expired, or an id we never
+        // created): a sandbox RPC would boot an unmetered container (DEV-3147).
+        const meterVerdict = sessionGateVerdict({ tombstoned: false, metered: await hasSessionMeter(env, sessionId) }, gateRequest);
+        if (meterVerdict !== "pass") return refuse(meterVerdict);
       }
 
       // POST /api/session/:id/file  { path, contents } -> 204   (streams an edit; HMR picks it up)

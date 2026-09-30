@@ -3094,6 +3094,9 @@ function Authoring({
     setSaving(true);
     setErrorMessage(null);
     setSaveError(null);
+    // What this PATCH carries. Typing during the 8–14 s rebuild replaces `files`, and
+    // those edits are not in the request, so they must stay dirty (DEV-3147).
+    const sentFiles = filesRef.current;
     try {
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/demos/${savedId}`, {
@@ -3103,7 +3106,7 @@ function Authoring({
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         }),
         body: JSON.stringify({
-          files: filesRef.current,
+          files: sentFiles,
           htVersion: version,
           // The API worker writes `example.saved` (ADR-0042 §2) from this once the
           // rebuild lands, so a visitor who leaves before the response still counts.
@@ -3111,7 +3114,7 @@ function Authoring({
         }),
       });
       await assertApiOk(res, `save failed (${res.status})`);
-      clearDirty();
+      if (filesRef.current === sentFiles) clearDirty();
       // Fallback for an API without the marker; remove once every deployed API sends it.
       if (browserCountsSave(await res.json().catch(() => null))) noteExampleAction("example.saved");
     } catch (e) {
@@ -3176,6 +3179,22 @@ function Authoring({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [user, route.mode, saving, onSave, editInfoOpen, shareLinksOpen]);
+
+  // A save rebuilds the snapshot in 8–14 s and its edits live only in this tab until
+  // the PATCH is accepted, so a reload or close inside that window (or before Save
+  // was pressed) silently loses them (DEV-3147). Armed only on the edit page, only
+  // while there is something to lose, so the browser's prompt never nags otherwise.
+  const editsAtRisk = route.mode === "edit" && (saving || dirty);
+  useEffect(() => {
+    if (!editsAtRisk) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      // The standard opt-in; the browser shows its own generic text.
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [editsAtRisk]);
 
   /** Row-2 refresh (`72:15708`). Reloads the running preview in place — never a
    *  remount, which for Tier 2 would mint a fresh container session per click.

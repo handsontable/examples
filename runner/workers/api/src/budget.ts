@@ -78,8 +78,9 @@ const KV_STATE_TTL_SECONDS = 300;
 /** Per-session awake-window meter. */
 export const KV_METER_PREFIX = "session-meter:";
 /** How long a meter key outlives the session it measures. Deliberately far past
- *  `sleepAfter`: `hasSessionMeter` doubles as the budget subroute gate's "is this
- *  a session we created" check, and flushes only happen on keepalive ticks from a
+ *  `sleepAfter`: `hasSessionMeter` is the liveness oracle for every
+ *  `/api/session/:id/*` route at every budget tier (a meterless id is refused,
+ *  DEV-3147), and flushes only happen on keepalive ticks from a
  *  VISIBLE tab, so a shorter TTL would start refusing hidden-then-resumed tabs at
  *  `anon_blocked`. The admin panel therefore has to filter on liveness (DEV-2567)
  *  rather than lean on this expiry. */
@@ -313,10 +314,12 @@ const meterMetadata = (meter: SessionMeter): SessionMeterMetadata =>
  *
  * The meter key exists from the first sandbox RPC until teardown, which makes
  * it the cheapest available answer to "is this a live session, or an id
- * someone invented?". Used by the subroute gate: at `new_blocked` a write to
- * an unknown id would boot a brand-new container, which is precisely what that
- * tier exists to stop. A KV failure answers "yes" — refusing real sessions on
- * a KV hiccup is worse than letting one through.
+ * someone invented?". Used by the subroute gate at every tier: a write or status
+ * call to an unknown or torn-down id would boot a brand-new, unmetered
+ * container (DEV-3147). A KV failure answers "yes" — refusing real sessions on
+ * a KV hiccup is worse than letting one through. A stale `null` from another
+ * location is not covered by that; the meter is written before the create
+ * returns, so a client's first poll normally reads it from the same one.
  */
 export const hasSessionMeter = async (env: Env, sessionId: string): Promise<boolean> =>
   (await env.CACHE.get(meterKey(sessionId)).catch(() => "1")) !== null;
@@ -329,10 +332,14 @@ export async function startSessionMeter(
 ): Promise<void> {
   const now = Date.now();
   const meter: SessionMeter = { startedAt: now, meteredThrough: now, instanceType, ...(framework ? { framework } : {}) };
-  await env.CACHE.put(meterKey(sessionId), JSON.stringify(meter), {
-    expirationTtl: KV_METER_TTL_SECONDS,
-    metadata: meterMetadata(meter),
-  }).catch(() => { /* metering is best effort; never fail a session on it */ });
+  const write = () =>
+    env.CACHE.put(meterKey(sessionId), JSON.stringify(meter), {
+      expirationTtl: KV_METER_TTL_SECONDS,
+      metadata: meterMetadata(meter),
+    });
+  // Retried once: the gate treats a missing meter as a dead session (DEV-3147), so a
+  // lost write would otherwise leave a booted container that refuses every request.
+  await write().catch(() => write()).catch(() => { /* metering is best effort; never fail a session on it */ });
 }
 
 /** What a meter read learned about its session. */

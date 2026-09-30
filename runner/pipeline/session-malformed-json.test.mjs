@@ -63,6 +63,8 @@ test("a malformed POST /api/session body is a 400, not the fetch catch-all's 500
 
 test("a malformed POST /api/session/:id/file body is a 400, not a 500", async () => {
   const { env } = envWithPointCapture();
+  // The resurrection gate refuses an id with no meter (DEV-3147), so this must be a live session.
+  await env.CACHE.put("session-meter:sess-1", JSON.stringify({ startedAt: 0, meteredThrough: 0, instanceType: "standard-3" }));
   const res = await worker.fetch(malformedJsonRequest("POST", "/api/session/sess-1/file"), env, ctx);
   assert.equal(res.status, 400, "must not reach the generic 500 catch-all");
   const body = await res.json();

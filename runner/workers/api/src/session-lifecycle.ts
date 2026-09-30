@@ -65,6 +65,29 @@ export function destroyConfirmed(marker: string | null | undefined): boolean {
   return marker === TOMBSTONE_DESTROYED;
 }
 
+/** What the `/api/session/:id/*` gate does with a request: let it through, answer
+ *  it as a satisfied no-op, or report the session gone. */
+export type SessionGateVerdict = "pass" | "noop" | "gone";
+
+/**
+ * The resurrection gate's decision, kept out of `index.ts` so a test can execute
+ * it (the Worker entrypoint cannot be imported there).
+ *
+ * A session is refused when it is tombstoned OR has no meter. The tombstone only
+ * lasts `TOMBSTONE_TTL_SECONDS`; after that a torn-down id looks like any other
+ * id, and the next sandbox RPC boots a container no meter books (DEV-3147). The
+ * meter is written at create and deleted at teardown, so its absence is what
+ * "unknown or destroyed" looks like once the tombstone is gone. A file delete
+ * against such a session is a satisfied no-op; everything else reports it gone.
+ */
+export function sessionGateVerdict(
+  session: { tombstoned: boolean; metered: boolean },
+  request: { method: string; sub: string | undefined },
+): SessionGateVerdict {
+  if (!session.tombstoned && session.metered) return "pass";
+  return request.method === "DELETE" && request.sub === "file" ? "noop" : "gone";
+}
+
 // ---- platform failure classification --------------------------------------
 
 /** Bound on the `.cause` walk. A self-referencing cause is not hypothetical. */
