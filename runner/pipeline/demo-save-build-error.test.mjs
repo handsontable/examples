@@ -203,3 +203,51 @@ for (const [name, factory] of INFRA_FAILURES) {
     assert.deepEqual(await requestOutcomes(pointsOf), ["5xx"]);
   });
 }
+
+// DEV-3143: `Failed to fetch` / `fetch failed` are free text, so an author's own build output can
+// print them. Only an error line (`TypeError: fetch failed`) counts as the tool naming infrastructure.
+const USER_BUILD_FAILURES_PRINTING_INFRA_TEXT = [
+  ["a build script that logs `Failed to fetch` before a real compile error", { stdout: "Failed to fetch\n", stderr: SYNTAX_ERROR_LOG }],
+  ["a build script that logs `fetch failed` before a real compile error", { stdout: "step 2: fetch failed, using fallback\n", stderr: SYNTAX_ERROR_LOG }],
+  ["a compile error whose last line is the author's own `Failed to fetch` log", { stdout: "", stderr: `${SYNTAX_ERROR_LOG}Failed to fetch\n` }],
+];
+
+for (const [name, output] of USER_BUILD_FAILURES_PRINTING_INFRA_TEXT) {
+  test(`${name} is the author's build error: 422, not a 5xx`, async () => {
+    setSandboxFactory(builder(() => ({ success: false, exitCode: 1, ...output })));
+    const { env, ctx, pointsOf } = setup();
+    await seedCatalog(env);
+    const res = await worker.fetch(ROUTES[0][1](), env, ctx);
+    assert.equal(res.status, 422);
+    assert.equal((await res.json()).code, "build_failed");
+    assert.deepEqual(await requestOutcomes(pointsOf), ["4xx"]);
+  });
+}
+
+test("a build that exits 1 on undici's own `TypeError: fetch failed` line stays a 5xx", async () => {
+  setSandboxFactory(builder(() => ({
+    success: false,
+    exitCode: 1,
+    stdout: "",
+    stderr: "error during build:\nTypeError: fetch failed\n    at node:internal/deps/undici\n",
+  })));
+  const { env, ctx } = setup();
+  await seedCatalog(env);
+  const res = await worker.fetch(ROUTES[0][1](), env, ctx);
+  assert.equal(res.status, 500);
+});
+
+test("api.request records the exact status of a 5xx in its reason blob, and nothing for a 4xx (DEV-3143)", async () => {
+  const REASON_SLOT = 8; // reason = blob9
+  setSandboxFactory(builder(() => ({ success: false, exitCode: 137, stdout: "", stderr: "Killed\n" })));
+  const five = setup();
+  await seedCatalog(five.env);
+  assert.equal((await worker.fetch(ROUTES[0][1](), five.env, five.ctx)).status, 500);
+  assert.deepEqual((await five.pointsOf("api.request")).map((p) => p.blobs[REASON_SLOT]), ["500"]);
+
+  setSandboxFactory(rejectsCode);
+  const four = setup();
+  await seedCatalog(four.env);
+  assert.equal((await worker.fetch(ROUTES[0][1](), four.env, four.ctx)).status, 422);
+  assert.deepEqual((await four.pointsOf("api.request")).map((p) => p.blobs[REASON_SLOT]), [""]);
+});

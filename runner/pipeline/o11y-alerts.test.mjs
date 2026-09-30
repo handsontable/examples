@@ -604,9 +604,78 @@ test("newFingerprintRule (real InboxWriter + registry): the keyset cursor progre
   assert.equal(tick4.firing, false, "the cursor must fully catch up within a few ticks, including the later real fingerprint — not stall forever");
 });
 
-test("writeNewFingerprintPoints: one o11y.new_fingerprint point per fingerprint, carrying the fingerprint in its own column, and no alert state", () => {
+test("newFingerprintRule: a failed publish saves no announced state, so the next tick announces the fingerprint again (DEV-3143)", async () => {
+  let cursor;
+  const meta = new Map();
+  const entry = { key: "fpts:000000001699999500000:fp-a", name: "fp-a", firstSeenMs: REALISTIC_NOW_MS - 500_000 };
+  const writer = {
+    async getAlertMeta(k) {
+      return k === CURSOR_META_KEY ? cursor : meta.get(k);
+    },
+    async setAlertMeta(k, v) {
+      if (k === CURSOR_META_KEY) cursor = v;
+      else meta.set(k, v);
+    },
+    async newFingerprintsAfterKey(afterKey) {
+      return { entries: afterKey === null ? [entry] : [], truncated: false };
+    },
+  };
+  await assert.rejects(
+    () => newFingerprintRule(writer, REALISTIC_NOW_MS, async () => { throw new Error("sink down"); }),
+    /sink down/,
+  );
+  assert.equal(cursor, undefined, "the cursor must not advance past a fingerprint whose point was not written");
+  assert.equal(meta.size, 0, "the announced set must not record a fingerprint whose point was not written");
+
+  const published = [];
+  const retry = await newFingerprintRule(writer, REALISTIC_NOW_MS + 60_000, async (fresh) => { published.push(...fresh); });
+  assert.deepEqual(published, ["fp-a"], "the retry publishes the fingerprint the failed tick lost");
+  assert.equal(retry.firing, true);
+  assert.equal(cursor, entry.key);
+});
+
+test("newFingerprintRule: publishes once per fingerprint, and never for one an earlier tick already published", async () => {
+  let cursor;
+  const meta = new Map();
+  const late = { key: "fpts:000000001699999970000:fp-late", name: "fp-late", firstSeenMs: REALISTIC_NOW_MS - 30_000 };
+  const writer = {
+    async getAlertMeta(k) {
+      return k === CURSOR_META_KEY ? cursor : meta.get(k);
+    },
+    async setAlertMeta(k, v) {
+      if (k === CURSOR_META_KEY) cursor = v;
+      else meta.set(k, v);
+    },
+    async newFingerprintsAfterKey(afterKey) {
+      return { entries: afterKey === null ? [late] : [late].filter((e) => e.key > afterKey), truncated: false };
+    },
+  };
+  const published = [];
+  const publish = async (fresh) => { published.push(...fresh); };
+  await newFingerprintRule(writer, REALISTIC_NOW_MS, publish); // inside the grace window: read again next tick
+  await newFingerprintRule(writer, REALISTIC_NOW_MS + 60_000, publish);
+  assert.deepEqual(published, ["fp-late"]);
+});
+
+test("writeNewFingerprintPoints: rejects when the sink throws or rejects, or the contract refuses the point (DEV-3143)", async () => {
+  const throwing = { writeDataPoint() { throw new Error("binding unavailable"); } };
+  await assert.rejects(() => writeNewFingerprintPoints(throwing, COMMON_ATTRS, ["embed:aaaaaaaaaaaaaaaa"]), /binding unavailable/);
+
+  const rejecting = { writeDataPoint: () => Promise.reject(new Error("clickhouse 503")) };
+  await assert.rejects(() => writeNewFingerprintPoints(rejecting, COMMON_ATTRS, ["embed:aaaaaaaaaaaaaaaa"]), /clickhouse 503/);
+
+  // A point the contract refuses can never be written: fail the tick instead of recording it as announced.
   const sink = fakeAeSink();
-  const written = writeNewFingerprintPoints(sink, COMMON_ATTRS, ["embed:2ac0e4fe7b87628d", "tier2-runtime:449d0ca4eac7175c"]);
+  await assert.rejects(
+    () => writeNewFingerprintPoints(sink, { ...COMMON_ATTRS, environment: "not-an-environment" }, ["embed:bbbbbbbbbbbbbbbb"]),
+    /not an allowed "environment"/,
+  );
+  assert.equal(sink._points.length, 0);
+});
+
+test("writeNewFingerprintPoints: one o11y.new_fingerprint point per fingerprint, carrying the fingerprint in its own column, and no alert state", async () => {
+  const sink = fakeAeSink();
+  const written = await writeNewFingerprintPoints(sink, COMMON_ATTRS, ["embed:2ac0e4fe7b87628d", "tier2-runtime:449d0ca4eac7175c"]);
   assert.equal(written, 2);
   assert.equal(sink._points.length, 2);
   for (const point of sink._points) assert.equal(point.indexes[0], "o11y.new_fingerprint");
@@ -617,10 +686,10 @@ test("writeNewFingerprintPoints: one o11y.new_fingerprint point per fingerprint,
   );
 });
 
-test("writeNewFingerprintPoints: caps one tick's points below Analytics Engine's per-invocation write limit", () => {
+test("writeNewFingerprintPoints: caps one tick's points below Analytics Engine's per-invocation write limit", async () => {
   const sink = fakeAeSink();
   const flood = Array.from({ length: MAX_NEW_FINGERPRINT_POINTS_PER_TICK + 50 }, (_, i) => `embed:${String(i).padStart(16, "0")}`);
-  const written = writeNewFingerprintPoints(sink, COMMON_ATTRS, flood);
+  const written = await writeNewFingerprintPoints(sink, COMMON_ATTRS, flood);
   assert.equal(written, MAX_NEW_FINGERPRINT_POINTS_PER_TICK);
   assert.equal(sink._points.length, MAX_NEW_FINGERPRINT_POINTS_PER_TICK);
   assert.ok(MAX_NEW_FINGERPRINT_POINTS_PER_TICK < 250, "Analytics Engine allows 250 data points per Worker invocation");
@@ -825,10 +894,9 @@ test("fiveXxRateRule: over threshold (5%) fires; under threshold (0.5%) does not
 //    session.start/chat.answer/theme.ai's own outcome breakdown — every
 //    other 5xx on those same route classes still counts.
 //  - the "still building" placeholder (d/:id, embed/:id) has no matching
-//    exact count anywhere, so those two route classes are excluded
-//    wholesale (a real "build failed" 500 there is excluded too — a
-//    documented residual gap).
-test("fiveXxRateRule: excludes deliberate refusals via exact counts, and still-building routes wholesale, on an otherwise-healthy tick", async () => {
+//    exact count anywhere, so it is excluded by status: the 503 in `reason`
+//    (the DEV-3143 tests below pin that a build-failed 500 still counts).
+test("fiveXxRateRule: excludes deliberate refusals via exact counts, and still-building 503s, on an otherwise-healthy tick", async () => {
   const rows = [
     // Real, healthy traffic: 0.1% 5xx on its own.
     { metric: "api.request", route_class: "api/demos", outcome: "2xx", count: 999 },
@@ -850,7 +918,7 @@ test("fiveXxRateRule: excludes deliberate refusals via exact counts, and still-b
   const result = await fiveXxRateRule({}, fake.queryFn);
   assert.equal(result.firing, false, "fully-matched deliberate degradations must not push the rate over threshold");
   assert.match(result.detail, /^0\.10% 5xx over the last 15 min \(1\/1000/);
-  assert.ok(fake.calls[0].includes(AE_COLUMNS.route_class), "SQL must filter on the route_class column");
+  assert.ok(fake.calls.some((sql) => sql.includes(AE_COLUMNS.route_class)), "SQL must filter on the route_class column");
 });
 
 test("fiveXxRateRule: a genuine api/session 500 with NO matching session.start refusal count still counts (not hidden by exclusion)", async () => {
@@ -884,6 +952,38 @@ test("fiveXxRateRule: a real problem on a normal route still fires even alongsid
   const result = await fiveXxRateRule({}, fake.queryFn);
   assert.equal(result.firing, true, "the excluded noise must not mask a real problem on a normal route");
   assert.match(result.detail, /^5\.00% 5xx over the last 15 min \(5\/100/);
+});
+
+test("fiveXxRateRule: a still-building 503 on d/:id and embed/:id is excluded, but a build-failed 500 there counts (DEV-3143)", async () => {
+  const healthy = [
+    { metric: "api.request", route_class: "api/demos", outcome: "2xx", count: 900 },
+    { metric: "api.request", route_class: "d/:id", outcome: "2xx", count: 100 },
+    // Build backlog: the placeholder answers 503, carried in `reason`.
+    { metric: "api.request", route_class: "d/:id", outcome: "5xx", reason: "503", count: 400 },
+    { metric: "api.request", route_class: "embed/:id", outcome: "5xx", reason: "503", count: 400 },
+  ];
+  const ok = await fiveXxRateRule({}, makeFakeAeQuery(healthy).queryFn);
+  assert.equal(ok.firing, false, ok.detail);
+
+  const broken = makeFakeAeQuery([
+    ...healthy,
+    // A genuine build-failed 500 on the same routes.
+    { metric: "api.request", route_class: "d/:id", outcome: "5xx", reason: "500", count: 20 },
+    { metric: "api.request", route_class: "embed/:id", outcome: "5xx", reason: "500", count: 10 },
+  ]);
+  const fired = await fiveXxRateRule({}, broken.queryFn);
+  assert.equal(fired.firing, true, "a build-failed 500 on d/:id / embed/:id must not be hidden");
+  assert.match(fired.detail, /^2\.91% 5xx over the last 15 min \(30\/1030/);
+  assert.ok(broken.calls.some((sql) => sql.includes(AE_COLUMNS.reason)), "SQL must filter on the reason column carrying the status");
+});
+
+test("fiveXxRateRule: points written before the status column existed (no reason) on d/:id still read as still-building, so a deploy does not page", async () => {
+  const fake = makeFakeAeQuery([
+    { metric: "api.request", route_class: "api/demos", outcome: "2xx", count: 1000 },
+    { metric: "api.request", route_class: "d/:id", outcome: "5xx", count: 500 },
+  ]);
+  const result = await fiveXxRateRule({}, fake.queryFn);
+  assert.equal(result.firing, false, result.detail);
 });
 
 test("previewReadyRateRule: tier 1 below 97% fires, tier 2 within threshold does not (mixed)", async () => {
@@ -1119,13 +1219,13 @@ test("compileErrorDoublingRule: today >= 2x yesterday (floor met) fires; under t
 
 test("snapshotBuildFailedRateRule: a framework-wide build break fires; one author's failing saves do not", async () => {
   const systemic = makeFakeAeQuery([
-    { metric: "snapshot.build", framework: "next.js", outcome: "failed", count: 12 },
+    ...Array.from({ length: 6 }, (_, i) => ({ metric: "snapshot.build", framework: "next.js", outcome: "failed", demo_id: `d-${i}`, count: 2 })),
     { metric: "snapshot.build", framework: "next.js", outcome: "ok", count: 1 },
     { metric: "snapshot.build", framework: "react", outcome: "ok", count: 40 },
   ]);
   const fired = await snapshotBuildFailedRateRule({}, systemic.queryFn);
   assert.equal(fired.firing, true, fired.detail);
-  assert.match(fired.detail, /next\.js: 92% failed \(12\/13\)/);
+  assert.match(fired.detail, /next\.js: 92% failed \(12\/13, 6 demos\)/);
   assert.doesNotMatch(fired.detail, /react/);
   assert.ok(systemic.calls.some((sql) => sql.includes(`${AE_COLUMNS.outcome} = 'failed'`)), "SQL must filter outcome='failed'");
   assert.ok(systemic.calls.every((sql) => sql.includes("INTERVAL '1800' SECOND")), "30-minute window");
@@ -1143,12 +1243,38 @@ test("snapshotBuildFailedRateRule: a framework-wide build break fires; one autho
   assert.equal(silent.firing, false, silent.detail);
 });
 
+test("snapshotBuildFailedRateRule: one author retrying one broken demo does not fire, failures across several demos do (DEV-3143)", async () => {
+  const oneAuthor = makeFakeAeQuery([
+    { metric: "snapshot.build", framework: "react", outcome: "failed", demo_id: "d-one", count: 15 },
+  ]);
+  const silent = await snapshotBuildFailedRateRule({}, oneAuthor.queryFn);
+  assert.equal(silent.firing, false, silent.detail);
+
+  const twoAuthors = makeFakeAeQuery([
+    { metric: "snapshot.build", framework: "react", outcome: "failed", demo_id: "d-one", count: 8 },
+    { metric: "snapshot.build", framework: "react", outcome: "failed", demo_id: "d-two", count: 8 },
+  ]);
+  assert.equal((await snapshotBuildFailedRateRule({}, twoAuthors.queryFn)).firing, false, "two demos is still an author or two");
+
+  const several = makeFakeAeQuery([
+    { metric: "snapshot.build", framework: "react", outcome: "failed", demo_id: "d-one", count: 4 },
+    { metric: "snapshot.build", framework: "react", outcome: "failed", demo_id: "d-two", count: 4 },
+    { metric: "snapshot.build", framework: "react", outcome: "failed", demo_id: "d-three", count: 4 },
+  ]);
+  const fired = await snapshotBuildFailedRateRule({}, several.queryFn);
+  assert.equal(fired.firing, true, fired.detail);
+  assert.match(fired.detail, /react: 100% failed \(12\/12, 3 demos\)/);
+  assert.ok(several.calls.some((sql) => sql.includes(AE_COLUMNS.demo_id)), "SQL must group failures by the demo_id column");
+});
+
 test("snapshotBuildFailedRateRule fires once and resolves once through the notify machinery", async () => {
   const writer = fakeInboxWriter();
   const sink = fakeAeSink();
   const slackCalls = [];
   const deps = (nowMs) => ({ inboxWriter: writer, postSlack: async (t) => slackCalls.push(t), aeSink: sink, commonAttrs: COMMON_ATTRS, nowMs });
-  const broken = makeFakeAeQuery([{ metric: "snapshot.build", framework: "next.js", outcome: "failed", count: 10 }]);
+  const broken = makeFakeAeQuery(
+    Array.from({ length: 5 }, (_, i) => ({ metric: "snapshot.build", framework: "next.js", outcome: "failed", demo_id: `d-${i}`, count: 2 })),
+  );
   const healthy = makeFakeAeQuery([{ metric: "snapshot.build", framework: "next.js", outcome: "ok", count: 10 }]);
 
   assert.equal(await evaluateAndNotify(await snapshotBuildFailedRateRule({}, broken.queryFn), deps(1000)), "fired");
@@ -1156,7 +1282,7 @@ test("snapshotBuildFailedRateRule fires once and resolves once through the notif
   assert.equal(await evaluateAndNotify(await snapshotBuildFailedRateRule({}, healthy.queryFn), deps(3000)), "resolved");
   assert.equal(slackCalls.length, 2);
   assert.match(slackCalls[0], /snapshot-build-failed-rate/);
-  assert.match(slackCalls[0], /next\.js: 100% failed \(10\/10\)/);
+  assert.match(slackCalls[0], /next\.js: 100% failed \(10\/10, 5 demos\)/);
   assert.match(slackCalls[1], /snapshot-build-failed-rate.*resolved|resolved.*snapshot-build-failed-rate/);
 });
 
