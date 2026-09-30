@@ -304,6 +304,11 @@ const REGISTRY_DATA = {
     doubles: ["count"],
     values: { outcome: ["fired", "resolved"] },
   },
+  "o11y.new_fingerprint": {
+    emittedBy: "o11y worker cron",
+    blobs: ["fingerprint"],
+    doubles: ["count"],
+  },
 } as const satisfies Record<string, MetricDefData>;
 
 export type MetricName = keyof typeof REGISTRY_DATA;

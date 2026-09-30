@@ -12,14 +12,16 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
 const inboxState = await import("../workers/o11y/src/alerts/inbox-state.ts");
 const { memoryStorage, putChunked } = await import("../workers/o11y/src/inbox/storage.ts");
-const { evaluateAndNotify, slackPoster, escapeSlackMrkdwn, notifyFingerprintEvent } = await import(
+const { evaluateAndNotify, slackPoster, escapeSlackMrkdwn, writeNewFingerprintPoints, MAX_NEW_FINGERPRINT_POINTS_PER_TICK } = await import(
   "../workers/o11y/src/alerts/notify.ts"
 );
 const {
   atCapacityRule,
   fiveXxRateRule,
   previewReadyRateRule,
+  PREVIEW_READY_MIN_SAMPLES,
   sessionStartP95Rule,
+  SESSION_START_P95_MIN_SAMPLES,
   embedErrorRateRule,
   compileErrorDoublingRule,
   litellmErrorRateRule,
@@ -602,89 +604,44 @@ test("newFingerprintRule (real InboxWriter + registry): the keyset cursor progre
   assert.equal(tick4.firing, false, "the cursor must fully catch up within a few ticks, including the later real fingerprint — not stall forever");
 });
 
-function fakeInboxWriterMeta() {
-  const meta = new Map();
-  return {
-    async getAlertMeta(key) {
-      return meta.get(key);
-    },
-    async setAlertMeta(key, value) {
-      meta.set(key, value);
-    },
-  };
-}
-
-test("notifyFingerprintEvent posts unconditionally and never writes alert:<rule> state (notify-only, not fire/resolve — C cross-note)", async () => {
-  const posted = [];
-  const postSlack = async (text) => posted.push(text);
-  const aeSink = { writeDataPoint() {} };
-  const commonAttrs = { service_name: "demos-o11y", service_version: "abc", environment: "production" };
-  const inboxWriter = fakeInboxWriterMeta();
-
-  await notifyFingerprintEvent(inboxWriter, postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-a", REALISTIC_NOW_MS);
-  await notifyFingerprintEvent(inboxWriter, postSlack, aeSink, commonAttrs, "new-fingerprint", "new fingerprint(s): fp-b", REALISTIC_NOW_MS);
-
-  // Routing this rule through `evaluateAndNotify` would mean a second
-  // batch of new fingerprints while still "firing" produces no Slack line
-  // at all (fire-once masking). Notify-only posts every time there is
-  // something to report (up to the rate cap — see the test below).
-  assert.equal(posted.length, 2, "every call with something to report must post, not just the first");
-  assert.match(posted[0], /fp-a/);
-  assert.match(posted[1], /fp-b/);
+test("writeNewFingerprintPoints: one o11y.new_fingerprint point per fingerprint, carrying the fingerprint in its own column, and no alert state", () => {
+  const sink = fakeAeSink();
+  const written = writeNewFingerprintPoints(sink, COMMON_ATTRS, ["embed:2ac0e4fe7b87628d", "tier2-runtime:449d0ca4eac7175c"]);
+  assert.equal(written, 2);
+  assert.equal(sink._points.length, 2);
+  for (const point of sink._points) assert.equal(point.indexes[0], "o11y.new_fingerprint");
+  const fingerprintSlot = Number(AE_COLUMNS.fingerprint.replace("blob", "")) - 1;
+  assert.deepEqual(
+    sink._points.map((p) => p.blobs[fingerprintSlot]),
+    ["embed:2ac0e4fe7b87628d", "tier2-runtime:449d0ca4eac7175c"],
+  );
 });
 
-test("notifyFingerprintEvent (rate cap): posts normally up to the per-window cap, then exactly ONE summary line with a count, then resumes normally in the next window", async () => {
-  // Nothing caps how many times this notify-only path could post — a
-  // flood of forged-but-shape-valid fingerprints could post a Slack line
-  // every cron tick forever, spamming the channel and masking a genuine
-  // new fingerprint arriving in the same flood.
-  const posted = [];
-  const postSlack = async (text) => posted.push(text);
-  const aeSink = { writeDataPoint() {} };
-  const commonAttrs = { service_name: "demos-o11y", service_version: "abc", environment: "production" };
-  const inboxWriter = fakeInboxWriterMeta();
+test("writeNewFingerprintPoints: caps one tick's points below Analytics Engine's per-invocation write limit", () => {
+  const sink = fakeAeSink();
+  const flood = Array.from({ length: MAX_NEW_FINGERPRINT_POINTS_PER_TICK + 50 }, (_, i) => `embed:${String(i).padStart(16, "0")}`);
+  const written = writeNewFingerprintPoints(sink, COMMON_ATTRS, flood);
+  assert.equal(written, MAX_NEW_FINGERPRINT_POINTS_PER_TICK);
+  assert.equal(sink._points.length, MAX_NEW_FINGERPRINT_POINTS_PER_TICK);
+  assert.ok(MAX_NEW_FINGERPRINT_POINTS_PER_TICK < 250, "Analytics Engine allows 250 data points per Worker invocation");
+});
 
-  const CAP = 20; // notify.ts#MAX_FINGERPRINT_POSTS_PER_WINDOW
-  const OVERFLOW_TICKS = 5;
-
-  for (let i = 0; i < CAP; i++) {
-    await notifyFingerprintEvent(inboxWriter, postSlack, aeSink, commonAttrs, "new-fingerprint", `new fingerprint(s): fp-${i}`, REALISTIC_NOW_MS);
-  }
-  assert.equal(posted.length, CAP, "every tick up to the cap posts its own detail line");
-
-  for (let i = 0; i < OVERFLOW_TICKS; i++) {
-    await notifyFingerprintEvent(
-      inboxWriter,
-      postSlack,
-      aeSink,
-      commonAttrs,
-      "new-fingerprint",
-      `new fingerprint(s): overflow-${i}`,
-      REALISTIC_NOW_MS + i * 60_000,
-    );
-  }
-  // Exactly ONE additional post for all 5 overflow ticks combined — never
-  // dropped silently (a summary line, not nothing) and never one line per
-  // overflow tick (that would just be the flood again, wearing a
-  // different label).
-  assert.equal(posted.length, CAP + 1, "the whole overflow burst must add exactly one summary post, not zero and not one-per-tick");
-  const summary = posted.at(-1);
-  assert.doesNotMatch(summary, /overflow-/, "the summary must not carry a raw suppressed detail line");
-  assert.match(summary, /\b1\b/, "the summary's count reflects the FIRST overflow tick (when it was sent), not a running total");
-
-  // The next window (an hour later — notify.ts#FINGERPRINT_POST_WINDOW_MS)
-  // posts normally again.
-  await notifyFingerprintEvent(
-    inboxWriter,
-    postSlack,
-    aeSink,
-    commonAttrs,
-    "new-fingerprint",
-    "new fingerprint(s): fp-next-window",
-    REALISTIC_NOW_MS + 61 * 60_000,
+test("newFingerprint panel query: passes the Analytics Engine guard (proves our guard only, not that Analytics Engine accepts it)", async () => {
+  const dashboard = JSON.parse(
+    (await import("node:fs")).readFileSync(
+      new URL("../containers/o11y/grafana/dashboards/observability-self.json", import.meta.url),
+      "utf8",
+    ),
   );
-  assert.equal(posted.length, CAP + 2);
-  assert.match(posted.at(-1), /fp-next-window/);
+  const panel = dashboard.panels.find((p) => p.title === "New handled-error fingerprints (first seen)");
+  assert.ok(panel, "the Observability self dashboard must carry the new-fingerprint table panel");
+  assert.equal(dashboard.uid, "o11y-observability-self");
+  const query = panel.targets[0].query
+    .replace("$timeFilterByColumn(timestamp)", "timestamp >= now() - INTERVAL '21600' SECOND")
+    .replace("$environment", "production");
+  assert.ok(query.includes("index1 = 'o11y.new_fingerprint'"), "the panel must read the metric the cron writes");
+  assert.ok(query.includes(AE_COLUMNS.fingerprint), "the panel must select the fingerprint column");
+  assert.doesNotThrow(() => assertAllowedAeQuery(query));
 });
 
 test("escapeSlackMrkdwn escapes &, < and > in Slack's own order", () => {
@@ -988,10 +945,54 @@ test("previewReadyRateRule: a real below-threshold tier still fires correctly al
   assert.match(result.detail, /tier 1: 80\.0% ready \(80\/100,/, "abandoned must not appear in the reported denominator");
 });
 
+function previewRows(tier, ready, error, abandoned = 0) {
+  return [
+    { metric: "preview.ready_ms", tier, outcome: "ready", count: ready },
+    { metric: "preview.ready_ms", tier, outcome: "error", count: error },
+    ...(abandoned > 0 ? [{ metric: "preview.ready_ms", tier, outcome: "abandoned", count: abandoned }] : []),
+  ];
+}
+
+test("previewReadyRateRule sample floor: 9 non-abandoned previews at 44% ready do not fire, 10 at 50% do", async () => {
+  assert.equal(PREVIEW_READY_MIN_SAMPLES, 10);
+  const below = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("1", 4, 5)).queryFn);
+  assert.equal(below.firing, false, `below the floor the tier is not evaluated: ${below.detail}`);
+
+  const belowTier2 = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("2", 1, 1)).queryFn);
+  assert.equal(belowTier2.firing, false, "the classic 1/2 = 50% page");
+
+  const atFloor = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("1", 5, 5)).queryFn);
+  assert.equal(atFloor.firing, true, atFloor.detail);
+  assert.match(atFloor.detail, /tier 1: 50\.0% ready \(5\/10,/);
+
+  const healthyAtFloor = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("1", 10, 0)).queryFn);
+  assert.equal(healthyAtFloor.firing, false);
+});
+
+test("previewReadyRateRule sample floor: abandoned previews never count toward the floor", async () => {
+  const result = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("1", 2, 3, 1000)).queryFn);
+  assert.equal(result.firing, false, "5 real previews plus 1000 abandoned is still below the floor");
+});
+
+test("previewReadyRateRule sample floor: a firing alert resolves once the tier drops below the floor", async () => {
+  const writer = fakeInboxWriter();
+  const slackCalls = [];
+  const deps = { inboxWriter: writer, postSlack: async (t) => slackCalls.push(t), aeSink: fakeAeSink(), commonAttrs: COMMON_ATTRS, nowMs: 1000 };
+
+  const firing = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("1", 5, 5)).queryFn);
+  assert.equal(await evaluateAndNotify(firing, deps), "fired");
+
+  const quiet = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("1", 1, 1)).queryFn);
+  assert.equal(quiet.firing, false);
+  assert.equal(await evaluateAndNotify(quiet, { ...deps, nowMs: 2000 }), "resolved");
+  assert.equal(slackCalls.length, 2);
+  assert.match(slackCalls[1], /resolved/);
+});
+
 test("sessionStartP95Rule: over 20s fires, under does not; outcome='ready' filter is real, not decorative", async () => {
   const over = makeFakeAeQuery([
-    ...Array.from({ length: 10 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 5000 })),
-    { metric: "session.start", outcome: "ready", duration_ms: 30_000 },
+    ...Array.from({ length: 19 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 5000 })),
+    ...Array.from({ length: 2 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 30_000 })),
   ]);
   const overResult = await sessionStartP95Rule({}, over.queryFn);
   assert.equal(overResult.firing, true, `expected p95 > 20s: ${overResult.detail}`);
@@ -1012,11 +1013,61 @@ test("sessionStartP95Rule: over 20s fires, under does not; outcome='ready' filte
   // drag the computed p95 up. If the filter were dropped, this fake would
   // include the 999999ms row and firing would flip to true.
   const filtered = makeFakeAeQuery([
-    ...Array.from({ length: 10 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 1000 })),
-    { metric: "session.start", outcome: "at_capacity", duration_ms: 999_999 },
+    ...Array.from({ length: 20 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 1000 })),
+    ...Array.from({ length: 5 }, () => ({ metric: "session.start", outcome: "at_capacity", duration_ms: 999_999 })),
   ]);
   const filteredResult = await sessionStartP95Rule({}, filtered.queryFn);
   assert.equal(filteredResult.firing, false, "the at_capacity row's huge duration must be excluded by the outcome filter");
+});
+
+test("sessionStartP95Rule sample floor: 19 ready starts with a 103.9s p95 do not fire, 20 do", async () => {
+  assert.equal(SESSION_START_P95_MIN_SAMPLES, 20);
+  const below = await sessionStartP95Rule({}, makeFakeAeQuery([
+    ...Array.from({ length: 17 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 5000 })),
+    ...Array.from({ length: 2 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 103_900 })),
+  ]).queryFn);
+  assert.equal(below.firing, false, `below the floor the p95 is not evaluated: ${below.detail}`);
+  assert.match(below.detail, /19 ready session\.start/);
+
+  const one = await sessionStartP95Rule({}, makeFakeAeQuery([{ metric: "session.start", outcome: "ready", duration_ms: 103_900 }]).queryFn);
+  assert.equal(one.firing, false, "a single slow start");
+
+  const atFloor = await sessionStartP95Rule({}, makeFakeAeQuery([
+    ...Array.from({ length: 18 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 5000 })),
+    ...Array.from({ length: 2 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 103_900 })),
+  ]).queryFn);
+  assert.equal(atFloor.firing, true, atFloor.detail);
+
+  const healthy = await sessionStartP95Rule({}, makeFakeAeQuery(Array.from({ length: 40 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 5000 }))).queryFn);
+  assert.equal(healthy.firing, false);
+});
+
+test("sessionStartP95Rule sample floor: non-ready starts do not count toward the floor", async () => {
+  const rows = [
+    ...Array.from({ length: 5 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 103_900 })),
+    ...Array.from({ length: 50 }, () => ({ metric: "session.start", outcome: "at_capacity", duration_ms: 50 })),
+  ];
+  const result = await sessionStartP95Rule({}, makeFakeAeQuery(rows).queryFn);
+  assert.equal(result.firing, false);
+});
+
+test("sessionStartP95Rule sample floor: a firing alert resolves once ready starts drop below the floor", async () => {
+  const writer = fakeInboxWriter();
+  const slackCalls = [];
+  const deps = { inboxWriter: writer, postSlack: async (t) => slackCalls.push(t), aeSink: fakeAeSink(), commonAttrs: COMMON_ATTRS, nowMs: 1000 };
+
+  const firing = await sessionStartP95Rule({}, makeFakeAeQuery([
+    ...Array.from({ length: 18 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 5000 })),
+    ...Array.from({ length: 2 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 103_900 })),
+  ]).queryFn);
+  assert.equal(await evaluateAndNotify(firing, deps), "fired");
+
+  const quiet = await sessionStartP95Rule({}, makeFakeAeQuery([
+    ...Array.from({ length: 1 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 5000 })),
+    ...Array.from({ length: 1 }, () => ({ metric: "session.start", outcome: "ready", duration_ms: 103_900 })),
+  ]).queryFn);
+  assert.equal(await evaluateAndNotify(quiet, { ...deps, nowMs: 2000 }), "resolved");
+  assert.match(slackCalls[1], /resolved/);
 });
 
 test("embedErrorRateRule: a demo over 20% error rate with >50 views fires; under threshold and the views floor do not", async () => {
@@ -1319,23 +1370,19 @@ test("runAlerts: a failed setDrainsPaused RPC on the firing tick recovers on the
 // no repeat post, no spurious "resolved" line, and no
 // `alert:new-fingerprint` state ever written at all (unlike every
 // fire/resolve rule, which does write `alert:<rule>` state).
-test("runAlerts: new-fingerprint self-resolves via its own cursor — one Slack line on tick 1, then silence (no 'resolved' line, no alert state) on a clean tick 2", async () => {
-  const { env } = makeEnv(InboxWriter, {
+test("runAlerts: a new fingerprint makes NO Slack call and becomes exactly one o11y.new_fingerprint point; a clean tick 2 writes nothing and no alert state", async () => {
+  const { env, ae } = makeEnv(InboxWriter, {
     env: {
       SLACK_WEBHOOK_URL: "https://hooks.example.test/webhook",
-      // Well under cap, so o11yCapRule stays clean and quiet — this test is
-      // about new-fingerprint's own isolation, not the spend cap.
+      // Well under cap, so o11yCapRule stays clean and quiet.
       API: { fetch: async () => new Response(null, { status: 204 }), o11ySpend: async () => ({ spendUsd: 0, capUsd: 100 }) },
     },
   });
   const writer = env.INBOX_WRITER.jurisdiction("eu").get();
 
-  // `runAlerts` computes its own `nowMs = Date.now()` internally (not
-  // injectable), so the seeded fingerprint's timestamp must be relative to
-  // REAL wall-clock time — comfortably inside newFingerprintRule's one-hour
-  // no-cursor fallback window, and comfortably outside CURSOR_GRACE_MS.
-  const fingerprintMs = Date.now() - 500_000;
-  await writer.ingest("worker", fingerprintMs, [{ hash: "h1", fingerprint: "self-resolve-fp" }]);
+  // `runAlerts` reads Date.now() internally, so the seeded first-seen time is relative to real time:
+  // inside the rule's one-hour no-cursor lookback and outside CURSOR_GRACE_MS.
+  await writer.ingest("worker", Date.now() - 500_000, [{ hash: "h1", fingerprint: "self-resolve-fp" }]);
 
   const posted = [];
   const realFetch = globalThis.fetch;
@@ -1345,34 +1392,29 @@ test("runAlerts: new-fingerprint self-resolves via its own cursor — one Slack 
       posted.push(JSON.parse(init.body).text);
       return new Response(null, { status: 200 });
     }
-    // Any other fetch this tick makes (the Analytics Engine SQL API, for the
-    // unrelated QUERY_RULES) — answer with an empty result set; irrelevant
-    // to what this test asserts.
     return new Response(JSON.stringify({ data: [] }), { status: 200 });
   };
+  const fingerprintPoints = () => ae.points.filter((p) => p.indexes[0] === "o11y.new_fingerprint");
+  const fingerprintSlot = Number(AE_COLUMNS.fingerprint.replace("blob", "")) - 1;
   try {
     const first = await runAlerts(env);
     const firstResult = first.results.find((r) => r.rule === "new-fingerprint");
-    assert.equal(firstResult.firing, true);
+    assert.equal(firstResult.firing, true, "the rule still detects the fingerprint");
     assert.match(firstResult.detail, /self-resolve-fp/);
-    assert.equal(posted.length, 1, "exactly one Slack line for the new fingerprint");
-    assert.match(posted[0], /self-resolve-fp/);
-    assert.equal(first.transitions["new-fingerprint"], undefined, "new-fingerprint is notify-only — never a fire/resolve transition");
+    assert.deepEqual(posted, [], "no Slack message may mention a fingerprint");
+    assert.equal(fingerprintPoints().length, 1, "exactly one chart point for the one new fingerprint");
+    assert.equal(fingerprintPoints()[0].blobs[fingerprintSlot], "self-resolve-fp");
+    assert.equal(first.transitions["new-fingerprint"], undefined);
 
-    // Tick 2: nothing new since the cursor advanced past it on tick 1 — the
-    // rule itself reports firing:false ("self-resolves"), and — because it
-    // was never routed through evaluateAndNotify — there is no stored
-    // "firing" state to transition out of, so nothing is posted at all.
     const second = await runAlerts(env);
-    const secondResult = second.results.find((r) => r.rule === "new-fingerprint");
-    assert.equal(secondResult.firing, false);
-    assert.equal(posted.length, 1, "tick 2 must post NOTHING — no repeat, and no spurious 'resolved' line");
-    assert.equal(second.transitions["new-fingerprint"], undefined);
+    assert.equal(second.results.find((r) => r.rule === "new-fingerprint").firing, false);
+    assert.deepEqual(posted, [], "tick 2 still posts nothing");
+    assert.equal(fingerprintPoints().length, 1, "tick 2 must not chart the same fingerprint again");
   } finally {
     globalThis.fetch = realFetch;
   }
 
-  assert.equal(await writer.alertState("new-fingerprint"), undefined, "new-fingerprint must never write alert:<rule> state at all");
+  assert.equal(await writer.alertState("new-fingerprint"), undefined, "new-fingerprint must never write alert:<rule> state");
 });
 
 // embed:2ac0e4fe7b87628d, first seen 06:42:33, was announced at 06:43:33
@@ -1382,9 +1424,9 @@ test("runAlerts: new-fingerprint self-resolves via its own cursor — one Slack 
 // stays put and the next tick reads the fingerprint again. This replays
 // that timeline through the real runAlerts and InboxWriter, with Date.now
 // pinned per tick because runAlerts reads it internally.
-test("runAlerts: a fingerprint announced on a tick where o11y-spend-cap throws is not announced again on the next tick", async () => {
+test("runAlerts: a fingerprint charted on a tick where o11y-spend-cap throws is not charted again on the next tick", async () => {
   let spendThrows = true;
-  const { env } = makeEnv(InboxWriter, {
+  const { env, ae } = makeEnv(InboxWriter, {
     env: {
       SLACK_WEBHOOK_URL: "https://hooks.example.test/webhook",
       API: {
@@ -1414,11 +1456,14 @@ test("runAlerts: a fingerprint announced on a tick where o11y-spend-cap throws i
     }
     return new Response(JSON.stringify({ data: [] }), { status: 200 });
   };
-  const announcements = () => posted.filter((t) => t.includes("new-fingerprint") && t.includes("2ac0e4fe7b87628d"));
+  const fingerprintSlot = Number(AE_COLUMNS.fingerprint.replace("blob", "")) - 1;
+  const announcements = () =>
+    ae.points.filter((p) => p.indexes[0] === "o11y.new_fingerprint" && p.blobs[fingerprintSlot] === "embed:2ac0e4fe7b87628d");
   try {
     const tick1 = await runAlerts(env);
     assert.match(tick1.errors["o11y-spend-cap"] ?? "", /Network connection lost/, "precondition: spend-cap fails on tick 1");
-    assert.equal(announcements().length, 1, "tick 1 announces the new fingerprint");
+    assert.equal(announcements().length, 1, "tick 1 charts the new fingerprint");
+    assert.deepEqual(posted.filter((t) => /fingerprint|2ac0e4fe7b87628d/.test(t)), [], "and never posts it to Slack");
 
     // 06:57:29: spend-cap still failing on this tick.
     fakeNow = firstSeenMs + 14 * 60_000 + 56_000;
