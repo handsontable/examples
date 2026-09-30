@@ -178,6 +178,9 @@ export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery):
 
 const PREVIEW_READY_THRESHOLD_PCT: Record<string, number> = { "1": 97, "2": 95 };
 
+/** Non-abandoned previews per tier per hour below which the tier is not evaluated, because one failure in two previews (50 %) says nothing about reliability. */
+export const PREVIEW_READY_MIN_SAMPLES = 10;
+
 export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const tierCol = col("tier");
   const results: string[] = [];
@@ -191,8 +194,9 @@ export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQ
       .filter(([outcome]) => outcome !== "abandoned")
       .reduce((sum, [, c]) => sum + c, 0);
     const ready = counts.get("ready") ?? 0;
-    const pct = total > 0 ? ratio(ready, total) * 100 : 100;
-    if (total > 0 && pct < thresholdPct) {
+    if (total < PREVIEW_READY_MIN_SAMPLES) continue;
+    const pct = ratio(ready, total) * 100;
+    if (pct < thresholdPct) {
       anyFiring = true;
       results.push(`tier ${tier}: ${pct.toFixed(1)}% ready (${ready}/${total}, threshold ${thresholdPct}%)`);
     }
@@ -207,19 +211,31 @@ export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQ
 // ---- session-start p95: above 20s (window: 1h — the ADR text names the --
 // threshold but not an evaluation window) -----------------------------------
 
+/** Ready session starts in the window below which the p95 is not evaluated, because a p95 over a handful of starts is one slow start. */
+export const SESSION_START_P95_MIN_SAMPLES = 20;
+
 export async function sessionStartP95Rule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   // p95 over `outcome = 'ready'` only — at_capacity/container_starting/
   // budget_denied refusals return almost instantly and would drag the
   // percentile down, masking a real slow-start problem during overload.
   const outcomeCol = col("outcome");
-  const p95 = await weightedQuantile(env, "session.start", HOUR_MS, 0.95, `AND ${outcomeCol} = 'ready'`, queryFn);
-  const firing = p95 !== null && p95 > 20_000;
+  const readyWhere = `AND ${outcomeCol} = 'ready'`;
+  const [p95, byOutcome] = await Promise.all([
+    weightedQuantile(env, "session.start", HOUR_MS, 0.95, readyWhere, queryFn),
+    countByOutcome(env, "session.start", HOUR_MS, readyWhere, queryFn),
+  ]);
+  // Same metric, window and outcome filter as the quantile, so the count and the p95 describe one population.
+  const readyStarts = byOutcome.get("ready") ?? 0;
+  const enoughSamples = readyStarts >= SESSION_START_P95_MIN_SAMPLES;
+  const firing = enoughSamples && p95 !== null && p95 > 20_000;
   return {
     rule: "session-start-p95",
     firing,
     detail: p95 === null
       ? "no ready session.start samples in the last hour"
-      : `p95 ${(p95 / 1000).toFixed(1)}s (threshold 20s, outcome=ready only)`,
+      : !enoughSamples
+        ? `${readyStarts} ready session.start(s) in the last hour, below the ${SESSION_START_P95_MIN_SAMPLES} needed to evaluate the p95`
+        : `p95 ${(p95 / 1000).toFixed(1)}s (threshold 20s, outcome=ready only)`,
   };
 }
 
@@ -365,6 +381,13 @@ export async function rejectedKeyRule(inboxWriter: InboxWriterApi, nowMs = Date.
 }
 
 // ---- new handled-error fingerprint ------------------------------------------
+// Detection only: `index.ts` charts `fresh` on the Observability self dashboard and
+// posts nothing to Slack.
+
+export interface NewFingerprintResult extends RuleResult {
+  /** Fingerprints first announced by this tick, in registry order. */
+  fresh: string[];
+}
 
 const NEW_FINGERPRINT_CURSOR_META_KEY = "newFingerprintCursorKey";
 /** JSON array of the `fpts:` keys already announced that may still be past
@@ -396,9 +419,7 @@ function parseAnnouncedKeys(raw: string | undefined): Set<string> {
  *  inside the ingest transaction itself. */
 const CURSOR_GRACE_MS = 2 * 60 * 1000;
 
-/** How many fingerprint names one Slack line lists before truncating — an
- *  attacker's flood of forged-then-validated-away fingerprints, or simply a
- *  large legitimate batch, must not grow one Slack message without bound. */
+/** How many fingerprint names the result detail lists before truncating, so a flood cannot grow it without bound. */
 const MAX_FINGERPRINTS_LISTED = 10;
 
 // A millisecond holding 2,000+ fingerprints would stall an ms-only cursor
@@ -406,7 +427,7 @@ const MAX_FINGERPRINTS_LISTED = 10;
 // cursor instead: it persists the exact `fpts:` key it advanced past and
 // resumes strictly after it, so a shared millisecond can't collapse to one
 // unadvanceable point.
-export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<RuleResult> {
+export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<NewFingerprintResult> {
   const cursorKeyRaw = await inboxWriter.getAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY);
   // A bare ms number, with no `fpts:` prefix, is not a valid keyset
   // position — treat it the same as "no cursor yet" rather than passing a
@@ -454,6 +475,7 @@ export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Da
     rule: "new-fingerprint",
     firing: fresh.length > 0,
     detail: fresh.length > 0 ? `new fingerprint(s): ${shown.join(", ")}${overflowSuffix}` : "no new fingerprints",
+    fresh,
   };
 }
 

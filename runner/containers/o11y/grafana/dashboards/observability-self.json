@@ -519,6 +519,47 @@
         "wrapLogMessage": true,
         "sortOrder": "Descending"
       }
+    },
+    {
+      "id": 9,
+      "type": "table",
+      "title": "New handled-error fingerprints (first seen)",
+      "description": "One row per fingerprint the o11y cron saw for the first time (exact InboxWriter registry, excluding demo-runtime). Time is the cron tick that announced it, so up to about 12 minutes after the first event. No Slack message is sent for these.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '60' SECOND) AS first_announced, blob11 AS fingerprint, sum(_sample_interval * double1) AS points FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'o11y.new_fingerprint' AND blob3 = '$environment' GROUP BY first_announced, fingerprint ORDER BY first_announced DESC LIMIT 200",
+          "format": "table",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
     }
   ]
 }

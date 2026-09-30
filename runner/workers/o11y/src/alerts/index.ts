@@ -6,7 +6,7 @@ import { bindingSink, clickhouseSink, type AeSink, type CommonResourceAttrs } fr
 import type { Env } from "../env.js";
 import { inboxWriter } from "../inbox/accessor.js";
 import { readO11ySpend } from "../cost.js";
-import { evaluateAndNotify, notifyFingerprintEvent, slackPoster } from "./notify.js";
+import { evaluateAndNotify, slackPoster, writeNewFingerprintPoints } from "./notify.js";
 import {
   alertEvalErrorRule,
   atCapacityRule,
@@ -120,15 +120,12 @@ export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunA
     errors["rejected-inbox-key"] = err instanceof Error ? err.message : String(err);
   }
 
-  // new-fingerprint is notify-only, not fire/resolve (see
-  // `notify.ts#notifyFingerprintEvent`) — never contributes a
-  // `transitions` entry.
+  // new-fingerprint never posts to Slack and has no fire/resolve state: each new
+  // fingerprint becomes one chart point, so it never contributes a `transitions` entry.
   try {
-    const result = await newFingerprintRule(writer, nowMs);
+    const { fresh, ...result } = await newFingerprintRule(writer, nowMs);
     results.push(result);
-    if (result.firing) {
-      await notifyFingerprintEvent(writer, postSlack, sink, attrs, result.rule, result.detail, nowMs);
-    }
+    writeNewFingerprintPoints(sink, attrs, fresh);
   } catch (err) {
     errors["new-fingerprint"] = err instanceof Error ? err.message : String(err);
   }

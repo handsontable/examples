@@ -88,63 +88,33 @@ export async function evaluateAndNotify(
   return undefined;
 }
 
+/** Analytics Engine allows 250 data points per Worker invocation; 100 leaves room for the tick's other points. */
+export const MAX_NEW_FINGERPRINT_POINTS_PER_TICK = 100;
+
 /**
- * new-fingerprint reports a stream of individual events, not a stateful
- * condition — forcing it through {@link evaluateAndNotify}'s fire-once
- * machinery would mask a second batch arriving before the cursor caught
- * up. Notifies unconditionally when new; never writes "resolved". Rate-
- * caps ITS OWN posts: at most {@link MAX_FINGERPRINT_POSTS_PER_WINDOW}
- * lines per {@link FINGERPRINT_POST_WINDOW_MS}, then one summary line.
+ * new-fingerprint is a dashboard signal, not a page: one `o11y.new_fingerprint`
+ * point per fingerprint the registry saw for the first time, charted by the
+ * Observability self "new handled-error fingerprints" panel. Returns how many
+ * were written; the rest of a flood stays in the registry and is not charted.
  */
-const FINGERPRINT_POST_WINDOW_MS = 60 * 60 * 1000;
-const MAX_FINGERPRINT_POSTS_PER_WINDOW = 20;
-const FINGERPRINT_POST_WINDOW_META_KEY = "newFingerprintPostWindow";
-
-interface FingerprintPostWindowState {
-  windowStart: number;
-  /** Individual detail lines posted so far this window. */
-  posted: number;
-  /** Firing calls suppressed (not individually posted) so far this window. */
-  suppressed: number;
-  /** Whether the one summary line for this window has already gone out. */
-  summarized: boolean;
-}
-
-function freshFingerprintPostWindow(nowMs: number): FingerprintPostWindowState {
-  return { windowStart: nowMs, posted: 0, suppressed: 0, summarized: false };
-}
-
-export async function notifyFingerprintEvent(
-  inboxWriter: InboxWriterApi,
-  postSlack: PostSlack,
-  aeSink: AeSink,
+export function writeNewFingerprintPoints(
+  sink: AeSink,
   commonAttrs: CommonResourceAttrs,
-  rule: string,
-  detail: string,
-  nowMs = Date.now(),
-): Promise<void> {
-  const raw = await inboxWriter.getAlertMeta(FINGERPRINT_POST_WINDOW_META_KEY);
-  let state: FingerprintPostWindowState = raw ? (JSON.parse(raw) as FingerprintPostWindowState) : freshFingerprintPostWindow(nowMs);
-  if (nowMs - state.windowStart >= FINGERPRINT_POST_WINDOW_MS) state = freshFingerprintPostWindow(nowMs);
-
-  if (state.posted < MAX_FINGERPRINT_POSTS_PER_WINDOW) {
-    state.posted += 1;
-    await inboxWriter.setAlertMeta(FINGERPRINT_POST_WINDOW_META_KEY, JSON.stringify(state));
-    await postSlack(`:rotating_light: [o11y] *${escapeSlackMrkdwn(rule)}* — ${escapeSlackMrkdwn(detail)}`);
-    writeAlertPoint(aeSink, commonAttrs, rule, "fired");
-    return;
+  fingerprints: readonly string[],
+): number {
+  let written = 0;
+  for (const fingerprint of fingerprints.slice(0, MAX_NEW_FINGERPRINT_POINTS_PER_TICK)) {
+    try {
+      const point: AePoint = toAePoint("o11y.new_fingerprint", { count: 1 }, { ...commonAttrs, fingerprint });
+      Promise.resolve(sink.writeDataPoint(point)).catch(() => {
+        // A failed chart point must not fail the alert tick.
+      });
+      written += 1;
+    } catch {
+      // toAePoint rejects a value outside the contract; skip that one fingerprint.
+    }
   }
-
-  state.suppressed += 1;
-  const postSummaryNow = !state.summarized;
-  if (postSummaryNow) state.summarized = true;
-  await inboxWriter.setAlertMeta(FINGERPRINT_POST_WINDOW_META_KEY, JSON.stringify(state));
-  if (postSummaryNow) {
-    await postSlack(
-      `:rotating_light: [o11y] *${escapeSlackMrkdwn(rule)}* — rate-capped after ${MAX_FINGERPRINT_POSTS_PER_WINDOW} posts this window; ${state.suppressed} further new-fingerprint report(s) suppressed (not dropped — see the cursor), no more individual lines until the window rolls over`,
-    );
-    writeAlertPoint(aeSink, commonAttrs, rule, "fired");
-  }
+  return written;
 }
 
 function writeAlertPoint(

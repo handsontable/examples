@@ -249,8 +249,9 @@ keeps the last 50 alert posts (`GET http://localhost:4210/_captured`). The
 o11y worker's local `SLACK_WEBHOOK_URL` points at it (see the bootstrap
 section above), so a fired alert (ADR-0041 §F.3 — trigger the `*/10` cron by
 hand with `curl "http://localhost:<O11Y_DEV_PORT>/cdn-cgi/local/scheduled?cron=*/10+*+*+*+*"`,
-or replay the fixtures, which trips the new-fingerprint rule on first run)
-shows up locally instead of needing a real Slack webhook.
+or replay the fixtures) shows up locally instead of needing a real Slack webhook.
+The new-fingerprint rule posts nothing to Slack: its fingerprints appear in the
+Observability self "New handled-error fingerprints" table.
 
 **Crons never fire on their own under `wrangler dev`** — neither worker's,
 and this is by design, not a bug (both print "Scheduled Workers are not
@@ -1302,14 +1303,17 @@ projection) — but against real production data, not the local stack:
    it as the flip's replacement signal: trigger a real, once-off `reportDiagnostic` call
    in production (the `npm-registry:version-exists`/`npm-registry:versions` probe paths
    are the ADR's own named example) and confirm its `hot.fingerprint` appears as a new
-   `fp:` entry and a Slack "new fingerprint" post, not silently dropped. This needs BOTH
+   `fp:` entry and a row in the Observability self "New handled-error fingerprints"
+   table, not silently dropped. There is no Slack post for it: after the scope flip a new
+   API handled-error class reaches the operator only as a dashboard row, so someone has
+   to look at that table. This needs BOTH
    the real `service.name` normalised to the contract's `demos-api`, and the shared
    fingerprint validator accepting a `:`-joined `context` — either one reverted or
    regressed makes this feed a silent no-op again.
    Also confirm, separately, that no unrelated Tier-2 SSR authored `console.log` is
    producing spurious `fp:` entries of its own (ADR §M's known, accepted,
-   bounded residual risk — Slack noise only, not a blocker, but worth a quick look at the
-   Slack channel's actual traffic before trusting this as a clean signal).
+   bounded residual risk — table noise only, not a blocker, but worth a quick look at the
+   table's actual rows before trusting this as a clean signal).
 
 **Who flips it**: whoever owns the o11y stack operationally at launch time (the same person
 or team who would triage an `alert-eval-error` or a stale-heartbeat page) — a role, not a
