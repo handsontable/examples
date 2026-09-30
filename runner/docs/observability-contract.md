@@ -276,6 +276,14 @@ window, so a hidden tab or an abandoned session is not credited with the quiet g
 between ticks or the hours before a late teardown. Sessions whose meter predates the
 running total fall back to the wall-clock span of their ticks plus the final slice. It is omitted (read back as 0) when the KV meter is already gone,
 and the tier-2 panel excludes those rows. The admin panel's kill button emits no point.
+`o11y.ingest` `dropped` reasons `ingest_timeout` and `ingest_error` come from the `v1/logs`,
+`deploy` and `hooks/sentry` routes when `InboxWriter.ingest` exceeds its 10 s deadline
+(`INGEST_DEADLINE_MS`) or rejects; the route answers `503` with `Retry-After: 30`. A commit whose
+reply is lost is counted `ingest_timeout`, and its redelivery only as `duplicate`, so that batch is
+never counted `accepted`. Cloudflare's exporter behaviour (timeout, retries and backoff,
+back-pressure on the source Worker, what it treats as failure) is undocumented and remains a known
+unknown, watched through the "Observability self" dashboard.
+
 Two reasons in this table have no emitter and never produce data: `session.end` reason
 `sleep_after` (nothing observes the Sandbox SDK's idle-timeout stop) and `pool.gauge`
 reason `builder` (the builder pool is not metered; the `*/5` cron emits `live` only).

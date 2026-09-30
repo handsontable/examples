@@ -3,7 +3,7 @@
 // one thing to inspect. `reason` becomes the `o11y.ingest` `blob9` value
 // (contract §5: "reason = gate") — keep it a short, stable, machine-grade
 // token (`"host"`, `"bot"`, `"size"`, `"kind"`, `"rate_limit"`, `"secret"`,
-// `"oidc"`, `"hmac"`, `"access"`), never a sentence.
+// `"oidc"`, `"hmac"`, `"access"`, `"ingest_timeout"`, `"ingest_error"`), never a sentence.
 
 export interface GateOk {
   ok: true;
@@ -20,7 +20,7 @@ export interface GateDrop {
    *  reason should leak *why* a secret/HMAC/OIDC check failed). */
   detail?: string;
   /** Sent as `Retry-After` (seconds) by `respond.ts#respondDrop`. Only the
-   *  rate-limit gate sets it. */
+   *  rate-limit gate and the ingest deadline/backstop set it. */
   retryAfterSeconds?: number;
 }
 
