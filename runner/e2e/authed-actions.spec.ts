@@ -871,3 +871,41 @@ test("the card's Copy link copies the URL the dialog calls the public client lin
     .poll(() => page.evaluate(() => navigator.clipboard.readText()))
     .toBe(dialogUrl);
 });
+
+// DEV-3147. A save rebuilds the snapshot in 8–14 s, and the edits live only in this
+// tab until the PATCH is accepted — a reload or close inside that window (or before
+// Save was pressed) lost them without a word. The page now asks the browser to confirm.
+// Observed by dispatching a cancelable `beforeunload` and reading `defaultPrevented`,
+// because Playwright cannot see the browser's own prompt.
+test("edit page guards a reload while edits are unsaved or a save is in flight", async ({ page }) => {
+  await stubShell(page);
+  await stubSavedDemo(page);
+  await signIn(page);
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => { release = resolve; });
+  const patches = await stubInfoPatch(page, { hold });
+
+  const unloadPrevented = () =>
+    page.evaluate(() => {
+      const e = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(e);
+      return e.defaultPrevented;
+    });
+
+  await page.goto(`/edit/${DEMO_ID}`);
+  await expect(saveButton(page)).toHaveText("Save");
+  expect(await unloadPrevented(), "a clean demo must not nag").toBe(false);
+
+  await editor(page).click();
+  await page.keyboard.type("// edit");
+  await expect(saveButton(page)).toHaveText("Save •");
+  expect(await unloadPrevented(), "unsaved edits").toBe(true);
+
+  await saveButton(page).click();
+  await expect.poll(() => patches.length).toBe(1);
+  expect(await unloadPrevented(), "the PATCH is still building").toBe(true);
+
+  release();
+  await expect(saveButton(page)).toHaveText("Save");
+  expect(await unloadPrevented(), "saved: guard disarmed").toBe(false);
+});

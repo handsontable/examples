@@ -38,6 +38,7 @@ import {
   isAtCapacityFailure,
   isContainerStartingFailure,
   isExpectedTeardownFailure,
+  sessionGateVerdict,
   TOMBSTONE_ATTEMPTED,
   TOMBSTONE_DESTROYED,
   TOMBSTONE_TTL_SECONDS,
@@ -1243,14 +1244,18 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // covered by default instead of each hand-copying the check.
       if (parts[0] === "api" && parts[1] === "session" && parts.length >= 4) {
         const sessionId = parts[2]!;
-        if (await isTombstoned(env, sessionId)) {
-          // A file delete against a torn-down session is a satisfied no-op;
-          // everything else reports the session gone.
-          if (request.method === "DELETE" && parts[3] === "file") {
-            return cors(new Response(null, { status: 204 }));
-          }
-          return json({ error: "session closed" }, 410);
-        }
+        // Tombstoned, or no meter (a torn-down id whose tombstone has expired,
+        // or an id we never created): either way a sandbox RPC would boot an
+        // unmetered container (DEV-3147).
+        const verdict = sessionGateVerdict(
+          {
+            tombstoned: await isTombstoned(env, sessionId),
+            metered: await hasSessionMeter(env, sessionId),
+          },
+          { method: request.method, sub: parts[3] },
+        );
+        if (verdict === "noop") return cors(new Response(null, { status: 204 }));
+        if (verdict === "gone") return json({ error: "session closed" }, 410);
         // The cost ceiling belongs here too, for the same reason the tombstone
         // check does: every subroute below reaches the sandbox, and every
         // sandbox RPC boots a container.

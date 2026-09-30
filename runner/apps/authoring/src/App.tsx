@@ -3177,6 +3177,22 @@ function Authoring({
     return () => document.removeEventListener("keydown", onKey);
   }, [user, route.mode, saving, onSave, editInfoOpen, shareLinksOpen]);
 
+  // A save rebuilds the snapshot in 8–14 s and its edits live only in this tab until
+  // the PATCH is accepted, so a reload or close inside that window (or before Save
+  // was pressed) silently loses them (DEV-3147). Armed only on the edit page, only
+  // while there is something to lose, so the browser's prompt never nags otherwise.
+  const editsAtRisk = route.mode === "edit" && (saving || dirty);
+  useEffect(() => {
+    if (!editsAtRisk) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      // The standard opt-in; the browser shows its own generic text.
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [editsAtRisk]);
+
   /** Row-2 refresh (`72:15708`). Reloads the running preview in place — never a
    *  remount, which for Tier 2 would mint a fresh container session per click.
    *
