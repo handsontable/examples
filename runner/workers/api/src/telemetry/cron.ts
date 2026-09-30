@@ -33,6 +33,10 @@ export const LIVE_POOL_MAX_INSTANCES = 10;
  * own count (`admin.ts#liveSessions`'s `awakeCount`) by filtering on
  * `classifyMeter(...).state === "awake"` instead of key existence.
  *
+ * Undercounts sessions that still bill: a backgrounded tab with HMR open reads as slept.
+ * Fine for the panel; wrong in direction for a pool-pressure alert, so fix the
+ * classification before building one on this gauge (DEV-3143).
+ *
  * Reason `builder` (the `BuilderSandbox` share-build pool) is not emitted —
  * nothing in this worker meters builder-container concurrency today (no KV
  * row like the live-session meter exists for it), so a `builder` point

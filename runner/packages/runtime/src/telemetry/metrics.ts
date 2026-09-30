@@ -191,7 +191,9 @@ const REGISTRY_DATA = {
   "example.downloaded": EXAMPLE_ACTION,
   "api.request": {
     emittedBy: "API worker",
-    blobs: ["route_class", "outcome"],
+    // `reason` is the exact status of a 5xx only (`"503"`, `"500"`), so a rule can tell the
+    // "still building" 503 from a build-failed 500 on the same route class.
+    blobs: ["route_class", "outcome", "reason"],
     doubles: ["count", "duration_ms"],
     values: { outcome: ["2xx", "3xx", "4xx", "5xx"] },
   },
@@ -228,7 +230,8 @@ const REGISTRY_DATA = {
   },
   "snapshot.build": {
     emittedBy: "API worker",
-    blobs: ["framework", "outcome", "reason"],
+    // `demo_id` lets `snapshot-build-failed-rate` tell one demo's retried Save from a framework-wide break.
+    blobs: ["framework", "outcome", "reason", "demo_id"],
     doubles: ["count", "duration_ms", "bytes"],
     values: { outcome: ["ok", "failed"], reason: ["inline", "detached"] },
   },

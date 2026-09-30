@@ -123,9 +123,12 @@ export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunA
   // new-fingerprint never posts to Slack and has no fire/resolve state: each new
   // fingerprint becomes one chart point, so it never contributes a `transitions` entry.
   try {
-    const { fresh, ...result } = await newFingerprintRule(writer, nowMs);
+    // The points are written inside the rule, before it records a fingerprint as announced:
+    // a failed write leaves it unannounced, and it lands in `errors` (alert-eval-error).
+    const { fresh: _fresh, ...result } = await newFingerprintRule(writer, nowMs, (fresh) =>
+      writeNewFingerprintPoints(sink, attrs, fresh),
+    );
     results.push(result);
-    writeNewFingerprintPoints(sink, attrs, fresh);
   } catch (err) {
     errors["new-fingerprint"] = err instanceof Error ? err.message : String(err);
   }

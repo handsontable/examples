@@ -69,6 +69,17 @@ export function makeFakeAeQuery(rows) {
       candidates = candidates.filter((r) => !excluded.has(String(r[logical] ?? "")));
     }
 
+    // Set-membership filters: `AND blobN IN ('a', 'b', ...)`. (`NOT IN` never
+    // matches: `NOT` sits between the column and `IN`.)
+    const inRe = /AND (blob\d+|double\d+) IN \(([^)]*)\)/g;
+    let im;
+    while ((im = inRe.exec(sql))) {
+      const logical = SLOT_TO_NAME[im[1]];
+      if (!logical) throw new Error(`fake-ae-query: unknown slot in IN filter: ${im[1]}`);
+      const included = new Set([...im[2].matchAll(/'([^']*)'/g)].map((m) => m[1]));
+      candidates = candidates.filter((r) => included.has(String(r[logical] ?? "")));
+    }
+
     // `quantileExactWeighted(q)(<col>, toUInt32(_sample_interval)) AS p`
     const qm = /quantileExactWeighted\(([\d.]+)\)\((double\d+),/.exec(sql);
     if (qm) {
@@ -82,6 +93,25 @@ export function makeFakeAeQuery(rows) {
       const q = Number(qm[1]);
       const idx = Math.min(values.length - 1, Math.max(0, Math.ceil(q * values.length) - 1));
       return [{ p: values[idx] }];
+    }
+
+    // `SELECT <colA> AS <a>, <colB> AS <b>, sum(...) AS c ... GROUP BY <a>, <b>`
+    const pairMatch = /SELECT (blob\d+) AS (\w+), (blob\d+) AS (\w+), sum\(_sample_interval \* (double\d+)\) AS c/.exec(sql);
+    if (pairMatch) {
+      const [, slotA, aliasA, slotB, aliasB, countSlot] = pairMatch;
+      const logicalA = SLOT_TO_NAME[slotA];
+      const logicalB = SLOT_TO_NAME[slotB];
+      const countLogical = SLOT_TO_NAME[countSlot];
+      if (!logicalA || !logicalB || !countLogical) throw new Error(`fake-ae-query: unknown slot in SELECT: ${sql}`);
+      const totals = new Map();
+      for (const r of candidates) {
+        const key = JSON.stringify([String(r[logicalA] ?? ""), String(r[logicalB] ?? "")]);
+        totals.set(key, (totals.get(key) ?? 0) + Number(r[countLogical] ?? 1));
+      }
+      return [...totals.entries()].map(([k, c]) => {
+        const [a, b] = JSON.parse(k);
+        return { [aliasA]: a, [aliasB]: b, c };
+      });
     }
 
     // `SELECT <col> AS <alias>, sum(_sample_interval * <countCol>) AS c ... GROUP BY <col>`

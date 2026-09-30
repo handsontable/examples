@@ -52,12 +52,13 @@ function snapshotBuildPoints(points) {
 const FRAMEWORK_SLOT = 5;
 const OUTCOME_SLOT = 7;
 const REASON_SLOT = 8;
+const DEMO_ID_SLOT = 11; // demo_id = blob12
 const COUNT_SLOT = 0;
 const DURATION_SLOT = 1;
 
 test("createDemo (inline, build_cache hit — no container) emits exactly one snapshot.build ok/inline point", async () => {
   const { env, points } = envWithPointCapture([], [], {}, { buildCacheHit: true });
-  await createDemo(env, {
+  const { id } = await createDemo(env, {
     entry: ENTRY,
     files: FILES,
     htVersion: "18.1.0",
@@ -67,6 +68,8 @@ test("createDemo (inline, build_cache hit — no container) emits exactly one sn
   });
   const sb = snapshotBuildPoints(points);
   assert.equal(sb.length, 1, `expected exactly 1 snapshot.build point, got ${sb.length}`);
+  assert.ok(id, "createDemo returns the new demo id");
+  assert.match(sb[0].blobs[DEMO_ID_SLOT], /^src-[0-9a-f]{12}$/, "a create is keyed by its source hash, since its id is fresh per attempt (DEV-3143)");
   assert.equal(sb[0].blobs[FRAMEWORK_SLOT], "react");
   assert.equal(sb[0].blobs[OUTCOME_SLOT], "ok");
   assert.equal(sb[0].blobs[REASON_SLOT], "inline");
@@ -92,6 +95,7 @@ test("updateDemo (inline, build_cache hit) emits exactly one snapshot.build ok/i
   assert.equal(sb.length, 1, `expected exactly 1 snapshot.build point, got ${sb.length}`);
   assert.equal(sb[0].blobs[OUTCOME_SLOT], "ok");
   assert.equal(sb[0].blobs[REASON_SLOT], "inline");
+  assert.equal(sb[0].blobs[DEMO_ID_SLOT], "abc123");
 });
 
 test("createDemo's snapshot.build point survives past the call returning — it is awaited, not fire-and-forget (would be silently cancellable via ctx.waitUntil-less code otherwise)", async () => {
@@ -138,7 +142,7 @@ test("a build failure (real container build, no cache) emits snapshot.build fail
   }));
   try {
     const { env, points } = envWithPointCapture([], [], {}, { buildCacheHit: false });
-    await assert.rejects(() =>
+    const save = () =>
       createDemo(env, {
         entry: ENTRY,
         files: FILES,
@@ -146,12 +150,19 @@ test("a build failure (real container build, no cache) emits snapshot.build fail
         title: "A demo",
         createdBy: "dev@handsontable.com",
         now: new Date().toISOString(),
-      }),
-    );
+      });
+    await assert.rejects(save);
     const sb = snapshotBuildPoints(points);
     assert.equal(sb.length, 1, `expected exactly 1 snapshot.build point even on failure, got ${sb.length}`);
     assert.equal(sb[0].blobs[OUTCOME_SLOT], "failed");
     assert.equal(sb[0].blobs[REASON_SLOT], "inline");
+
+    // One author clicking Save again on the same broken source must read as the same demo, though every
+    // create mints a fresh id (DEV-3143).
+    await assert.rejects(save);
+    const [first, second] = snapshotBuildPoints(points);
+    assert.match(first.blobs[DEMO_ID_SLOT], /^src-[0-9a-f]{12}$/);
+    assert.equal(second.blobs[DEMO_ID_SLOT], first.blobs[DEMO_ID_SLOT]);
   } finally {
     setSandboxFactory(null);
   }

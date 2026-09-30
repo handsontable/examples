@@ -205,9 +205,23 @@ const USER_INSTALL_CODES = new Set([
 
 /** Output that names our infrastructure (network, memory, a killed worker, Next's Google
  *  Fonts fetch) whatever the exit code. A message-text rule: a tool that rewords these
- *  lines moves its failure into the 422 class. */
+ *  lines moves its failure into the 422 class. These are error codes and tool banners
+ *  an author's own output does not print by accident. */
 const INFRA_FAILURE_TEXT =
-  /ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|Failed to fetch|heap out of memory|signal SIGKILL|worker exited|`next\/font` error|fonts\.googleapis\.com/i;
+  /ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|heap out of memory|signal SIGKILL|worker exited|`next\/font` error|fonts\.googleapis\.com/i;
+
+/** `fetch failed` (undici) and `Failed to fetch` (browsers) are plain words a build script can
+ *  `console.log`, so they name infrastructure only on a line a tool formats as an error
+ *  (`TypeError: fetch failed`, `[plugin] fetch failed`, `ERR_X ...`), never on a bare output line.
+ *  An author who throws that text as an `Error` is still read as ours. */
+const INFRA_FETCH_ERROR_LINE =
+  /^\s*(?:npm ERR!\s+|ERR_\w+\s+|\[[^\]\n]+\]\s*|error:\s*|\w*Error:\s*).*\b(?:fetch failed|Failed to fetch)\b/i;
+
+function namesInfrastructure(err: BuildFailure): boolean {
+  const cause = err.message.replace(/^(?:build|install) failed:\s*/, "");
+  if (INFRA_FAILURE_TEXT.test(`${err.message}\n${err.log}`)) return true;
+  return `${cause}\n${err.log}`.split("\n").some((line) => INFRA_FETCH_ERROR_LINE.test(line));
+}
 
 /** The demo's own input failed the build (contract §5): client input, answered 422. That
  *  is a build command exiting 1–125, or an install refusing a dependency the author named.
@@ -215,7 +229,7 @@ const INFRA_FAILURE_TEXT =
  *  executable, not found), a result without an exit code, and other install failures are ours. */
 export function isUserBuildError(err: unknown): boolean {
   if (!(err instanceof BuildFailure)) return false;
-  if (INFRA_FAILURE_TEXT.test(`${err.message}\n${err.log}`)) return false;
+  if (namesInfrastructure(err)) return false;
   if (err.phase === "install") return USER_INSTALL_CODES.has(err.code);
   return err.exitCode !== null && err.exitCode > 0 && err.exitCode <= 125;
 }
@@ -521,6 +535,7 @@ export async function createPendingDemo(env: Env, args: CreateArgs): Promise<{ i
 async function withSnapshotBuildPoint<T>(
   env: Env,
   framework: string,
+  demoId: string,
   reason: "inline" | "detached",
   fn: (addBytes: (n: number) => void) => Promise<T>,
 ): Promise<T> {
@@ -538,7 +553,7 @@ async function withSnapshotBuildPoint<T>(
       env,
       "snapshot.build",
       { count: 1, duration_ms: Date.now() - startedAt, bytes },
-      { framework, outcome: "ok", reason },
+      { framework, outcome: "ok", reason, demo_id: demoId },
     );
     return result;
   } catch (err) {
@@ -546,7 +561,7 @@ async function withSnapshotBuildPoint<T>(
       env,
       "snapshot.build",
       { count: 1, duration_ms: Date.now() - startedAt },
-      { framework, outcome: "failed", reason },
+      { framework, outcome: "failed", reason, demo_id: demoId },
     );
     throw err;
   }
@@ -561,15 +576,18 @@ export async function createDemo(
   args: CreateArgs,
   buildReason: "inline" | "detached" = "inline",
 ): Promise<{ id: string }> {
-  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async (addBytes) => {
-    const hash = await filesHash(args.files);
+  const id = args.id ?? shortId();
+  const hash = await filesHash(args.files);
+  // A create mints a fresh id per attempt, so one author retrying Save on the same broken
+  // source would read as many demos. The source hash repeats across those retries.
+  const demoKey = args.id ?? `src-${hash.slice(0, 12)}`;
+  return withSnapshotBuildPoint(env, args.entry.framework, demoKey, buildReason, async (addBytes) => {
     const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
 
     // Reuse a prior identical build if present.
     const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
       .bind(buildKey).first<{ r2_prefix: string }>();
 
-    const id = args.id ?? shortId();
     const r2Prefix = `demos/${id}/`;
 
     if (cached) {
@@ -649,7 +667,7 @@ export async function updateDemo(
   args: UpdateArgs,
   buildReason: "inline" | "detached" = "inline",
 ): Promise<void> {
-  return withSnapshotBuildPoint(env, args.entry.framework, buildReason, async (addBytes) => {
+  return withSnapshotBuildPoint(env, args.entry.framework, args.id, buildReason, async (addBytes) => {
     const hash = await filesHash(args.files);
     const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
     const r2Prefix = `demos/${args.id}/`;

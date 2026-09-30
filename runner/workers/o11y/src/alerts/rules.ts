@@ -78,6 +78,35 @@ async function countByGroup(
   return out;
 }
 
+/** {@link countByGroup} split by a second column: outer key = `groupColumn`, inner key = `subColumn`. */
+async function countByGroupPair(
+  env: Env,
+  metric: string,
+  groupColumn: keyof typeof AE_COLUMNS,
+  subColumn: keyof typeof AE_COLUMNS,
+  windowMs: number,
+  extraWhere = "",
+  queryFn: AeQueryFn = runAeQuery,
+): Promise<Map<string, Map<string, number>>> {
+  const groupCol = col(groupColumn);
+  const subCol = col(subColumn);
+  const countCol = col("count");
+  const sql =
+    `SELECT ${groupCol} AS grp, ${subCol} AS sub, sum(_sample_interval * ${countCol}) AS c ` +
+    `FROM runner_events WHERE index1 = '${metric}' ` +
+    `AND timestamp >= now() - INTERVAL '${Math.round(windowMs / 1000)}' SECOND ${extraWhere} ` +
+    `GROUP BY grp, sub`;
+  const rows = await queryFn(env, sql);
+  const out = new Map<string, Map<string, number>>();
+  for (const row of rows) {
+    const grp = String(row.grp ?? "");
+    const inner = out.get(grp) ?? new Map<string, number>();
+    inner.set(String(row.sub ?? ""), Number(row.c ?? 0));
+    out.set(grp, inner);
+  }
+  return out;
+}
+
 /** Same as {@link countByGroup} but for a fixed window in the past
  *  (`[nowMs - endAgoMs - windowMs, nowMs - endAgoMs)`), for a day-over-day
  *  comparison. `now() - INTERVAL` composes left to right in ClickHouse/AE
@@ -141,20 +170,34 @@ export async function atCapacityRule(env: Env, queryFn: AeQueryFn = runAeQuery):
 // ---- api.request 5xx rate: above 1% over 15 min ---------------------------
 
 /** The API's deliberate 503s (at-capacity, container-starting, chat/theme
- *  refusals) are excluded from the 5xx ratio by their own exact counts;
- *  these two route classes have no such count, so they're excluded wholesale. */
+ *  refusals) are excluded from the 5xx ratio by their own exact counts. The
+ *  "still building" placeholder on these two route classes has no such count,
+ *  so it is excluded by status: `api.request` carries a 5xx's exact status in
+ *  `reason`, and only the 503 is dropped. A build-failed 500 there still counts. */
 const FIVE_XX_STILL_BUILDING_ROUTE_CLASSES = ["d/:id", "embed/:id"];
 
 export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const windowMs = 15 * 60 * 1000;
   const routeClassCol = col("route_class");
-  const excludedRoutes = FIVE_XX_STILL_BUILDING_ROUTE_CLASSES.map((rc) => `'${rc}'`).join(", ");
-  const [counts, sessionOutcomes, chatOutcomes, themeOutcomes] = await Promise.all([
-    countByOutcome(env, "api.request", windowMs, `AND ${routeClassCol} NOT IN (${excludedRoutes})`, queryFn),
+  const outcomeCol = col("outcome");
+  const reasonCol = col("reason");
+  const stillBuildingRoutes = FIVE_XX_STILL_BUILDING_ROUTE_CLASSES.map((rc) => `'${rc}'`).join(", ");
+  // `''` matches a point written before `reason` existed: a 5xx on these routes from then
+  // was still-building, and without the fallback every deploy would page for one window.
+  const stillBuildingWhere =
+    `AND ${routeClassCol} IN (${stillBuildingRoutes}) AND ${outcomeCol} = '5xx' AND ${reasonCol} IN ('503', '')`;
+  const [allCounts, stillBuilding, sessionOutcomes, chatOutcomes, themeOutcomes] = await Promise.all([
+    countByOutcome(env, "api.request", windowMs, "", queryFn),
+    countByOutcome(env, "api.request", windowMs, stillBuildingWhere, queryFn),
     countByOutcome(env, "session.start", windowMs, "", queryFn),
     countByOutcome(env, "chat.answer", windowMs, "", queryFn),
     countByOutcome(env, "theme.ai", windowMs, "", queryFn),
   ]);
+  // Only the still-building 5xx points leave the ratio. The 2xx/3xx/4xx traffic on these routes now
+  // counts in the denominator, as it does for every other route.
+  const stillBuildingCount = stillBuilding.get("5xx") ?? 0;
+  const counts = new Map(allCounts);
+  counts.set("5xx", Math.max(0, (counts.get("5xx") ?? 0) - stillBuildingCount));
   const total = [...counts.values()].reduce((a, b) => a + b, 0);
   const fiveXx = counts.get("5xx") ?? 0;
   const deliberate =
@@ -170,7 +213,7 @@ export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery):
     firing: adjustedTotal > 0 && pct > 1,
     detail:
       `${pct.toFixed(2)}% 5xx over the last 15 min (${adjustedFiveXx}/${adjustedTotal}, threshold 1%, ` +
-      `excludes at-capacity/container-starting/chat-theme-gateway refusals and the still-building routes)`,
+      `excludes at-capacity/container-starting/chat-theme-gateway refusals and still-building 503s)`,
   };
 }
 
@@ -296,20 +339,28 @@ export async function compileErrorDoublingRule(env: Env, queryFn: AeQueryFn = ru
 const SNAPSHOT_BUILD_WINDOW_MS = 30 * 60 * 1000;
 const SNAPSHOT_BUILD_FAILED_PCT = 50;
 const SNAPSHOT_BUILD_FAILED_FLOOR = 10;
+/** Distinct demos the failures must span: one author retrying one broken demo is not a framework break. Points from before `demo_id` existed carry `''`, which counts as one demo, so a break straddling the deploy stays silent for at most one window. */
+const SNAPSHOT_BUILD_FAILED_MIN_DEMOS = 3;
 
 export async function snapshotBuildFailedRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const outcomeCol = col("outcome");
-  const [total, failed] = await Promise.all([
+  const [total, failedByDemo] = await Promise.all([
     countByGroup(env, "snapshot.build", "framework", SNAPSHOT_BUILD_WINDOW_MS, "", queryFn),
-    countByGroup(env, "snapshot.build", "framework", SNAPSHOT_BUILD_WINDOW_MS, `AND ${outcomeCol} = 'failed'`, queryFn),
+    countByGroupPair(env, "snapshot.build", "framework", "demo_id", SNAPSHOT_BUILD_WINDOW_MS, `AND ${outcomeCol} = 'failed'`, queryFn),
   ]);
+  const failed = new Map<string, { count: number; demos: number }>();
+  for (const [framework, demos] of failedByDemo) {
+    let count = 0;
+    for (const c of demos.values()) count += c;
+    failed.set(framework, { count, demos: demos.size });
+  }
   const offenders: string[] = [];
-  for (const [framework, failedCount] of failed) {
-    if (failedCount < SNAPSHOT_BUILD_FAILED_FLOOR) continue;
+  for (const [framework, { count: failedCount, demos }] of failed) {
+    if (failedCount < SNAPSHOT_BUILD_FAILED_FLOOR || demos < SNAPSHOT_BUILD_FAILED_MIN_DEMOS) continue;
     const builds = total.get(framework) ?? failedCount;
     const pct = ratio(failedCount, builds) * 100;
     if (pct > SNAPSHOT_BUILD_FAILED_PCT) {
-      offenders.push(`${framework || "unknown"}: ${pct.toFixed(0)}% failed (${failedCount}/${builds})`);
+      offenders.push(`${framework || "unknown"}: ${pct.toFixed(0)}% failed (${failedCount}/${builds}, ${demos} demos)`);
     }
   }
   return {
@@ -317,7 +368,7 @@ export async function snapshotBuildFailedRateRule(env: Env, queryFn: AeQueryFn =
     firing: offenders.length > 0,
     detail:
       offenders.length > 0
-        ? `${offenders.join("; ")} over the last 30 min (threshold ${SNAPSHOT_BUILD_FAILED_PCT}%, at least ${SNAPSHOT_BUILD_FAILED_FLOOR} failed)`
+        ? `${offenders.join("; ")} over the last 30 min (threshold ${SNAPSHOT_BUILD_FAILED_PCT}%, at least ${SNAPSHOT_BUILD_FAILED_FLOOR} failed across ${SNAPSHOT_BUILD_FAILED_MIN_DEMOS}+ demos)`
         : "no framework over threshold",
   };
 }
@@ -427,7 +478,11 @@ const MAX_FINGERPRINTS_LISTED = 10;
 // cursor instead: it persists the exact `fpts:` key it advanced past and
 // resumes strictly after it, so a shared millisecond can't collapse to one
 // unadvanceable point.
-export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<NewFingerprintResult> {
+export async function newFingerprintRule(
+  inboxWriter: InboxWriterApi,
+  nowMs = Date.now(),
+  publish: (fresh: string[]) => Promise<unknown> = async () => {},
+): Promise<NewFingerprintResult> {
   const cursorKeyRaw = await inboxWriter.getAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY);
   // A bare ms number, with no `fpts:` prefix, is not a valid keyset
   // position — treat it the same as "no cursor yet" rather than passing a
@@ -453,6 +508,12 @@ export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Da
   const announced = parseAnnouncedKeys(await inboxWriter.getAlertMeta(NEW_FINGERPRINT_ANNOUNCED_META_KEY));
   const unannounced = entries.filter((entry) => !announced.has(entry.key));
 
+  // The point is the announcement, so it is written before any state records the
+  // fingerprint as announced: if `publish` throws, nothing is saved and the next
+  // tick re-reads and re-announces it.
+  const fresh = unannounced.map((entry) => entry.name);
+  if (fresh.length > 0) await publish(fresh);
+
   // Write order matters (two separate RPCs): the announced set is written
   // first, so a failed cursor write still finds these keys already
   // announced on the next tick's re-read from the old cursor.
@@ -464,7 +525,6 @@ export async function newFingerprintRule(inboxWriter: InboxWriterApi, nowMs = Da
   if (nextCursorKey !== null) {
     await inboxWriter.setAlertMeta(NEW_FINGERPRINT_CURSOR_META_KEY, nextCursorKey);
   }
-  const fresh = unannounced.map((entry) => entry.name);
   const shown = fresh.slice(0, MAX_FINGERPRINTS_LISTED);
   const overflow = fresh.length - shown.length;
   // `truncated` means real, unread fingerprints may exist beyond what this

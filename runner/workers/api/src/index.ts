@@ -841,7 +841,11 @@ async function recordRequestSignal(
     demo_id: demoIdFromPath(pathname),
   });
   ctx.waitUntil(
-    emitPoint(env, "api.request", { count: 1, duration_ms: durationMs }, { route_class: routeClass, outcome }),
+    emitPoint(env, "api.request", { count: 1, duration_ms: durationMs }, {
+      route_class: routeClass,
+      outcome,
+      ...(outcome === "5xx" ? { reason: String(response.status) } : {}),
+    }),
   );
 }
 

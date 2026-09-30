@@ -250,13 +250,13 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `example.open` | browser (ADR-0042) | kind, ref, area, framework, ht_major, bucket, reason (`entry`) | count | reason `deep-link`, `picker`, `switch`, `version-switch`, `fork` |
 | `example.engaged`, `example.forked`, `example.shared`, `example.downloaded` | browser (ADR-0042) | kind, ref, area, framework, ht_major, bucket | count | — |
 | `example.saved` | API worker (ADR-0042) | kind, ref, area, framework, ht_major, bucket | count | — |
-| `api.request` | API worker | route_class, outcome | count, duration_ms | `2xx`, `3xx`, `4xx`, `5xx` |
+| `api.request` | API worker | route_class, outcome, reason | count, duration_ms | `2xx`, `3xx`, `4xx`, `5xx`; reason = the exact status of a 5xx (`503`, `500`), empty otherwise |
 | `session.start` | API worker | framework, ht_major, outcome | count, duration_ms | `ready`, `at_capacity`, `container_starting`, `boot_timeout`, `budget_denied`, `error` |
 | `session.end` | API worker | framework, reason | count, value (awake s) | reason `pagehide`, `sleep_after`, `teardown_failed`, `budget_closed` |
 | `container.boot_ms` | API worker | framework, outcome, reason | duration_ms | `ready`, `window_exceeded`, `error`; reason `cold`, `warm` |
 | `pool.gauge` | API worker `*/5` | reason (`live`, `builder`) | value (awake), cap | — |
 | `budget.gauge` | API worker `*/5` | reason (tier) | value (percent of ceiling), usd | — |
-| `snapshot.build` | API worker | framework, outcome, reason | count, duration_ms, bytes | `ok`, `failed`; reason `inline`, `detached` |
+| `snapshot.build` | API worker | framework, outcome, reason, demo_id | count, duration_ms, bytes | `ok`, `failed`; reason `inline`, `detached` |
 | `serve.share`, `serve.d`, `serve.embed` | API worker | outcome, demo_id | count, bytes | `2xx`, `304`, `4xx`, `5xx` |
 | `chat.answer` | API worker | model, outcome | count, duration_ms, usd, tokens_in, tokens_out | `answered`, `denied`, `error` |
 | `chat.edit` | API worker | outcome | count | `proposed`, `applied`, `undone` |
@@ -383,17 +383,21 @@ build error, one line>}`. `error` carries the diagnostic because MCP clients rea
 that field; the editor keys on `code`. `api.request` records it as `4xx`, so `api-5xx-rate`
 does not count it. `snapshot.build` still records `failed`, and the
 `snapshot-build-failed-rate` alert is the backstop: it fires when one framework has more
-than 50 % failed builds over 30 min with at least 10 failed. The stored demo is
+than 50 % failed builds over 30 min with at least 10 failed across at least 3 distinct
+demos (one author retrying one broken demo does not fire it). The stored demo is
 unchanged, because the build runs before anything is written.
 
 Everything else stays `5xx`: exit code 126, 127 or 128 and above (not executable, not
 found, killed by a signal), a result without an exit code, any other install failure
 (`ERR_PNPM_FETCH_5xx`, a reset or timed-out connection), and any other throw. So does
 any failure whose output names infrastructure, whatever the exit code: `ENOTFOUND`,
-`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `fetch failed`, `Failed to fetch`, `heap out of
-memory`, `signal SIGKILL`, `worker exited`, and Next's `` `next/font` error `` or a
-`fonts.googleapis.com` fetch. This last rule is a match on message text: a tool that
-rewords these lines moves its failure into the 422 class.
+`ECONNRESET`, `ETIMEDOUT`, `EAI_AGAIN`, `heap out of memory`, `signal SIGKILL`, `worker
+exited`, and Next's `` `next/font` error `` or a `fonts.googleapis.com` fetch, anywhere in
+the output. `fetch failed` and `Failed to fetch` count only on an error line
+(`TypeError: fetch failed`), never on a bare line, because an author's build script can
+print them. This last rule is a match on message text: a tool that rewords these lines
+moves its failure into the 422 class, and an author who throws that text as an `Error`
+reads as ours.
 
 `serve.share` locally: under `vite dev` (what `pnpm dev:full` serves), React
 StrictMode runs the share page's load effect twice, so one `/share/<id>` view gives 2
@@ -521,7 +525,7 @@ dedupe hash is computed over the decoded, scrubbed record before timestamps are 
 | `fp:<fingerprint>` | first-seen epoch ms (exact registry behind the new-fingerprint detection, charted through `o11y.new_fingerprint`, §5) |
 | `fpts:<firstSeenMs:015d>:<fingerprint>` | same first-seen epoch ms as its `fp:` twin — a time-ordered secondary index (G1 fix round, B-C1/A-I1 remainder) so the new-fingerprint alert can do a bounded `start`/`end` range read instead of listing the whole (alphabetically, not chronologically, ordered) `fp:` prefix every tick. Written/deleted together with its `fp:` twin, always |
 | `alert:<rule>` | `{ state: firing \| resolved, since, lastNotified }` |
-| `alertMeta:newFingerprintCursorKey` / `alertMeta:newFingerprintAnnouncedKeys` | the new-fingerprint detection's keyset cursor (an `fpts:` key) and a JSON array of the `fpts:` keys it already reported past that cursor. The cursor lags 2 minutes behind the tick, so the next tick reads recent entries again; the reported set makes sure each fingerprint becomes exactly one `o11y.new_fingerprint` point (F35) |
+| `alertMeta:newFingerprintCursorKey` / `alertMeta:newFingerprintAnnouncedKeys` | the new-fingerprint detection's keyset cursor (an `fpts:` key) and a JSON array of the `fpts:` keys it already reported past that cursor. The cursor lags 2 minutes behind the tick, so the next tick reads recent entries again; the reported set makes sure each fingerprint becomes exactly one `o11y.new_fingerprint` point (F35). Both are saved only after the point write returns: a write that throws or rejects saves neither, and the next tick announces the fingerprint again (a binding that returns no result cannot report failure) |
 | `wake:<wakeId>` | `{ startedAt, reason, over: boolean, readyMs? }` — over when a newer wake started or the container is not running; **deleted once fully resolved** (see below). `readyMs` (F8) is wake-to-ready time in ms, written once by `InboxWriterApi.recordWakeReady(wakeId, readyMs)` — called by `GrafanaBox` on the wake's first successful `isReady()`, first call wins, a no-op for an already-resolved (deleted) wake — and copied onto the resolved `o11y.wake` point as `duration_ms` (§5); absent while the box has not yet become ready |
 | `rejectedEvent:<ms:015d>:<inbox key>` | rejection reason (string) — a chronological audit/alert log (G1 fix round, row 19 / B-C1/A-I1 remainder), written by both a full rejection (`ledger.ts#rejectKey`) and a **partial** one (`ledger.ts#recordPartialReject`, see below). The `rejected-inbox-key` alert fires on a RECENT (last hour) count here, not on `rejectedKeyCount()`'s never-pruned total, so it resolves once rejections stop instead of firing forever after the first one ever seen |
 | `drainsPaused` | boolean (o11y spend cap). Set on every alert tick from the `o11y-spend-cap` result, so it follows the runtime budget override. The cron decides its backlog wake only after the alerts ran (F37). While it is set, the cron never wakes the box for the backlog, and `GrafanaBox.drainStep` pushes nothing, whatever woke the box. A visit wake still starts the box and serves Grafana (ADR §G) |

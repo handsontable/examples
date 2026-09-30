@@ -96,25 +96,26 @@ export const MAX_NEW_FINGERPRINT_POINTS_PER_TICK = 100;
  * point per fingerprint the registry saw for the first time, charted by the
  * Observability self "new handled-error fingerprints" panel. Returns how many
  * were written; the rest of a flood stays in the registry and is not charted.
+ *
+ * Rejects if the sink throws or rejects, so the caller can leave the fingerprint
+ * unannounced and retry it next tick (the point is the only place it is announced).
+ * A binding whose `writeDataPoint` returns nothing gives no failure to see; only a
+ * synchronous throw or a rejected promise (the local ClickHouse sink) is caught.
  */
-export function writeNewFingerprintPoints(
+export async function writeNewFingerprintPoints(
   sink: AeSink,
   commonAttrs: CommonResourceAttrs,
   fingerprints: readonly string[],
-): number {
-  let written = 0;
+): Promise<number> {
+  const writes: Promise<unknown>[] = [];
   for (const fingerprint of fingerprints.slice(0, MAX_NEW_FINGERPRINT_POINTS_PER_TICK)) {
-    try {
-      const point: AePoint = toAePoint("o11y.new_fingerprint", { count: 1 }, { ...commonAttrs, fingerprint });
-      Promise.resolve(sink.writeDataPoint(point)).catch(() => {
-        // A failed chart point must not fail the alert tick.
-      });
-      written += 1;
-    } catch {
-      // toAePoint rejects a value outside the contract; skip that one fingerprint.
-    }
+    // A value outside the contract throws here too: it can never be written, and failing the
+    // tick (alert-eval-error) is louder than announcing nothing while recording it as announced.
+    const point: AePoint = toAePoint("o11y.new_fingerprint", { count: 1 }, { ...commonAttrs, fingerprint });
+    writes.push(Promise.resolve().then(() => sink.writeDataPoint(point)));
   }
-  return written;
+  await Promise.all(writes);
+  return writes.length;
 }
 
 function writeAlertPoint(
