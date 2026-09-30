@@ -254,6 +254,19 @@ stores and packs. For each accepted request, in this order:
 One writer means key order equals arrival order; storage-backed buffering means a
 deploy, eviction or host restart between two alarms loses nothing.
 
+**Ingest deadline.** The `v1/logs`, `deploy` and `hooks/sentry` routes race the
+`InboxWriter.ingest` call against a 10 s deadline (`INGEST_DEADLINE_MS`,
+`workers/o11y/src/inbox/ingest.ts`; an `AbortSignal` cannot cancel a Durable Object RPC, so the
+call is abandoned, not stopped). A deadline miss answers `503` with `Retry-After: 30` and writes
+an `o11y.ingest` point with outcome `dropped`, reason `ingest_timeout`; a rejected call answers
+the same `503` with reason `ingest_error`. Accounting caveat: if the object commits and only the
+reply is lost, that batch is counted as `ingest_timeout`, and its redelivery is deduplicated and
+counted as `duplicate`, so a committed batch can go uncounted as `accepted`. Cloudflare's OTLP
+exporter is undocumented on its timeout, retry count and backoff, whether it back-pressures the
+source Worker, and what it treats as a failure; that stays a known unknown, watched passively
+through the "Observability self" dashboard's `o11y.ingest` outcome panel. `/telemetry/collect`
+keeps its own catch (`500`, `invalid_item`) and has no deadline yet.
+
 Analytics Engine points for browser metrics are written by the route handler after step 3
 (§F.1), so they exist while the box sleeps. `example.*` events (ADR-0042) produce Analytics Engine points only
 and are never packed into the inbox. The exact first-seen registry for error fingerprints

@@ -14,6 +14,7 @@ import { checkSentryHmac } from "./gates/sentry.js";
 import { checkExportSecret } from "./gates/secret.js";
 import { COLLECT_MAX_BYTES, OTLP_MAX_BYTES, SMALL_JSON_MAX_BYTES } from "./gates/limits.js";
 import { inboxWriter } from "./inbox/accessor.js";
+import { ingestWithDeadline } from "./inbox/ingest.js";
 import { isDeployPayload, processDeployPayload } from "./normalise/deploy.js";
 import { countFaroItems, MAX_FARO_ITEMS_PER_BODY, processFaroBody } from "./normalise/faro.js";
 import { processOtlpBody } from "./normalise/otlp.js";
@@ -166,8 +167,9 @@ async function handleOtlpLogs(req: Request, env: Env, ctx: ExecutionContext): Pr
     }
   }
   if (processed.items.length > 0) {
-    const result = await inboxWriter(env).ingest("worker", receivedAtMs, processed.items);
-    for (const r of result.results) r.outcome === "duplicate" ? duplicate++ : accepted++;
+    const outcome = await ingestWithDeadline(env, "worker", receivedAtMs, processed.items);
+    if (!outcome.ok) return respondDrop(env, ctx, outcome.drop);
+    for (const r of outcome.result.results) r.outcome === "duplicate" ? duplicate++ : accepted++;
   }
 
   return respondIngested(env, ctx, "v1/logs", { accepted, duplicate }, bytes.byteLength);
@@ -196,7 +198,9 @@ async function handleDeploy(req: Request, env: Env, ctx: ExecutionContext): Prom
 
   const receivedAtMs = Date.now();
   const item = await processDeployPayload(body, env, receivedAtMs);
-  const result = await inboxWriter(env).ingest("worker", receivedAtMs, [item]);
+  const outcome = await ingestWithDeadline(env, "worker", receivedAtMs, [item]);
+  if (!outcome.ok) return respondDrop(env, ctx, outcome.drop);
+  const result = outcome.result;
   const accepted = result.results.filter((r) => r.outcome === "accepted").length;
   const duplicate = result.results.filter((r) => r.outcome === "duplicate").length;
 
@@ -225,7 +229,9 @@ async function handleSentryHook(req: Request, env: Env, ctx: ExecutionContext): 
 
   const receivedAtMs = Date.now();
   const item = await processSentryPayload(body, env, receivedAtMs, req.headers.get("sentry-hook-timestamp"));
-  const result = await inboxWriter(env).ingest("worker", receivedAtMs, [item]);
+  const outcome = await ingestWithDeadline(env, "worker", receivedAtMs, [item]);
+  if (!outcome.ok) return respondDrop(env, ctx, outcome.drop);
+  const result = outcome.result;
   const accepted = result.results.filter((r) => r.outcome === "accepted").length;
   const duplicate = result.results.filter((r) => r.outcome === "duplicate").length;
 
