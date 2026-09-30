@@ -176,6 +176,9 @@ export async function atCapacityRule(env: Env, queryFn: AeQueryFn = runAeQuery):
  *  `reason`, and only the 503 is dropped. A build-failed 500 there still counts. */
 const FIVE_XX_STILL_BUILDING_ROUTE_CLASSES = ["d/:id", "embed/:id"];
 
+/** Requests (after the exclusions below) in the 15-minute window under which the rule is not evaluated: at a 1 % threshold one error only exceeds it when the total is under 100, so a floor of 100 means a single 500 can never page. */
+export const FIVE_XX_MIN_REQUESTS = 100;
+
 export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const windowMs = 15 * 60 * 1000;
   const routeClassCol = col("route_class");
@@ -208,12 +211,14 @@ export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery):
   const adjustedFiveXx = Math.max(0, fiveXx - deliberate);
   const adjustedTotal = Math.max(0, total - deliberate);
   const pct = ratio(adjustedFiveXx, adjustedTotal) * 100;
+  const enoughSamples = adjustedTotal >= FIVE_XX_MIN_REQUESTS;
   return {
     rule: "api-5xx-rate",
-    firing: adjustedTotal > 0 && pct > 1,
+    firing: enoughSamples && pct > 1,
     detail:
       `${pct.toFixed(2)}% 5xx over the last 15 min (${adjustedFiveXx}/${adjustedTotal}, threshold 1%, ` +
-      `excludes at-capacity/container-starting/chat-theme-gateway refusals and still-building 503s)`,
+      `excludes at-capacity/container-starting/chat-theme-gateway refusals and still-building 503s)` +
+      (enoughSamples ? "" : `; only ${adjustedTotal} request(s), below the ${FIVE_XX_MIN_REQUESTS} needed to evaluate the rate`),
   };
 }
 
@@ -376,6 +381,9 @@ export async function snapshotBuildFailedRateRule(env: Env, queryFn: AeQueryFn =
 // ---- LiteLLM errors: above 5% (chat.answer + theme.ai, both gateway -------
 // call sites; window: 1h, same reasoning as session-start) ------------------
 
+/** Gateway calls (denied excluded) in the hour under which the rule is not evaluated: at a 5 % threshold one error only exceeds it when the total is under 20, so a floor of 20 means a single gateway error can never page. */
+export const LITELLM_MIN_CALLS = 20;
+
 export async function litellmErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const windowMs = HOUR_MS;
   const [chat, theme] = await Promise.all([
@@ -390,10 +398,13 @@ export async function litellmErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQ
     .reduce((sum, [, c]) => sum + c, 0);
   const errors = (chat.get("error") ?? 0) + (theme.get("error") ?? 0);
   const pct = ratio(errors, total) * 100;
+  const enoughSamples = total >= LITELLM_MIN_CALLS;
   return {
     rule: "litellm-error-rate",
-    firing: total > 0 && pct > 5,
-    detail: `${pct.toFixed(2)}% gateway errors over the last hour (${errors}/${total}, threshold 5%)`,
+    firing: enoughSamples && pct > 5,
+    detail:
+      `${pct.toFixed(2)}% gateway errors over the last hour (${errors}/${total}, threshold 5%)` +
+      (enoughSamples ? "" : `; only ${total} call(s), below the ${LITELLM_MIN_CALLS} needed to evaluate the rate`),
   };
 }
 
