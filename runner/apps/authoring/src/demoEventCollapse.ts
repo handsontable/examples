@@ -18,6 +18,9 @@ export const DEMO_COLLAPSE_CEILING = 50;
  *  edit session of runtime errors cannot silence compile errors (or the reverse). */
 export const DEMO_COMPILE_CEILING = 50;
 
+/** Collapse keys starting with this are compile errors; the sentry.ts key and the ceiling split share it. */
+export const COMPILE_KEY_PREFIX = "compile:";
+
 /** Distinct keys held for one burst. Anything past this is dropped — the
  *  final run of a real demo has a handful of distinct faults, not dozens. */
 const DEMO_COLLAPSE_PENDING_MAX = 20;
@@ -93,7 +96,7 @@ export function createDemoEventCollapse<T>(opts: DemoEventCollapseOptions<T>): D
   // key cannot already be counted — `counted` is cleared when the burst opens
   // and nothing is emitted until it closes.
   function emit(key: string, item: T): void {
-    const isCompile = key.startsWith("compile:");
+    const isCompile = key.startsWith(COMPILE_KEY_PREFIX);
     if (isCompile ? compileUsed >= compileCeiling : used >= ceiling) return;
     const current = running.get(key);
     if (current) current.emitted = true;

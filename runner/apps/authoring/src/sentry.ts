@@ -31,7 +31,7 @@ import {
 } from "./eventGate.js";
 import { resolveSentryScope, reportsDiagnosticToSentry } from "./sentryScope.js";
 import { demoEventReport, type DemoMonitorKind } from "./demoEventReport.js";
-import { createDemoEventCollapse, type PushOutcome } from "./demoEventCollapse.js";
+import { COMPILE_KEY_PREFIX, createDemoEventCollapse, type PushOutcome } from "./demoEventCollapse.js";
 import { tier2StderrReport } from "./tier2Report.js";
 import { telemetry } from "./telemetry/index.js";
 
@@ -228,7 +228,7 @@ const demoEventCollapse = createDemoEventCollapse<() => void>({
 
 /** Collapse key for a compile error — by kind, not message; prefix
  *  `compile:` cannot collide with a §7 `context:hash` fingerprint. */
-const COMPILE_ERROR_KEY = "compile:sandpack.compile_error";
+const COMPILE_ERROR_KEY = `${COMPILE_KEY_PREFIX}sandpack.compile_error`;
 
 /** Routes one Tier-1 compile error through the collapse with `replacesRun`,
  *  so a typed syntax error counts as one `sandpack.compile_error` and no

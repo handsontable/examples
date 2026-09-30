@@ -332,6 +332,8 @@ export class SandpackRuntime implements DemoRuntime {
   private readonly staleCbs = new Set<(stale: boolean) => void>();
   /** The newest push failed to transpile, so the preview still shows the last good run. */
   private lastPushFailed = false;
+  /** Pushes still awaiting `start` when the newest push failed: their `start` is older than the failure and must not clear it. */
+  private startsOlderThanFailure = 0;
   /** Pushes dispatched to the bundler whose `start` has not arrived yet. */
   private pushesAwaitingStart = 0;
   /** When the compile currently in flight was dispatched to the bundler — either
@@ -676,14 +678,14 @@ export class SandpackRuntime implements DemoRuntime {
       case "start":
         if (this.pushesAwaitingStart === 0) break;
         this.pushesAwaitingStart -= 1;
-        this.setLastPushFailed(false);
+        if (this.startsOlderThanFailure > 0) this.startsOlderThanFailure -= 1;
+        else this.setLastPushFailed(false);
         for (const cb of this.pushOutcomeCbs) cb("rerun");
         break;
       case "done":
         // (`compilatonError` is misspelled in the upstream payload. Leave it.)
         if (m.compilatonError) return; // error surfaced via its own message; see "show-error"
         this.resolveCompileTiming("ok");
-        this.setLastPushFailed(false);
         this.emitReady();
         break;
       case "action":
@@ -874,6 +876,7 @@ export class SandpackRuntime implements DemoRuntime {
         // `reload()` passes `force`, and its stamp guarantees a diff, so the refresh
         // button still re-runs the sandbox rather than being skipped here.
         if (!opts.force && sameFiles(candidate, this.published)) {
+          this.startsOlderThanFailure = 0;
           this.setLastPushFailed(false);
           for (const cb of this.pushOutcomeCbs) cb("unchanged");
           return;
@@ -913,6 +916,7 @@ export class SandpackRuntime implements DemoRuntime {
          * already showing it. */
         if (isTranspileFailure(cause)) {
           if (this.client && seq === this.updateSeq) {
+            this.startsOlderThanFailure = this.pushesAwaitingStart;
             this.setLastPushFailed(true);
             this.reportTranspileFailure(cause);
           }

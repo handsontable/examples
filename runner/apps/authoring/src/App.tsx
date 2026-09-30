@@ -3361,7 +3361,7 @@ function Authoring({
         }
         syncing={syncing}
         refreshing={refreshing}
-        stale={previewStale}
+        stale={previewStale && status === "ready"}
         version={version}
         versionOptions={docsPath ? versionOptions : versionsForEntry(versionOptions, entry.minCoreMajor)}
         onVersionChange={changeVersion}
