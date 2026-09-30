@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-088199f-20260930",
-  "count": 1541,
+  "hotVersion": "0.0.0-next-28ef1fb-20260930",
+  "count": 1542,
   "examples": [
     {
       "bucket": "next",
@@ -20593,6 +20593,23 @@
       "docPermalink": "/recipes/import-export/import-csv-excel",
       "framework": "typescript",
       "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/import-export/import-csv-excel/vue/example1.vue",
+      "file": "recipes__import-export__import-csv-excel__vue__example1.vue.json",
+      "breadcrumb": [
+        "Recipes",
+        "Import Export",
+        "Import from CSV or Excel"
+      ],
+      "guide": "recipes/import-export/import-csv-excel/import-csv-excel.md",
+      "guideTitle": "Import from CSV or Excel",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/import-export/import-csv-excel",
+      "framework": "vue",
+      "displayName": "Vue 3"
     },
     {
       "bucket": "next",
