@@ -24,7 +24,7 @@ import type {
 export type { HmrRoundtripEvent, SessionStartTimingEvent } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
-import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, truncateMessage } from "./monitor.js";
+import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, postMonitorReset, truncateMessage } from "./monitor.js";
 import { failureDetail, RUNNER_PROGRESS_MARKER, STDERR_MARKERS } from "./failure-log.js";
 
 /**
@@ -1148,6 +1148,12 @@ export class ContainerRuntime implements DemoRuntime {
     // ready: the buffered flush `mount()` triggers for edits made mid-create is not
     // an HMR round trip, there is no preview yet for it to refresh.
     if (this.didReady && batch.length > 0) this.lastEditFlushDispatchedAt = performance.now();
+    // Vite HMR keeps the injected document, so the reporter's per-page budget and the
+    // stderr relay's ceiling are re-armed for each edit run here.
+    if (this.didReady && this.opts.monitor && batch.length > 0) {
+      postMonitorReset(this.opts.iframe.contentWindow);
+      this.stderrRelayed = 0;
+    }
     for (const [path, contents] of batch) {
       // Re-check per iteration: a dispose() during an earlier await must stop
       // the rest of the batch — writes to a torn-down session are pointless

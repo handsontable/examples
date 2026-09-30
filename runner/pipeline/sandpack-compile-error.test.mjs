@@ -514,3 +514,59 @@ test("without the monitor injected, no reset is posted into the preview", async 
   await settle();
   assert.deepEqual(posted, []);
 });
+
+test("a failed transpile marks the preview stale; a rerun start or an unchanged push clears it", async () => {
+  const { runtime } = mountedParcel();
+  const changes = [];
+  runtime.onStaleChange((stale) => changes.push(stale));
+  const broken = () => runtime.writeFile("/index.js", BASE_SOURCE + "const R9C = ;\n");
+
+  broken();
+  await settle();
+  broken();
+  await settle();
+  assert.deepEqual(changes, [true], "reported once, not per keystroke");
+
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n");
+  await settle();
+  assert.deepEqual(changes, [true], "dispatched but not yet running: still the old render");
+  runtime.onMessage({ type: "start" });
+  assert.deepEqual(changes, [true, false], "the bundler started the fixed run");
+
+  broken();
+  await settle();
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n"); // back to what the bundler holds
+  await settle();
+  assert.deepEqual(changes, [true, false, true, false], "undoing the break re-runs nothing and clears it");
+});
+
+test("an older push's start does not clear a newer transpile failure; a later push's start does", async () => {
+  const { runtime } = mountedParcel();
+  const changes = [];
+  runtime.onStaleChange((stale) => changes.push(stale));
+
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(1)\n"); // valid, dispatched, start pending
+  await settle();
+  runtime.writeFile("/index.js", BASE_SOURCE + "const R9C = ;\n"); // newer, fails
+  await settle();
+  assert.deepEqual(changes, [true]);
+
+  runtime.onMessage({ type: "start" }); // the first push's compile
+  runtime.onMessage({ type: "done" });
+  assert.deepEqual(changes, [true], "the preview still shows the older push, not the failed edit");
+
+  runtime.writeFile("/index.js", BASE_SOURCE + "f(2)\n");
+  await settle();
+  runtime.onMessage({ type: "start" });
+  assert.deepEqual(changes, [true, false], "a push newer than the failure clears it");
+});
+
+test("a superseded keystroke's transpile failure does not mark the preview stale", async () => {
+  const { runtime } = mountedParcel();
+  const changes = [];
+  runtime.onStaleChange((stale) => changes.push(stale));
+  runtime.writeFile("/index.js", BASE_SOURCE + "const R9C = \n");
+  runtime.writeFile("/index.js", BASE_SOURCE + "const R9C = 1;\n");
+  await settle();
+  assert.deepEqual(changes, []);
+});

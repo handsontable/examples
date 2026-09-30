@@ -237,7 +237,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 |---|---|---|---|---|
 | `preview.ready_ms` | browser | surface, tier, framework, ht_major, outcome, bucket | duration_ms | `ready`, `error`, `timeout`, `abandoned` |
 | `sandpack.compile_ms` | browser; the settled (last) compile of each edit burst, closed by 2 s without a compile or compile error. The mount's compile is not sent (`preview.ready_ms` covers first load) | tier, framework, ht_major, outcome | duration_ms | `ok`, `error` |
-| `sandpack.compile_error` | browser | framework, ht_major, fingerprint | count | — |
+| `sandpack.compile_error` | browser | framework, ht_major, fingerprint, bucket | count | — |
 | `sandpack.bundler_unreachable` | browser | ht_major | count, duration_ms | — |
 | `preview.runtime_error` | browser | surface=`demo-runtime`, tier, framework, ht_major, fingerprint, reason | count | reason: `uncaught`, `console`, `network`, `stderr` |
 | `version.switch` | browser | framework, ht_major (to), reason (from), bucket | count | — |

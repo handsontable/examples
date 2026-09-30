@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext, type FrameLocator, type Page } from "@playwright/test";
-import { workspaceFiles } from "./helpers";
+import { workspaceFiles, abortSandpackHosts } from "./helpers";
 
 // Does a generated theme module actually reach the grid? (DEV-2197)
 //
@@ -416,8 +416,7 @@ async function openWithThemeApi(page: Page, answer: unknown) {
   );
   // The panel is chrome here; aborting the bundler is what keeps these fast and
   // deterministic, the way e2e/panels.spec.ts does it.
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   await page.route("**/api/theme", (route) => route.fulfill({ json: answer }));
 
   await page.goto("/?example=react");

@@ -57,6 +57,8 @@ export interface EditorShellProps {
   syncing?: boolean;
   /** A row-2 refresh is in flight — blanks the pane behind a spinner (`72:26445`). */
   refreshing?: boolean;
+  /** The preview shows the last successful run because the newest edit does not compile. */
+  stale?: boolean;
 
   version: string;
   versionOptions: string[];
@@ -636,6 +638,7 @@ export function EditorShell(props: EditorShellProps) {
             onRetry={props.onRetry}
             syncing={props.syncing}
             refreshing={props.refreshing}
+            stale={props.stale}
           />
 
           {/* Outside `PreviewPane`, deliberately: its overlays are `inset: 0`, so a bar
@@ -646,6 +649,7 @@ export function EditorShell(props: EditorShellProps) {
             status={props.status}
             frameworkName={props.frameworkName}
             version={props.version}
+            stale={props.stale}
             // Same two conditions the top bar applied before DEV-2505 moved this:
             // never in full mode, and never to someone already signed in (on
             // `/share/:id` a signed-in visitor keeps their account menu and must

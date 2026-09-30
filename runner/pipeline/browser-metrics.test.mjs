@@ -364,6 +364,39 @@ test("sandpack.compile_error: fingerprinted, no authored text in the recorded at
   assertValidAgainstRegistry(telemetry);
 });
 
+test("sandpack.compile_error: carries the bucket the getter returns at emit time, and omits it while unresolved", () => {
+  const telemetry = recordingTelemetry();
+  const runtime = fakeSandpackRuntime();
+  let bucket;
+  wireRuntimeMetrics(runtime, { ...SANDPACK_CTX, bucket: () => bucket }, telemetry);
+
+  runtime.fireCompileError({ message: "first error" });
+  bucket = "17.1";
+  runtime.fireCompileError({ message: "second error" });
+
+  assert.equal("bucket" in telemetry.metrics[0].attrs, false);
+  assert.equal(telemetry.metrics[1].attrs.bucket, "17.1");
+  assertValidAgainstRegistry(telemetry);
+});
+
+test("sandpack.compile_error: the bucket is read when the error arrives, not when a collapse emits it", () => {
+  const telemetry = recordingTelemetry();
+  const runtime = fakeSandpackRuntime();
+  let bucket = "18.1";
+  let held;
+  wireRuntimeMetrics(runtime, { ...SANDPACK_CTX, bucket: () => bucket }, telemetry, {
+    collapseCompileError: (emit) => {
+      held = emit;
+    },
+  });
+
+  runtime.fireCompileError({ message: "boom" });
+  bucket = "17.1"; // switched before the collapse settles
+  held();
+
+  assert.equal(telemetry.metrics[0].attrs.bucket, "18.1");
+});
+
 test("sandpack.compile_error: the same fingerprint (a keystroke ladder) reports once, not once per keystroke", () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeSandpackRuntime();

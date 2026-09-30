@@ -97,7 +97,7 @@ was caught — four red remix cells, everything else green.
 ## The env-gate taxonomy
 
 The default `playwright test` run is the deterministic PR suite: `stubShell()`
-aborts both Sandpack hosts, stubs `/api/versions`, and neuters the login
+aborts every Sandpack host (versioned ones included), stubs `/api/versions`, and neuters the login
 redirect. Everything beyond that world is gated. Pick the *narrowest* gate that
 covers the dependency:
 

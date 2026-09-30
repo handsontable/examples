@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { abortSandpackHosts } from "./helpers";
 
 // Sidebar file CRUD gating (DEV-2168 / T11, ADR-0025). The header `+` /
 // `folder-plus` and the per-row ✎ / ✕ follow **being signed in**, not the mode —
@@ -32,8 +33,7 @@ async function stubShell(page: Page) {
   await page.route("**/api/versions", (route) =>
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
   );
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   // A broken sign-in stub would let `/edit/:id` call `login()` and navigate to the
   // real external broker. Fail here instead.
   await page.route("**/broker/login**", (route) => route.abort());

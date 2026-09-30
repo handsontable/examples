@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { abortSandpackHosts } from "./helpers";
 import { highestReleaseBucket } from "../packages/runtime/src/docs-bucket.js";
 import { readFileSync } from "node:fs";
 
@@ -155,8 +156,7 @@ async function installRouteFixtures(
       versions: ["18.0.0", "17.1.0", NEXT_VERSION],
     },
   }));
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   await page.route("**/docs-examples/*/*.json", async (route) => {
     const url = new URL(route.request().url());
     requests.push(url.pathname);

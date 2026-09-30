@@ -17,8 +17,15 @@ import { highestReleaseBucket } from "../packages/runtime/src/docs-bucket.js";
 
 export const EMAIL = "dev@handsontable.com";
 
+const SANDPACK_HOST = /^(?:[\w-]+-)?sandpack(?:-bundler)?\.codesandbox\.io$/;
+
+/** Aborts every Sandpack bundler host, including the versioned ones such as `2-19-8-sandpack.codesandbox.io`. */
+export async function abortSandpackHosts(page: Page) {
+  await page.route((url) => SANDPACK_HOST.test(url.hostname), (route) => route.abort());
+}
+
 /**
- * The deterministic-shell recipe: a stubbed version list, both Sandpack hosts
+ * The deterministic-shell recipe: a stubbed version list, every Sandpack host
  * aborted (no external bundler, no grid — the shell renders fine without one),
  * and the login redirect neutered so a stray click cannot leave the app.
  */
@@ -26,8 +33,7 @@ export async function stubShell(page: Page) {
   await page.route("**/api/versions", (route) =>
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
   );
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   await page.route("**/broker/login**", (route) => route.abort());
 }
 

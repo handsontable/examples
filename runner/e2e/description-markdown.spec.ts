@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { abortSandpackHosts } from "./helpers";
 
 // Markdown demo descriptions and their editor (DEV-2507).
 //
@@ -22,8 +23,7 @@ async function stubShell(page: Page) {
   await page.route("**/api/versions", (route) =>
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0"] } }),
   );
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   await page.route("**/broker/login**", (route) => route.abort());
 }
 

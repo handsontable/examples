@@ -170,7 +170,7 @@ export interface WireRuntimeMetricsOptions {
  */
 export function wireRuntimeMetrics(
   runtime: DemoRuntime,
-  ctx: { framework: string; versionRef: string },
+  ctx: { framework: string; versionRef: string; bucket?: () => string | undefined },
   telemetry: Telemetry,
   opts: WireRuntimeMetricsOptions = {},
 ): void {
@@ -215,12 +215,14 @@ export function wireRuntimeMetrics(
       held.timer = setTimer(sendHeld, COMPILE_TIMING_SETTLE_MS);
     }
     const fp = fingerprint("sandpack.compile_error", event.message);
-    const emit = () =>
-      telemetry.metric(
-        "sandpack.compile_error",
-        {},
-        { framework: ctx.framework, ht_major: htMajor, fingerprint: fp },
-      );
+    // `ctx.bucket` is a getter because the bucket resolves after the runtime is wired; read at
+    // event time because the collapse may emit after the bucket has switched.
+    const bucket = ctx.bucket?.();
+    const emit = () => {
+      const attrs: HotAttrs = { framework: ctx.framework, ht_major: htMajor, fingerprint: fp };
+      if (bucket !== undefined) attrs.bucket = bucket;
+      telemetry.metric("sandpack.compile_error", {}, attrs);
+    };
     if (opts.collapseCompileError) {
       opts.collapseCompileError(emit, event.origin);
       return;

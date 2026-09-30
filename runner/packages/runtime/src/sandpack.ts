@@ -34,10 +34,9 @@ import { applyDepShims } from "./dep-shims.js";
 import { HTML_ENTRY_ENVS, resolveSandboxEntry, toParcelEntry } from "./sandbox-entry.js";
 import {
   MONITOR_COMPILE_MESSAGE_MAX,
-  MONITOR_MESSAGE_TYPE,
-  MONITOR_RESET,
   REPORTER_MODULE_LINE,
   injectReporter,
+  postMonitorReset,
   redactPreviewHosts,
   truncateMessage,
 } from "./monitor.js";
@@ -330,6 +329,11 @@ export class SandpackRuntime implements DemoRuntime {
   private readonly compileErrorCbs = new Set<(e: SandpackCompileErrorEvent) => void>();
   private readonly bundlerUnreachableCbs = new Set<(e: SandpackBundlerUnreachableEvent) => void>();
   private readonly pushOutcomeCbs = new Set<(outcome: "rerun" | "unchanged") => void>();
+  private readonly staleCbs = new Set<(stale: boolean) => void>();
+  /** The newest push failed to transpile, so the preview still shows the last good run. */
+  private lastPushFailed = false;
+  /** Pushes still awaiting `start` when the newest push failed: their `start` is older than the failure and must not clear it. */
+  private startsOlderThanFailure = 0;
   /** Pushes dispatched to the bundler whose `start` has not arrived yet. */
   private pushesAwaitingStart = 0;
   /** When the compile currently in flight was dispatched to the bundler — either
@@ -360,6 +364,18 @@ export class SandpackRuntime implements DemoRuntime {
    *  failed transpile; `rerun` fires when the bundler starts a run. */
   onPushOutcome(cb: (outcome: "rerun" | "unchanged") => void): void {
     this.pushOutcomeCbs.add(cb);
+  }
+
+  /** Fires when the preview starts or stops showing a run older than the newest edit
+   *  (its transpile failed). Immediate; the caller decides when an edit burst has settled. */
+  onStaleChange(cb: (stale: boolean) => void): void {
+    this.staleCbs.add(cb);
+  }
+
+  private setLastPushFailed(failed: boolean): void {
+    if (this.lastPushFailed === failed) return;
+    this.lastPushFailed = failed;
+    for (const cb of this.staleCbs) cb(failed);
   }
 
   private resolveCompileTiming(outcome: "ok" | "error"): void {
@@ -662,6 +678,8 @@ export class SandpackRuntime implements DemoRuntime {
       case "start":
         if (this.pushesAwaitingStart === 0) break;
         this.pushesAwaitingStart -= 1;
+        if (this.startsOlderThanFailure > 0) this.startsOlderThanFailure -= 1;
+        else this.setLastPushFailed(false);
         for (const cb of this.pushOutcomeCbs) cb("rerun");
         break;
       case "done":
@@ -858,6 +876,8 @@ export class SandpackRuntime implements DemoRuntime {
         // `reload()` passes `force`, and its stamp guarantees a diff, so the refresh
         // button still re-runs the sandbox rather than being skipped here.
         if (!opts.force && sameFiles(candidate, this.published)) {
+          this.startsOlderThanFailure = 0;
+          this.setLastPushFailed(false);
           for (const cb of this.pushOutcomeCbs) cb("unchanged");
           return;
         }
@@ -895,7 +915,11 @@ export class SandpackRuntime implements DemoRuntime {
          * later keystroke arrives here with the same terminal error, and the card is
          * already showing it. */
         if (isTranspileFailure(cause)) {
-          if (this.client && seq === this.updateSeq) this.reportTranspileFailure(cause);
+          if (this.client && seq === this.updateSeq) {
+            this.startsOlderThanFailure = this.pushesAwaitingStart;
+            this.setLastPushFailed(true);
+            this.reportTranspileFailure(cause);
+          }
           return;
         }
         if (this.compilerFailureEmitted || !isCompilerUnavailable(cause)) return;
@@ -908,11 +932,7 @@ export class SandpackRuntime implements DemoRuntime {
    *  same window as the compile, so it is delivered first. */
   private resetMonitorBudget(): void {
     if (!this.opts.monitor) return;
-    try {
-      this.opts.iframe.contentWindow?.postMessage({ type: MONITOR_MESSAGE_TYPE, reset: MONITOR_RESET }, "*");
-    } catch {
-      /* a detached frame: its next document starts with a fresh budget anyway */
-    }
+    postMonitorReset(this.opts.iframe.contentWindow);
   }
 
   /** §5 `sandpack.compile_error` for a parcel pre-transpile failure — the babel
@@ -936,6 +956,7 @@ export class SandpackRuntime implements DemoRuntime {
       this.errorCbs.clear();
       this.compileTimingCbs.clear();
       this.compileErrorCbs.clear();
+      this.staleCbs.clear();
       this.bundlerUnreachableCbs.clear();
       this.compileDispatchedAt = null;
       // No reload bookkeeping to drain: `reload()` settles on its own transpile, and

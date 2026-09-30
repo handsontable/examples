@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { abortSandpackHosts } from "./helpers";
 
 // The Ask AI and Style drawers (DEV-2209). Deterministic — no `E2E_LIVE=1`: both
 // panels are chrome, so the Sandpack bundler is aborted and `/api/versions` is
@@ -19,8 +20,7 @@ async function openPlayground(page: Page, mode: "light" | "dark") {
   await page.route("**/api/versions", (route) =>
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
   );
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   await page.goto("/?example=react");
   await expect(page.getByRole("button", { name: "Style", exact: true })).toBeVisible();
   // The pre-paint script reads storage, so the attribute is already right; assert

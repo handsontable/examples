@@ -4,6 +4,7 @@ import {
   createDemoEventCollapse,
   DEMO_EDIT_SETTLE_MS,
   DEMO_COLLAPSE_CEILING,
+  DEMO_COMPILE_CEILING,
 } from "../apps/authoring/src/demoEventCollapse.ts";
 import { demoEventReport } from "../apps/authoring/src/demoEventReport.ts";
 import { fingerprint, fingerprintShape } from "../packages/runtime/dist/telemetry/index.js";
@@ -474,4 +475,38 @@ test("the start of an older run does not drop the newest edit's compile failure"
   relay("cons is not defined");
   clock.advance(DEMO_EDIT_SETTLE_MS);
   assert.deepEqual(emitted, ["compile: Unexpected token (1:5)"]);
+});
+
+test("runtime reports at the ceiling do not block a compile error", () => {
+  const { emitted, collapse, relay } = compileHarness();
+  for (let i = 0; i < DEMO_COLLAPSE_CEILING + 5; i++) relay(`crafted ${"x".repeat(i)}`);
+  assert.equal(emitted.length, DEMO_COLLAPSE_CEILING);
+  collapse.report(COMPILE_KEY, "compile: late", { replacesRun: true });
+  assert.equal(emitted.at(-1), "compile: late");
+  assert.equal(emitted.length, DEMO_COLLAPSE_CEILING + 1);
+});
+
+test("compile errors at their ceiling do not block runtime reports", () => {
+  const { clock, emitted, collapse, relay } = compileHarness();
+  for (let i = 0; i < DEMO_COMPILE_CEILING + 5; i++) {
+    collapse.noteEdit();
+    collapse.report(COMPILE_KEY, `compile: ${i}`, { replacesRun: true });
+    clock.advance(DEMO_EDIT_SETTLE_MS);
+  }
+  assert.equal(emitted.length, DEMO_COMPILE_CEILING);
+  relay("still counted");
+  assert.equal(emitted.at(-1), "still counted");
+  assert.equal(emitted.length, DEMO_COMPILE_CEILING + 1);
+});
+
+test("a superseded bundler error between a push and the next start does not drop the newest run's runtime error", () => {
+  const { clock, emitted, collapse, relay } = harness();
+  collapse.noteEdit();
+  collapse.noteEdit();
+  collapse.pushOutcome("rerun"); // start(A)
+  collapse.report(COMPILE_KEY, "compile: A", { replacesRun: true, fromBundler: true });
+  collapse.pushOutcome("rerun"); // start(B)
+  relay(FINAL);
+  clock.advance(DEMO_EDIT_SETTLE_MS);
+  assert.deepEqual(emitted, [FINAL]);
 });

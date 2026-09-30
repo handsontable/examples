@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { abortSandpackHosts } from "./helpers";
 
 // The editor/preview splitter (DEV-2160 / T6). Deterministic — no `E2E_LIVE=1`:
 // `PreviewPane` renders its <iframe> unconditionally, and an empty frame swallows
@@ -11,8 +12,7 @@ async function openPlayground(page: Page) {
   await page.route("**/api/versions", (route) =>
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions: ["18.0.0", "17.1.0"] } }),
   );
-  await page.route("https://sandpack.codesandbox.io/**", (route) => route.abort());
-  await page.route("https://sandpack-bundler.codesandbox.io/**", (route) => route.abort());
+  await abortSandpackHosts(page);
   // No storage reset needed — each test gets a fresh context, so `hot-split` is
   // absent and the seam starts at the designed 50%. (An `addInitScript` reset
   // would also run on `page.reload()` and silently defeat the persistence test.)

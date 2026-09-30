@@ -175,6 +175,28 @@ test("Faro measurement: one Analytics Engine point, no STORED record (AE-only)",
   assert.equal(item.aePoints[0].indexes[0], "preview.ready_ms");
 });
 
+test("Faro sandpack.compile_error: hot.bucket reaches the Analytics Engine point's bucket slot", async () => {
+  const body = {
+    meta: { app: { name: "demos-authoring", version: "deadbeef1234" } },
+    measurements: [
+      {
+        type: "sandpack.compile_error",
+        values: { count: 1 },
+        timestamp: "2026-01-01T00:00:00.000Z",
+        context: {
+          "hot.framework": "react",
+          "hot.ht_major": "18",
+          "hot.fingerprint": "sandpack.compile_error:0123456789abcdef",
+          "hot.bucket": "18.1",
+        },
+      },
+    ],
+  };
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.equal(item.aePoints.length, 1);
+  assert.equal(item.aePoints[0].blobs[15], "18.1", "blob16 is bucket");
+});
+
 // Same flip for web-vitals — Faro's own `type: "web-vitals"` is still a
 // `measurement` item at the wire level (`processMeasurement`'s other
 // branch, faro.ts), so it takes the same `storeRecord = false` path.
