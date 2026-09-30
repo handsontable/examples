@@ -193,6 +193,8 @@ export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery):
     countByOutcome(env, "chat.answer", windowMs, "", queryFn),
     countByOutcome(env, "theme.ai", windowMs, "", queryFn),
   ]);
+  // Only the still-building 5xx points leave the ratio. The 2xx/3xx/4xx traffic on these routes now
+  // counts in the denominator, as it does for every other route.
   const stillBuildingCount = stillBuilding.get("5xx") ?? 0;
   const counts = new Map(allCounts);
   counts.set("5xx", Math.max(0, (counts.get("5xx") ?? 0) - stillBuildingCount));

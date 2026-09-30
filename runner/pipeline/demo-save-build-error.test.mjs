@@ -224,18 +224,19 @@ for (const [name, output] of USER_BUILD_FAILURES_PRINTING_INFRA_TEXT) {
   });
 }
 
-test("a build that exits 1 on undici's own `TypeError: fetch failed` line stays a 5xx", async () => {
-  setSandboxFactory(builder(() => ({
-    success: false,
-    exitCode: 1,
-    stdout: "",
-    stderr: "error during build:\nTypeError: fetch failed\n    at node:internal/deps/undici\n",
-  })));
-  const { env, ctx } = setup();
-  await seedCatalog(env);
-  const res = await worker.fetch(ROUTES[0][1](), env, ctx);
-  assert.equal(res.status, 500);
-});
+for (const [name, stderr] of [
+  ["undici's own `TypeError: fetch failed` line", "error during build:\nTypeError: fetch failed\n    at node:internal/deps/undici\n"],
+  ["a bracketed plugin's `[plugin:fonts] fetch failed` line", "error during build:\n[plugin:fonts] fetch failed\n"],
+  ["a coded `ERR_FETCH  Failed to fetch` line", "ERR_FETCH  Failed to fetch https://registry.example/x\n"],
+]) {
+  test(`a build that exits 1 on ${name} stays a 5xx`, async () => {
+    setSandboxFactory(builder(() => ({ success: false, exitCode: 1, stdout: "", stderr })));
+    const { env, ctx } = setup();
+    await seedCatalog(env);
+    const res = await worker.fetch(ROUTES[0][1](), env, ctx);
+    assert.equal(res.status, 500);
+  });
+}
 
 test("api.request records the exact status of a 5xx in its reason blob, and nothing for a 4xx (DEV-3143)", async () => {
   const REASON_SLOT = 8; // reason = blob9

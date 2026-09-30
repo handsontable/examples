@@ -211,9 +211,11 @@ const INFRA_FAILURE_TEXT =
   /ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|heap out of memory|signal SIGKILL|worker exited|`next\/font` error|fonts\.googleapis\.com/i;
 
 /** `fetch failed` (undici) and `Failed to fetch` (browsers) are plain words a build script can
- *  `console.log`, so they name infrastructure only on an error line (`TypeError: fetch failed`),
- *  never on a bare output line. An author who throws that text as an `Error` is still read as ours. */
-const INFRA_FETCH_ERROR_LINE = /^\s*(?:npm ERR!\s+)?(?:\w+)?Error:.*\b(?:fetch failed|Failed to fetch)\b/i;
+ *  `console.log`, so they name infrastructure only on a line a tool formats as an error
+ *  (`TypeError: fetch failed`, `[plugin] fetch failed`, `ERR_X ...`), never on a bare output line.
+ *  An author who throws that text as an `Error` is still read as ours. */
+const INFRA_FETCH_ERROR_LINE =
+  /^\s*(?:npm ERR!\s+|ERR_\w+\s+|\[[^\]\n]+\]\s*|error:\s*|\w*Error:\s*).*\b(?:fetch failed|Failed to fetch)\b/i;
 
 function namesInfrastructure(err: BuildFailure): boolean {
   const cause = err.message.replace(/^(?:build|install) failed:\s*/, "");
@@ -574,10 +576,12 @@ export async function createDemo(
   args: CreateArgs,
   buildReason: "inline" | "detached" = "inline",
 ): Promise<{ id: string }> {
-  // Chosen before the build so a failed create's point still names the demo.
   const id = args.id ?? shortId();
-  return withSnapshotBuildPoint(env, args.entry.framework, id, buildReason, async (addBytes) => {
-    const hash = await filesHash(args.files);
+  const hash = await filesHash(args.files);
+  // A create mints a fresh id per attempt, so one author retrying Save on the same broken
+  // source would read as many demos. The source hash repeats across those retries.
+  const demoKey = args.id ?? `src-${hash.slice(0, 12)}`;
+  return withSnapshotBuildPoint(env, args.entry.framework, demoKey, buildReason, async (addBytes) => {
     const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
 
     // Reuse a prior identical build if present.
