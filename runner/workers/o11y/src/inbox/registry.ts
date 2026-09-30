@@ -38,6 +38,10 @@ const FP_EVICT_BATCH_LIMIT = 5000;
 /** Entries seen so far in the current prune lap; becomes `fpCount` when the
  *  lap completes. Internal housekeeping, like `fpPruneCursor`. */
 const FP_LAP_SEEN_STORAGE_KEY = "fpLapSeen";
+/** Where `writer.ts#pruneStorage` persists the prune sweep's resume cursor
+ *  between cron ticks — not a contract-named key. Owned here because eviction
+ *  must reset it together with {@link FP_LAP_SEEN_STORAGE_KEY}. */
+export const FP_PRUNE_CURSOR_STORAGE_KEY = "fpPruneCursor";
 
 export async function readFpCount(storage: StorageLike): Promise<number> {
   return (await storage.get<number>(FP_COUNT_STORAGE_KEY)) ?? 0;
@@ -177,11 +181,19 @@ export async function evictOldestFingerprints(storage: StorageLike, max: number 
   // Count only entries whose `fp:` row still exists: an orphaned `fpts:` row
   // is deleted but was never part of the counter.
   const live = await getManyChunked<number>(storage, fpKeys);
-  await deleteChunked(storage, [...oldestKeys, ...fpKeys]);
+  // `fp:` first: a failure part-way leaves `fpts:` rows, which the next call
+  // walks again. The reverse order would strand `fp:` rows outside the index.
+  await deleteChunked(storage, fpKeys);
+  await deleteChunked(storage, oldestKeys);
   const evicted = live.size;
   // Eviction removes rows the in-progress prune lap may already have counted,
-  // so its running total is stale: restart the lap (the caller resets the
-  // cursor) and trust the counter until a fresh lap re-measures it.
-  await storage.put({ [FP_COUNT_STORAGE_KEY]: Math.max(0, count - evicted), [FP_LAP_SEEN_STORAGE_KEY]: 0 });
+  // so its running total is stale: restart the lap (total and cursor together,
+  // whether or not any live entry was evicted) and trust the counter until a
+  // fresh lap re-measures it.
+  await storage.put({
+    [FP_COUNT_STORAGE_KEY]: Math.max(0, count - evicted),
+    [FP_LAP_SEEN_STORAGE_KEY]: 0,
+    [FP_PRUNE_CURSOR_STORAGE_KEY]: null,
+  });
   return evicted;
 }

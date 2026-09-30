@@ -28,7 +28,13 @@ import {
   readAdmissionWindow,
 } from "./admission.js";
 import { capHashWrites, checkDuplicates } from "./dedupe.js";
-import { admitNewFingerprints, evictOldestFingerprints, FP_COUNT_STORAGE_KEY, readFpCount } from "./registry.js";
+import {
+  admitNewFingerprints,
+  evictOldestFingerprints,
+  FP_COUNT_STORAGE_KEY,
+  FP_PRUNE_CURSOR_STORAGE_KEY,
+  readFpCount,
+} from "./registry.js";
 import { o11ySelfIdentity } from "../normalise/respond.js";
 import { writePointFromDo } from "../normalise/points.js";
 // Aliased to `ledger*`: every one of these names also names a class method
@@ -72,10 +78,6 @@ import {
 import { getGrafanaBoxStub } from "../box.js";
 
 const CLEAN_MARKER_PREFIX = "state/wakes/";
-/** Where `pruneStorage` persists `pruneFingerprintRegistry`'s resume cursor
- *  between cron ticks — not a contract-named key (internal housekeeping
- *  state only, like `pack.ts`'s own `rowSeq`). */
-const FP_PRUNE_CURSOR_STORAGE_KEY = "fpPruneCursor";
 
 /** Paginates `O11Y_INBOX.list()` under `inbox/` into the shape `ledger.ts`
  *  needs — cheaper than a `.head()` per key, which would cost one
@@ -262,7 +264,7 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
       console.error(JSON.stringify({ event: "o11y.prune.error", target: "fingerprint", message: String(err) }));
     }
     try {
-      if ((await evictOldestFingerprints(storage)) > 0) await storage.put({ [FP_PRUNE_CURSOR_STORAGE_KEY]: null });
+      await evictOldestFingerprints(storage);
     } catch (err) {
       console.error(JSON.stringify({ event: "o11y.prune.error", target: "fingerprint-evict", message: String(err) }));
     }

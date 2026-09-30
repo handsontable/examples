@@ -25,6 +25,7 @@ const {
   pruneFingerprintRegistry,
   readFpCount,
   FP_COUNT_STORAGE_KEY,
+  FP_PRUNE_CURSOR_STORAGE_KEY,
 } = await import("../workers/o11y/src/inbox/registry.ts");
 const {
   ADMISSION_WINDOW_MS,
@@ -661,4 +662,32 @@ test("evictOldestFingerprints: discards the in-progress prune lap's running tota
   await evictOldestFingerprints(storage, 1);
 
   assert.equal(await storage.get("fpLapSeen"), 0);
+});
+
+test("evictOldestFingerprints: deletes every fp: row before any fpts: row, so a failure part-way never strands fp: rows outside the time index", async () => {
+  const storage = memoryStorage();
+  await putChunked(storage, await newFingerprintWrites(memoryStorage(), ["a", "b", "c"], 1000));
+  await storage.put({ [FP_COUNT_STORAGE_KEY]: 3 });
+  const deleted = [];
+  const spy = { ...storage, delete: async (keys) => { deleted.push(...keys); return storage.delete(keys); } };
+
+  await evictOldestFingerprints(spy, 0);
+
+  const lastFp = deleted.findLastIndex((k) => k.startsWith("fp:"));
+  const firstFpts = deleted.findIndex((k) => k.startsWith("fpts:"));
+  assert.ok(lastFp >= 0 && firstFpts > lastFp, `fpts: deleted before an fp: row: ${deleted.join(", ")}`);
+});
+
+test("evictOldestFingerprints: resets the prune cursor together with the lap total, even when it only removed orphans", async () => {
+  const storage = memoryStorage();
+  const seeded = await newFingerprintWrites(memoryStorage(), ["orphan"], 1000);
+  delete seeded["fp:orphan"];
+  await putChunked(storage, seeded);
+  // Over the cap on a stale counter, mid-lap: the cursor is mid-keyspace.
+  await storage.put({ [FP_COUNT_STORAGE_KEY]: 5, fpLapSeen: 4000, [FP_PRUNE_CURSOR_STORAGE_KEY]: "fp:m\0" });
+
+  await evictOldestFingerprints(storage, 1);
+
+  assert.equal(await storage.get("fpLapSeen"), 0);
+  assert.equal(await storage.get(FP_PRUNE_CURSOR_STORAGE_KEY), null, "a lap total of 0 with a mid-keyspace cursor would let the lap finish on the unscanned tail only");
 });
