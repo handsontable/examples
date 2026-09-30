@@ -3094,6 +3094,9 @@ function Authoring({
     setSaving(true);
     setErrorMessage(null);
     setSaveError(null);
+    // What this PATCH carries. Typing during the 8–14 s rebuild replaces `files`, and
+    // those edits are not in the request, so they must stay dirty (DEV-3147).
+    const sentFiles = filesRef.current;
     try {
       const token = getToken();
       const res = await fetch(`${API_BASE}/api/demos/${savedId}`, {
@@ -3103,7 +3106,7 @@ function Authoring({
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         }),
         body: JSON.stringify({
-          files: filesRef.current,
+          files: sentFiles,
           htVersion: version,
           // The API worker writes `example.saved` (ADR-0042 §2) from this once the
           // rebuild lands, so a visitor who leaves before the response still counts.
@@ -3111,7 +3114,7 @@ function Authoring({
         }),
       });
       await assertApiOk(res, `save failed (${res.status})`);
-      clearDirty();
+      if (filesRef.current === sentFiles) clearDirty();
       // Fallback for an API without the marker; remove once every deployed API sends it.
       if (browserCountsSave(await res.json().catch(() => null))) noteExampleAction("example.saved");
     } catch (e) {

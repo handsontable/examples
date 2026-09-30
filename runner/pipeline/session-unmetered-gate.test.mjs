@@ -71,5 +71,31 @@ test("a metered session passes the gate", async () => {
     JSON.stringify({ startedAt: Date.now(), meteredThrough: Date.now(), instanceType: "standard-3" }),
   );
   const res = await call(env, "GET", "/api/session/react-18-live/status?port=5173");
-  assert.notEqual(res.status, 410, "a live session must reach the sandbox");
+  assert.equal(res.status, 500, "reached the sandbox stub, which the harness makes throw");
+});
+
+test("a tombstoned id is refused even while a meter is still on record", async () => {
+  const { env } = envWithPointCapture();
+  await env.CACHE.put("session-tombstone:react-18-both", "1");
+  await env.CACHE.put(METER("react-18-both"), JSON.stringify({ startedAt: 1, meteredThrough: 1, instanceType: "standard-3" }));
+  const res = await call(env, "GET", "/api/session/react-18-both/status?port=5173");
+  assert.equal(res.status, 410);
+});
+
+test("a KV read failure fails open: the session is not refused", async () => {
+  const { env } = envWithPointCapture();
+  const get = env.CACHE.get.bind(env.CACHE);
+  env.CACHE.get = async (key, ...rest) => {
+    if (key.startsWith("session-meter:")) throw new Error("KV unavailable");
+    return get(key, ...rest);
+  };
+  const res = await call(env, "GET", "/api/session/react-18-kv/status?port=5173");
+  assert.equal(res.status, 500, "reached the sandbox stub, which the harness makes throw");
+});
+
+test("at new_blocked an unknown id still gets the budget's own answer, not the generic 410", async () => {
+  const { env } = envWithPointCapture();
+  await env.CACHE.put("budget:state", JSON.stringify({ enforced: true, tier: "new_blocked", settings: {}, asOf: Date.now() }));
+  const res = await call(env, "GET", "/api/session/react-18-gone/status?port=5173");
+  assert.ok([401, 503].includes(res.status), `got ${res.status}`);
 });

@@ -881,9 +881,8 @@ test("edit page guards a reload while edits are unsaved or a save is in flight",
   await stubShell(page);
   await stubSavedDemo(page);
   await signIn(page);
-  let release!: () => void;
-  const hold = new Promise<void>((resolve) => { release = resolve; });
-  const patches = await stubInfoPatch(page, { hold });
+  const { held, release } = heldGate();
+  const patches = await stubInfoPatch(page, { hold: held });
 
   const unloadPrevented = () =>
     page.evaluate(() => {
@@ -905,7 +904,16 @@ test("edit page guards a reload while edits are unsaved or a save is in flight",
   await expect.poll(() => patches.length).toBe(1);
   expect(await unloadPrevented(), "the PATCH is still building").toBe(true);
 
+  // Typed while the rebuild runs: not in the request, so the save must not clear it.
+  await editor(page).click();
+  await page.keyboard.type("// typed mid-save");
   release();
+  await expect(saveButton(page)).toHaveText("Save •");
+  expect(await unloadPrevented(), "edits made during the save are still unsaved").toBe(true);
+
+  // Saving them for real disarms the guard.
+  await saveButton(page).click();
+  await expect.poll(() => patches.length).toBe(2);
   await expect(saveButton(page)).toHaveText("Save");
   expect(await unloadPrevented(), "saved: guard disarmed").toBe(false);
 });
