@@ -19,8 +19,16 @@ import {
   type WakeState,
 } from "@handsontable/demo-runtime/telemetry";
 import type { Env, IngestItem, InboxWriterApi, IngestResult } from "../env.js";
-import { checkDuplicates } from "./dedupe.js";
-import { newFingerprintWrites } from "./registry.js";
+import {
+  admissionDroppedSince,
+  admissionKey,
+  FP_ADMIT_PER_WINDOW,
+  HASH_ADMIT_PER_WINDOW,
+  pruneAdmissionWindows,
+  readAdmissionWindow,
+} from "./admission.js";
+import { capHashWrites, checkDuplicates } from "./dedupe.js";
+import { admitNewFingerprints, evictOldestFingerprints, FP_COUNT_STORAGE_KEY, readFpCount } from "./registry.js";
 import { o11ySelfIdentity } from "../normalise/respond.js";
 import { writePointFromDo } from "../normalise/points.js";
 // Aliased to `ledger*`: every one of these names also names a class method
@@ -126,6 +134,8 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     const result = await storage.transaction(async (txn) => {
       const hashes = items.map((i) => i.hash);
       const dedupe = await checkDuplicates(txn, hashes, arrivalMs);
+      const window = await readAdmissionWindow(txn, arrivalMs);
+      const hashAdmission = capHashWrites(dedupe.writes, HASH_ADMIT_PER_WINDOW - window.hash);
       // Filter by OCCURRENCE (index), never by hash — the first copy of an
       // in-batch repeat is the one stored, later copies are duplicates. See
       // `DedupeResult.isDuplicate`.
@@ -142,18 +152,31 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
       );
 
       const fingerprints = accepted.map((i) => i.fingerprint).filter((fp): fp is string => Boolean(fp));
-      const fpWrites = await newFingerprintWrites(txn, fingerprints, arrivalMs);
+      const fpAdmission = await admitNewFingerprints(txn, fingerprints, arrivalMs, FP_ADMIT_PER_WINDOW - window.fp);
+      const hasCounts = fpAdmission.admitted + fpAdmission.dropped + Object.keys(hashAdmission.writes).length + hashAdmission.dropped > 0;
+      // Counters ride the same transaction as the writes they count.
+      const counters: Record<string, unknown> = {};
+      if (hasCounts) {
+        counters[admissionKey(arrivalMs)] = {
+          fp: window.fp + fpAdmission.admitted,
+          fpDropped: window.fpDropped + fpAdmission.dropped,
+          hash: window.hash + Object.keys(hashAdmission.writes).length,
+          hashDropped: window.hashDropped + hashAdmission.dropped,
+        };
+      }
+      if (fpAdmission.admitted > 0) counters[FP_COUNT_STORAGE_KEY] = (await readFpCount(txn)) + fpAdmission.admitted;
 
       const heartbeat = (await txn.get<Heartbeat>(HEARTBEAT_STORAGE_KEY)) ?? { lastCron: 0, lastIngest: 0 };
 
       // A 200-item Faro batch (the per-request cap) can produce up to 200
-      // dedupe.writes + 200*2 fpWrites (fp:/fpts: pairs) entries in one
+      // dedupe writes + 200*2 fp writes (fp:/fpts: pairs) entries in one
       // call — well over the real DO storage 128-key put() limit.
       await putChunked<unknown>(txn, {
-        ...dedupe.writes,
+        ...hashAdmission.writes,
         ...append.writes,
         [ROW_SEQ_STORAGE_KEY]: append.nextRowSeq,
-        ...fpWrites,
+        ...fpAdmission.writes,
+        ...counters,
         [HEARTBEAT_STORAGE_KEY]: { ...heartbeat, lastIngest: arrivalMs } satisfies Heartbeat,
       });
 
@@ -227,11 +250,21 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
       console.error(JSON.stringify({ event: "o11y.prune.error", target: "hash", message: String(err) }));
     }
     try {
+      await pruneAdmissionWindows(storage, nowMs);
+    } catch (err) {
+      console.error(JSON.stringify({ event: "o11y.prune.error", target: "admission", message: String(err) }));
+    }
+    try {
       const cursor = (await storage.get<string | null>(FP_PRUNE_CURSOR_STORAGE_KEY)) ?? null;
       const result = await pruneFingerprintRegistry(storage, nowMs, undefined, cursor);
       await storage.put({ [FP_PRUNE_CURSOR_STORAGE_KEY]: result.nextCursor });
     } catch (err) {
       console.error(JSON.stringify({ event: "o11y.prune.error", target: "fingerprint", message: String(err) }));
+    }
+    try {
+      await evictOldestFingerprints(storage);
+    } catch (err) {
+      console.error(JSON.stringify({ event: "o11y.prune.error", target: "fingerprint-evict", message: String(err) }));
     }
   }
 
@@ -374,6 +407,10 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     fallbackSinceMs: number,
   ): Promise<{ entries: { key: string; name: string; firstSeenMs: number }[]; truncated: boolean }> {
     return newFingerprintsAfterKey(adaptStorage(this.ctx.storage), afterKey, fallbackSinceMs);
+  }
+
+  async admissionDroppedSince(sinceMs: number): Promise<{ fpDropped: number; hashDropped: number }> {
+    return admissionDroppedSince(adaptStorage(this.ctx.storage), sinceMs);
   }
 
   async alertState(rule: string): Promise<AlertState | undefined> {

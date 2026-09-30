@@ -95,6 +95,10 @@ export interface InboxWriterApi {
     fallbackSinceMs: number,
   ): Promise<{ entries: { key: string; name: string; firstSeenMs: number }[]; truncated: boolean }>;
 
+  /** New fingerprints / dedupe hashes dropped by the global admission
+   *  windows, summed over every window from the one holding `sinceMs` on. */
+  admissionDroppedSince(sinceMs: number): Promise<{ fpDropped: number; hashDropped: number }>;
+
   /** `alert:<rule>` (§8): the exact fire-once/resolve-once state the ADR
    *  §F.3 rule evaluator reads and writes every tick. */
   alertState(rule: string): Promise<AlertState | undefined>;

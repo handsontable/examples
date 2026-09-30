@@ -380,6 +380,24 @@ export async function rejectedKeyRule(inboxWriter: InboxWriterApi, nowMs = Date.
   };
 }
 
+// ---- global admission cap overflow ------------------------------------------
+
+/** Two windows plus margin: a ten-minute tick always sees the whole
+ *  previous window, and the rule resolves once a full quiet window passes. */
+const ADMISSION_OVERFLOW_LOOKBACK_MS = 20 * 60 * 1000;
+
+export async function admissionOverflowRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<RuleResult> {
+  const { fpDropped, hashDropped } = await inboxWriter.admissionDroppedSince(nowMs - ADMISSION_OVERFLOW_LOOKBACK_MS);
+  const firing = fpDropped + hashDropped > 0;
+  return {
+    rule: "admission-overflow",
+    firing,
+    detail: firing
+      ? `admission cap hit in the last 20 min: ${fpDropped} new fingerprint(s) and ${hashDropped} dedupe hash(es) not stored`
+      : "no admission overflow",
+  };
+}
+
 // ---- new handled-error fingerprint ------------------------------------------
 // Detection only: `index.ts` charts `fresh` on the Observability self dashboard and
 // posts nothing to Slack.

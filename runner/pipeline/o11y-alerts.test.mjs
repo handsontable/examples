@@ -28,6 +28,7 @@ const {
   snapshotBuildFailedRateRule,
   backlogAgeRule,
   rejectedKeyRule,
+  admissionOverflowRule,
   newFingerprintRule,
   o11yCapRule,
   alertEvalErrorRule,
@@ -39,7 +40,7 @@ const { newFingerprintWrites } = await import("../workers/o11y/src/inbox/registr
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
 const { readHeartbeatReport } = await import("../workers/o11y/src/heartbeat.ts");
 const { canWakeForBacklog, runAlerts, ALERT_EVAL_ERROR_DETAIL_KEY } = await import("../workers/o11y/src/alerts/index.ts");
-const { makeEnv } = await import("./fixtures/o11y-harness.mjs");
+const { makeEnv, makeDurableObjectStorage } = await import("./fixtures/o11y-harness.mjs");
 const { makeFakeAeQuery } = await import("./fixtures/fake-ae-query.mjs");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -573,16 +574,17 @@ test("newFingerprintRule (real InboxWriter + registry): the keyset cursor progre
   // `writer.ingest` path, so it also exercises the real
   // `newFingerprintsAfterKey` RPC wiring: 2,100 fingerprints share one
   // first-seen ms, over 4 ticks.
-  const { env } = makeEnv(InboxWriter);
+  const doStorage = makeDurableObjectStorage();
+  const { env } = makeEnv(InboxWriter, { doStorage });
   const writer = env.INBOX_WRITER.jurisdiction("eu").get();
 
   const floodMs = REALISTIC_NOW_MS - 500_000; // outside the grace window throughout
   const total = 2100;
-  const floodItems = Array.from({ length: total }, (_, i) => ({
-    hash: `flood-hash-${i}`,
-    fingerprint: `flood-fp-${i.toString().padStart(5, "0")}`,
-  }));
-  await writer.ingest("worker", floodMs, floodItems);
+  // Seeded straight into storage: the global admission cap would (rightly)
+  // refuse 2,100 new fingerprints in one window through `writer.ingest`, and
+  // this test is about the cursor over a registry that already holds them.
+  const floodFingerprints = Array.from({ length: total }, (_, i) => `flood-fp-${i.toString().padStart(5, "0")}`);
+  await putChunked(doStorage, await newFingerprintWrites(memoryStorage(), floodFingerprints, floodMs));
   // A later, real fingerprint that must still be reachable.
   await writer.ingest("worker", floodMs + 1000, [{ hash: "real-hash", fingerprint: "real-later-fingerprint" }]);
 
@@ -1479,4 +1481,79 @@ test("runAlerts: a fingerprint charted on a tick where o11y-spend-cap throws is 
     Date.now = realNow;
     globalThis.fetch = realFetch;
   }
+});
+
+
+// ---- global admission cap (DEV-3095) ---------------------------------------------
+
+const ADMISSION_WINDOW_MS = 10 * 60 * 1000;
+// A window-aligned "now" a fixed distance past the epoch of REALISTIC_NOW_MS.
+const FLOOD_WINDOW_MS = Math.floor(REALISTIC_NOW_MS / ADMISSION_WINDOW_MS) * ADMISSION_WINDOW_MS;
+
+async function floodWindow(writer, arrivalMs, requests, tag) {
+  for (let r = 0; r < requests; r++) {
+    const items = Array.from({ length: 200 }, (_, i) => ({ hash: `${tag}-h-${r}-${i}`, fingerprint: `${tag}-fp-${r}-${i}` }));
+    await writer.ingest("worker", arrivalMs + r, items);
+  }
+}
+
+test("admissionOverflowRule: quiet with no overflow", async () => {
+  const { env } = makeEnv(InboxWriter);
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+  const result = await admissionOverflowRule(writer, FLOOD_WINDOW_MS);
+  assert.equal(result.firing, false);
+});
+
+test("admissionOverflowRule: fires once on a flood, stays quiet on the next firing tick, resolves once after a quiet window", async () => {
+  const { env } = makeEnv(InboxWriter);
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+  const sink = fakeAeSink();
+  const slackCalls = [];
+  const deps = (nowMs) => ({ inboxWriter: writer, postSlack: async (t) => slackCalls.push(t), aeSink: sink, commonAttrs: COMMON_ATTRS, nowMs });
+
+  await floodWindow(writer, FLOOD_WINDOW_MS + 1000, 3, "flood");
+
+  const tick1 = FLOOD_WINDOW_MS + 5 * 60 * 1000;
+  const first = await admissionOverflowRule(writer, tick1);
+  assert.equal(first.firing, true);
+  assert.match(first.detail, /400 new fingerprint\(s\)/);
+  assert.equal(await evaluateAndNotify(first, deps(tick1)), "fired");
+
+  const tick2 = tick1 + ADMISSION_WINDOW_MS; // the flood window is still inside the lookback
+  const second = await admissionOverflowRule(writer, tick2);
+  assert.equal(second.firing, true);
+  assert.equal(await evaluateAndNotify(second, deps(tick2)), undefined, "no second Slack line while still firing");
+
+  const tick3 = tick1 + 3 * ADMISSION_WINDOW_MS;
+  const third = await admissionOverflowRule(writer, tick3);
+  assert.equal(third.firing, false);
+  assert.equal(await evaluateAndNotify(third, deps(tick3)), "resolved");
+
+  assert.equal(slackCalls.length, 2, "exactly one fired and one resolved line");
+  assert.ok(sink._points.length >= 2, "and the o11y.alert points the Grafana panel reads");
+});
+
+test("flood + newFingerprintRule: a real fingerprint seen before the flood and one after it are both reported, and one tick reads a bounded page", async () => {
+  const doStorage = makeDurableObjectStorage();
+  const { env } = makeEnv(InboxWriter, { doStorage });
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+
+  await writer.ingest("worker", FLOOD_WINDOW_MS + 500, [{ hash: "rb", fingerprint: "real-before-flood" }]);
+  await floodWindow(writer, FLOOD_WINDOW_MS + 1000, 30, "flood");
+  await writer.ingest("worker", FLOOD_WINDOW_MS + ADMISSION_WINDOW_MS + 1000, [{ hash: "ra", fingerprint: "real-after-flood" }]);
+
+  assert.equal((await doStorage.list({ prefix: "fp:" })).size, 201, "storage holds one window's budget plus the real one after");
+
+  const reported = [];
+  let lastDetail = null;
+  for (let tick = 0; tick < 4; tick++) {
+    const nowMs = FLOOD_WINDOW_MS + 2 * ADMISSION_WINDOW_MS + 5 * 60 * 1000 + tick * ADMISSION_WINDOW_MS;
+    const result = await newFingerprintRule(writer, nowMs);
+    reported.push(...result.fresh);
+    lastDetail = result.detail;
+  }
+  assert.ok(reported.includes("real-before-flood"));
+  assert.ok(reported.includes("real-after-flood"));
+  assert.equal(reported.length, 201, "each admitted fingerprint is reported exactly once");
+  assert.match(lastDetail, /no new fingerprints/);
 });

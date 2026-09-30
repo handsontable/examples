@@ -17,8 +17,23 @@ register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 const { makeEnv, makeDurableObjectStorage, makeR2Bucket, ctx } = await import("./fixtures/o11y-harness.mjs");
 const { pendingRowsByTenant } = await import("./fixtures/o11y-inbox-helpers.mjs");
 const { InboxWriter } = await import("../workers/o11y/src/inbox/writer.ts");
-const { checkDuplicates, pruneHashBuckets } = await import("../workers/o11y/src/inbox/dedupe.ts");
-const { newFingerprintWrites } = await import("../workers/o11y/src/inbox/registry.ts");
+const { checkDuplicates, pruneHashBuckets, capHashWrites, HASH_PRUNE_BATCH_LIMIT } = await import("../workers/o11y/src/inbox/dedupe.ts");
+const {
+  newFingerprintWrites,
+  admitNewFingerprints,
+  evictOldestFingerprints,
+  pruneFingerprintRegistry,
+  readFpCount,
+  FP_COUNT_STORAGE_KEY,
+} = await import("../workers/o11y/src/inbox/registry.ts");
+const {
+  ADMISSION_WINDOW_MS,
+  FP_ADMIT_PER_WINDOW,
+  HASH_ADMIT_PER_WINDOW,
+  admissionKey,
+  admissionDroppedSince,
+  pruneAdmissionWindows,
+} = await import("../workers/o11y/src/inbox/admission.ts");
 const {
   appendRows,
   packTenant,
@@ -464,4 +479,163 @@ test("InboxWriter.alarm: rows written through the real ingest path pack in numer
   const bodies = await decodeAllPackedBodies(r2);
   const expected = Array.from({ length: rowCount }, (_, i) => `r${i}`);
   assert.deepEqual(bodies, expected, "rows written through the real ingest path must drain in numeric arrival order, not lexicographic");
+});
+
+
+// ---- global admission caps (DEV-3095) --------------------------------------------
+//
+// Browser ingest is rate-limited per IP only, so a distributed flood of unique,
+// well-formed fingerprints/hashes must hit a GLOBAL cap. Every test below
+// fails if that cap is removed (revert-checked).
+
+const WINDOW_BASE = Math.floor(1_700_000_000_000 / ADMISSION_WINDOW_MS) * ADMISSION_WINDOW_MS;
+
+test("admission: hash budget is never above the per-tick prune rate, so a sustained flood cannot outrun the prune", () => {
+  assert.ok(HASH_ADMIT_PER_WINDOW <= HASH_PRUNE_BATCH_LIMIT, `${HASH_ADMIT_PER_WINDOW} hashes admitted per 10-min window vs ${HASH_PRUNE_BATCH_LIMIT} pruned per tick`);
+});
+
+test("admitNewFingerprints: stores only `budget` NEW fingerprints in arrival order, counts the rest, and already-known ones cost no budget", async () => {
+  const storage = memoryStorage();
+  await storage.put(await newFingerprintWrites(storage, ["known"], 500));
+
+  const result = await admitNewFingerprints(storage, ["known", "a", "b", "c", "d"], 1000, 2);
+
+  assert.equal(result.admitted, 2);
+  assert.equal(result.dropped, 2);
+  assert.deepEqual(Object.keys(result.writes).filter((k) => k.startsWith("fp:")).sort(), ["fp:a", "fp:b"]);
+  assert.deepEqual(await admitNewFingerprints(storage, ["x"], 1000, 0), { writes: {}, admitted: 0, dropped: 1 });
+});
+
+test("capHashWrites: keeps `budget` writes, counts the rest, never goes negative", () => {
+  const writes = { "hash:1": 1, "hash:2": 1, "hash:3": 1 };
+  assert.deepEqual(capHashWrites(writes, 2), { writes: { "hash:1": 1, "hash:2": 1 }, dropped: 1 });
+  assert.deepEqual(capHashWrites(writes, -5), { writes: {}, dropped: 3 });
+});
+
+test("flood: unique fingerprints and hashes from many requests in one window store at most the admission budgets and count the overflow", async () => {
+  const doStorage = makeDurableObjectStorage();
+  const { env } = makeEnv(InboxWriter, { doStorage });
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+
+  const REQUESTS = 30; // 30 x 200 = 6,000 unique of each, over both budgets
+  const PER_REQUEST = 200;
+  for (let r = 0; r < REQUESTS; r++) {
+    const items = Array.from({ length: PER_REQUEST }, (_, i) => ({ hash: `flood-h-${r}-${i}`, fingerprint: `flood-fp-${r}-${i}` }));
+    await writer.ingest("worker", WINDOW_BASE + 1000 + r, items);
+  }
+
+  assert.equal((await doStorage.list({ prefix: "fp:" })).size, FP_ADMIT_PER_WINDOW, "fp: entries capped at the window budget");
+  assert.equal((await doStorage.list({ prefix: "fpts:" })).size, FP_ADMIT_PER_WINDOW, "the fpts: twins stay in step");
+  assert.equal((await doStorage.list({ prefix: "hash:" })).size, HASH_ADMIT_PER_WINDOW, "hash: entries capped at the window budget");
+  assert.equal(await doStorage.get(FP_COUNT_STORAGE_KEY), FP_ADMIT_PER_WINDOW, "the size counter matches what was stored");
+
+  const dropped = await admissionDroppedSince(doStorage, WINDOW_BASE);
+  assert.deepEqual(dropped, { fpDropped: REQUESTS * PER_REQUEST - FP_ADMIT_PER_WINDOW, hashDropped: REQUESTS * PER_REQUEST - HASH_ADMIT_PER_WINDOW });
+});
+
+test("flood: the next window admits again, so a real new fingerprint after a flood is stored", async () => {
+  const doStorage = makeDurableObjectStorage();
+  const { env } = makeEnv(InboxWriter, { doStorage });
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+
+  const flood = Array.from({ length: FP_ADMIT_PER_WINDOW + 50 }, (_, i) => ({ hash: `h-${i}`, fingerprint: `flood-fp-${i}` }));
+  await writer.ingest("worker", WINDOW_BASE + 1000, flood);
+  await writer.ingest("worker", WINDOW_BASE + ADMISSION_WINDOW_MS + 1000, [{ hash: "real-h", fingerprint: "real-after-flood" }]);
+
+  assert.notEqual(await doStorage.get("fp:real-after-flood"), undefined);
+});
+
+test("flood: an item whose fingerprint is dropped still gets its row stored", async () => {
+  const doStorage = makeDurableObjectStorage();
+  const { env } = makeEnv(InboxWriter, { doStorage });
+  const writer = env.INBOX_WRITER.jurisdiction("eu").get();
+
+  const items = Array.from({ length: FP_ADMIT_PER_WINDOW + 1 }, (_, i) => ({
+    hash: `h-${i}`,
+    fingerprint: `fp-${i}`,
+    record: record(`body ${i}`, i),
+  }));
+  await writer.ingest("worker", WINDOW_BASE + 1000, items);
+
+  assert.equal(await doStorage.get(`fp:fp-${FP_ADMIT_PER_WINDOW}`), undefined, "the over-budget fingerprint is not registered");
+  const stored = [...(await doStorage.list({ prefix: "row:" })).values()].reduce((n, row) => n + row.resourceLogs.length, 0);
+  assert.equal(stored, FP_ADMIT_PER_WINDOW + 1, "its record is still stored");
+});
+
+test("evictOldestFingerprints: over max, removes the oldest entries and their fpts: twins, and decrements the counter", async () => {
+  const storage = memoryStorage();
+  for (let i = 0; i < 300; i++) await storage.put(await newFingerprintWrites(storage, [`fp-${String(i).padStart(3, "0")}`], 1000 + i));
+  await storage.put({ [FP_COUNT_STORAGE_KEY]: 300 });
+
+  assert.equal(await evictOldestFingerprints(storage, 100), 200);
+
+  assert.equal((await storage.list({ prefix: "fp:" })).size, 100);
+  assert.equal((await storage.list({ prefix: "fpts:" })).size, 100);
+  assert.equal(await readFpCount(storage), 100);
+  assert.equal(await storage.get("fp:fp-000"), undefined, "the oldest is gone");
+  assert.notEqual(await storage.get("fp:fp-299"), undefined, "the newest is kept");
+  assert.equal(await evictOldestFingerprints(storage, 100), 0, "at the cap, nothing more is evicted");
+});
+
+test("evictOldestFingerprints: one call deletes a bounded batch, and successive calls finish the job", async () => {
+  const storage = memoryStorage();
+  const writes = {};
+  for (let i = 0; i < 6000; i++) Object.assign(writes, await newFingerprintWrites(memoryStorage(), [`fp-${String(i).padStart(5, "0")}`], 1000 + i));
+  await putChunked(storage, writes);
+  await storage.put({ [FP_COUNT_STORAGE_KEY]: 6000 });
+
+  assert.equal(await evictOldestFingerprints(storage, 100), 5000, "one call is bounded");
+  assert.equal(await evictOldestFingerprints(storage, 100), 900);
+  assert.equal((await storage.list({ prefix: "fp:" })).size, 100);
+});
+
+test("registry stays bounded under a sustained flood: admission per window plus eviction per tick never exceeds max + one window", async () => {
+  const storage = memoryStorage();
+  const MAX = 1000;
+  for (let w = 0; w < 30; w++) {
+    const now = WINDOW_BASE + w * ADMISSION_WINDOW_MS;
+    const flood = Array.from({ length: 400 }, (_, i) => `w${w}-fp-${i}`);
+    const admission = await admitNewFingerprints(storage, flood, now, FP_ADMIT_PER_WINDOW);
+    await putChunked(storage, { ...admission.writes, [FP_COUNT_STORAGE_KEY]: (await readFpCount(storage)) + admission.admitted });
+    assert.ok((await storage.list({ prefix: "fp:" })).size <= MAX + FP_ADMIT_PER_WINDOW, `window ${w}: registry above max + one window`);
+    await evictOldestFingerprints(storage, MAX); // the cron tick
+    assert.ok((await storage.list({ prefix: "fp:" })).size <= MAX, `window ${w}: still above max after the tick`);
+  }
+  assert.equal((await storage.list({ prefix: "fp:" })).size, MAX);
+  assert.equal((await storage.list({ prefix: "fpts:" })).size, MAX);
+});
+
+test("pruneFingerprintRegistry: a finished lap re-measures the size counter (drift, or a registry that predates the counter)", async () => {
+  const storage = memoryStorage();
+  const writes = {};
+  for (let i = 0; i < 150; i++) Object.assign(writes, await newFingerprintWrites(memoryStorage(), [`fp-${i}`], 1000 + i));
+  await putChunked(storage, writes); // no fpCount at all, like a registry from before the counter
+
+  await pruneFingerprintRegistry(storage, 2000);
+
+  assert.equal(await readFpCount(storage), 150);
+});
+
+test("pruneFingerprintRegistry: TTL deletes lower the size counter", async () => {
+  const storage = memoryStorage();
+  await putChunked(storage, { ...(await newFingerprintWrites(memoryStorage(), ["old"], 1000)), ...(await newFingerprintWrites(memoryStorage(), ["new"], 9_000_000_000)) });
+  await storage.put({ [FP_COUNT_STORAGE_KEY]: 2 });
+
+  await pruneFingerprintRegistry(storage, 9_000_000_000 + 1, 1_000_000);
+
+  assert.equal(await storage.get("fp:old"), undefined);
+  assert.equal(await readFpCount(storage), 1);
+});
+
+test("pruneAdmissionWindows: drops windows older than an hour, keeps recent ones", async () => {
+  const storage = memoryStorage();
+  await storage.put({
+    [admissionKey(WINDOW_BASE)]: { fp: 1, fpDropped: 0, hash: 1, hashDropped: 0 },
+    [admissionKey(WINDOW_BASE + 5 * ADMISSION_WINDOW_MS)]: { fp: 1, fpDropped: 0, hash: 1, hashDropped: 0 },
+  });
+
+  await pruneAdmissionWindows(storage, WINDOW_BASE + 8 * ADMISSION_WINDOW_MS);
+
+  assert.equal(await storage.get(admissionKey(WINDOW_BASE)), undefined);
+  assert.notEqual(await storage.get(admissionKey(WINDOW_BASE + 5 * ADMISSION_WINDOW_MS)), undefined);
 });

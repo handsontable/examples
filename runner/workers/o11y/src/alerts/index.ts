@@ -8,6 +8,7 @@ import { inboxWriter } from "../inbox/accessor.js";
 import { readO11ySpend } from "../cost.js";
 import { evaluateAndNotify, slackPoster, writeNewFingerprintPoints } from "./notify.js";
 import {
+  admissionOverflowRule,
   alertEvalErrorRule,
   atCapacityRule,
   backlogAgeRule,
@@ -118,6 +119,15 @@ export async function runAlerts(env: Env, _ctx?: ExecutionContext): Promise<RunA
     if (transition) transitions[result.rule] = transition;
   } catch (err) {
     errors["rejected-inbox-key"] = err instanceof Error ? err.message : String(err);
+  }
+
+  try {
+    const result = await admissionOverflowRule(writer, nowMs);
+    results.push(result);
+    const transition = await evaluateAndNotify(result, { inboxWriter: writer, postSlack, aeSink: sink, commonAttrs: attrs, nowMs });
+    if (transition) transitions[result.rule] = transition;
+  } catch (err) {
+    errors["admission-overflow"] = err instanceof Error ? err.message : String(err);
   }
 
   // new-fingerprint never posts to Slack and has no fire/resolve state: each new
