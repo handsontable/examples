@@ -18,6 +18,7 @@ const { evaluateAndNotify, slackPoster, escapeSlackMrkdwn, writeNewFingerprintPo
 const {
   atCapacityRule,
   fiveXxRateRule,
+  FIVE_XX_MIN_REQUESTS,
   previewReadyRateRule,
   PREVIEW_READY_MIN_SAMPLES,
   sessionStartP95Rule,
@@ -25,6 +26,7 @@ const {
   embedErrorRateRule,
   compileErrorDoublingRule,
   litellmErrorRateRule,
+  LITELLM_MIN_CALLS,
   snapshotBuildFailedRateRule,
   backlogAgeRule,
   rejectedKeyRule,
@@ -988,6 +990,58 @@ test("fiveXxRateRule: points written before the status column existed (no reason
   assert.equal(result.firing, false, result.detail);
 });
 
+function apiRows(ok, bad) {
+  return [
+    { metric: "api.request", route_class: "api/demos", outcome: "2xx", count: ok },
+    { metric: "api.request", route_class: "api/demos", outcome: "5xx", count: bad },
+  ];
+}
+
+// The fake engine only proves the SQL passes the guard and the arithmetic is right, not that Analytics Engine accepts it.
+test("fiveXxRateRule sample floor: below 100 requests even 100% 5xx does not fire, at 100 it fires above 1%", async () => {
+  assert.equal(FIVE_XX_MIN_REQUESTS, 100);
+  const single = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(0, 1)).queryFn);
+  assert.equal(single.firing, false, "one 500 out of one request is 100% but says nothing");
+  assert.match(single.detail, /only 1 request\(s\), below the 100 needed/);
+
+  const allBad = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(0, 99)).queryFn);
+  assert.equal(allBad.firing, false, allBad.detail);
+
+  const oneInNinetyNine = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(98, 1)).queryFn);
+  assert.equal(oneInNinetyNine.firing, false, "1/99 is 1.01% but below the floor");
+
+  const atFloorOne = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(99, 1)).queryFn);
+  assert.equal(atFloorOne.firing, false, "1/100 is exactly 1%, not above it: a single error never fires at the floor");
+
+  const atFloor = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(98, 2)).queryFn);
+  assert.equal(atFloor.firing, true, atFloor.detail);
+  assert.match(atFloor.detail, /^2\.00% 5xx over the last 15 min \(2\/100,/);
+
+  const healthy = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(500, 0)).queryFn);
+  assert.equal(healthy.firing, false);
+});
+
+test("fiveXxRateRule sample floor: the floor counts the ADJUSTED total, not the raw one", async () => {
+  const rows = [
+    ...apiRows(0, 5),
+    { metric: "api.request", route_class: "api/session", outcome: "5xx", count: 200 },
+    { metric: "session.start", outcome: "at_capacity", count: 200 },
+  ];
+  const result = await fiveXxRateRule({}, makeFakeAeQuery(rows).queryFn);
+  assert.equal(result.firing, false, "205 raw requests but only 5 after exclusions");
+});
+
+test("fiveXxRateRule sample floor: a firing alert resolves once traffic drops below the floor", async () => {
+  const writer = fakeInboxWriter();
+  const slackCalls = [];
+  const deps = { inboxWriter: writer, postSlack: async (t) => slackCalls.push(t), aeSink: fakeAeSink(), commonAttrs: COMMON_ATTRS, nowMs: 1000 };
+  const firing = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(95, 5)).queryFn);
+  assert.equal(await evaluateAndNotify(firing, deps), "fired");
+  const quiet = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(0, 1)).queryFn);
+  assert.equal(await evaluateAndNotify(quiet, { ...deps, nowMs: 2000 }), "resolved");
+  assert.match(slackCalls[1], /resolved/);
+});
+
 test("previewReadyRateRule: tier 1 below 97% fires, tier 2 within threshold does not (mixed)", async () => {
   const fake = makeFakeAeQuery([
     { metric: "preview.ready_ms", tier: "1", outcome: "ready", count: 90 },
@@ -1306,6 +1360,51 @@ test("litellmErrorRateRule: chat.answer + theme.ai combined over 5% fires; under
   ]);
   const underResult = await litellmErrorRateRule({}, under.queryFn);
   assert.equal(underResult.firing, false, underResult.detail); // 2/200 = 1%
+});
+
+function gatewayRows(chatOk, chatErr, extra = []) {
+  return [
+    { metric: "chat.answer", outcome: "answered", count: chatOk },
+    { metric: "chat.answer", outcome: "error", count: chatErr },
+    ...extra,
+  ];
+}
+
+test("litellmErrorRateRule sample floor: below 20 calls even 100% errors does not fire, at 20 it fires above 5%", async () => {
+  assert.equal(LITELLM_MIN_CALLS, 20);
+  const single = await litellmErrorRateRule({}, makeFakeAeQuery(gatewayRows(0, 1)).queryFn);
+  assert.equal(single.firing, false);
+  assert.match(single.detail, /only 1 call\(s\), below the 20 needed/);
+
+  const oneInNineteen = await litellmErrorRateRule({}, makeFakeAeQuery(gatewayRows(18, 1)).queryFn);
+  assert.equal(oneInNineteen.firing, false, "1/19 is 5.26% but below the floor");
+
+  const oneAtFloor = await litellmErrorRateRule({}, makeFakeAeQuery(gatewayRows(19, 1)).queryFn);
+  assert.equal(oneAtFloor.firing, false, "1/20 is exactly 5%: a single error never fires at the floor");
+
+  const atFloor = await litellmErrorRateRule({}, makeFakeAeQuery(gatewayRows(18, 2)).queryFn);
+  assert.equal(atFloor.firing, true, atFloor.detail);
+  assert.match(atFloor.detail, /^10\.00% gateway errors over the last hour \(2\/20,/);
+
+  const healthy = await litellmErrorRateRule({}, makeFakeAeQuery(gatewayRows(100, 0)).queryFn);
+  assert.equal(healthy.firing, false);
+});
+
+test("litellmErrorRateRule sample floor: denied requests do not count toward the floor", async () => {
+  const rows = gatewayRows(0, 2, [{ metric: "chat.answer", outcome: "denied", count: 500 }]);
+  const result = await litellmErrorRateRule({}, makeFakeAeQuery(rows).queryFn);
+  assert.equal(result.firing, false, "2 real calls plus 500 denied is still below the floor");
+});
+
+test("litellmErrorRateRule sample floor: a firing alert resolves once calls drop below the floor", async () => {
+  const writer = fakeInboxWriter();
+  const slackCalls = [];
+  const deps = { inboxWriter: writer, postSlack: async (t) => slackCalls.push(t), aeSink: fakeAeSink(), commonAttrs: COMMON_ATTRS, nowMs: 1000 };
+  const firing = await litellmErrorRateRule({}, makeFakeAeQuery(gatewayRows(18, 2)).queryFn);
+  assert.equal(await evaluateAndNotify(firing, deps), "fired");
+  const quiet = await litellmErrorRateRule({}, makeFakeAeQuery(gatewayRows(0, 1)).queryFn);
+  assert.equal(await evaluateAndNotify(quiet, { ...deps, nowMs: 2000 }), "resolved");
+  assert.match(slackCalls[1], /resolved/);
 });
 
 // `denied` (a rate-limit/budget refusal at `index.ts`'s own gate — never

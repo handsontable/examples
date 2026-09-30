@@ -563,7 +563,8 @@ starting values, tuned after launch: preview-ready below 97 % (Tier-1) or 95 % (
 over 1 h, evaluated per tier only with at least 10 non-abandoned previews in that hour;
 session start p95 above 20 s, evaluated only with at least 20 `ready` starts in the hour
 (below either floor the rule is not firing, so a firing alert resolves through the normal path); `at_capacity` above 5/h; 5xx above 1 % over
-15 min; LiteLLM errors above 5 %; compile errors on one `ht_major` doubling day over
+15 min, evaluated only with at least 100 requests after the exclusions (at 1 % one error exceeds the threshold only below 100 requests, so a single 500 cannot page);
+LiteLLM errors above 5 % over 1 h, evaluated only with at least 20 non-denied calls (same reasoning at 5 %); compile errors on one `ht_major` doubling day over
 day; snapshot builds failing above 50 % per framework over 30 min with at least 10
 failed; an embed above 20 % errors with more than 50 views in 24 h; backlog older
 than 2 h.
