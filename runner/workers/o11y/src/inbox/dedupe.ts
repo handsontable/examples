@@ -15,7 +15,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  *  Against a 10-minute cron, 500/tick tops out at 72,000/day, below ADR
  *  §D's 10× headroom projection of ~220,000/day. 5,000/tick gives
  *  720,000/day, over 3× that headroom. */
-const HASH_PRUNE_BATCH_LIMIT = 5000;
+export const HASH_PRUNE_BATCH_LIMIT = 5000;
 
 /** `yyyymmdd`, UTC — sorts lexicographically in chronological order, which
  *  is what makes `pruneHashBuckets`'s range delete correct without
@@ -114,4 +114,16 @@ export async function pruneHashBuckets(storage: StorageLike, nowMs: number, keep
   const toDelete = [...stale.keys()];
   if (toDelete.length > 0) await deleteChunked(storage, toDelete);
   return { hashDeleted: toDelete.length };
+}
+
+/** Trims `writes` to `budget` new `hash:` entries. A dropped hash is simply
+ *  not registered: its record is still stored, and a redelivery inside the
+ *  24 h window can then be stored a second time (fail-open). */
+export function capHashWrites(
+  writes: Readonly<Record<string, number>>,
+  budget: number,
+): { writes: Record<string, number>; dropped: number } {
+  const entries = Object.entries(writes);
+  const kept = entries.slice(0, Math.max(0, budget));
+  return { writes: Object.fromEntries(kept), dropped: entries.length - kept.length };
 }

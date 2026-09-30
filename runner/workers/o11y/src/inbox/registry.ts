@@ -26,28 +26,75 @@ const FP_PRUNE_BATCH_LIMIT = 5000;
  *  not stale. Bounds the call even when nothing is stale yet. */
 const FP_PRUNE_SCAN_LIMIT = 20000;
 
+/** Total registry size (entries, not keys). Kept as a counter because a
+ *  `fp:` prefix count would be a full scan; the prune lap re-measures it. */
+export const FP_COUNT_STORAGE_KEY = "fpCount";
+/** Hard ceiling on registry entries. Growth per window is bounded by
+ *  `admission.ts#FP_ADMIT_PER_WINDOW`, so storage never exceeds this plus one
+ *  window's admissions. */
+export const FP_REGISTRY_MAX = 50_000;
+/** Bounds one eviction call, like `FP_PRUNE_BATCH_LIMIT`. */
+const FP_EVICT_BATCH_LIMIT = 5000;
+/** Entries seen so far in the current prune lap; becomes `fpCount` when the
+ *  lap completes. Internal housekeeping, like `fpPruneCursor`. */
+const FP_LAP_SEEN_STORAGE_KEY = "fpLapSeen";
+/** Where `writer.ts#pruneStorage` persists the prune sweep's resume cursor
+ *  between cron ticks — not a contract-named key. Owned here because eviction
+ *  must reset it together with {@link FP_LAP_SEEN_STORAGE_KEY}. */
+export const FP_PRUNE_CURSOR_STORAGE_KEY = "fpPruneCursor";
+
+export async function readFpCount(storage: StorageLike): Promise<number> {
+  return (await storage.get<number>(FP_COUNT_STORAGE_KEY)) ?? 0;
+}
+
+async function findNewFingerprints(storage: StorageLike, fingerprints: readonly string[]): Promise<string[]> {
+  const unique = [...new Set(fingerprints)];
+  if (unique.length === 0) return [];
+  // A 200-item Faro batch (the ingest cap) can carry up to 200 unique
+  // fingerprints — over the real DO storage 128-key limit.
+  const existing = await getManyChunked<number>(storage, unique.map(fingerprintStorageKey));
+  return unique.filter((fp) => !existing.has(fingerprintStorageKey(fp)));
+}
+
+function registryWrites(fresh: readonly string[], nowMs: number): Record<string, number> {
+  const writes: Record<string, number> = {};
+  for (const fp of fresh) {
+    writes[fingerprintStorageKey(fp)] = nowMs;
+    writes[fingerprintTimeIndexKey(nowMs, fp)] = nowMs;
+  }
+  return writes;
+}
+
 /** Returns `fp:<fp>` → `nowMs` (plus its `fpts:` time-index twin) for
- *  every fingerprint not already present — commit these in the same
- *  transaction as the dedupe/row writes. */
+ *  every fingerprint not already present. Unbudgeted and not counted in
+ *  `fpCount`: the ingest path uses {@link admitNewFingerprints}; this is for
+ *  seeding a registry in tests. */
 export async function newFingerprintWrites(
   storage: StorageLike,
   fingerprints: readonly string[],
   nowMs: number,
 ): Promise<Record<string, number>> {
-  const unique = [...new Set(fingerprints)];
-  if (unique.length === 0) return {};
-  // A 200-item Faro batch (the ingest cap) can carry up to 200 unique
-  // fingerprints — over the real DO storage 128-key limit.
-  const existing = await getManyChunked<number>(storage, unique.map(fingerprintStorageKey));
-  const writes: Record<string, number> = {};
-  for (const fp of unique) {
-    const key = fingerprintStorageKey(fp);
-    if (!existing.has(key)) {
-      writes[key] = nowMs;
-      writes[fingerprintTimeIndexKey(nowMs, fp)] = nowMs;
-    }
-  }
-  return writes;
+  return registryWrites(await findNewFingerprints(storage, fingerprints), nowMs);
+}
+
+export interface FingerprintAdmission {
+  writes: Record<string, number>;
+  admitted: number;
+  /** New fingerprints past `budget`, not stored. */
+  dropped: number;
+}
+
+/** {@link newFingerprintWrites} limited to `budget` new fingerprints, in
+ *  arrival order; the rest are counted, not stored. */
+export async function admitNewFingerprints(
+  storage: StorageLike,
+  fingerprints: readonly string[],
+  nowMs: number,
+  budget: number,
+): Promise<FingerprintAdmission> {
+  const fresh = await findNewFingerprints(storage, fingerprints);
+  const admittedFps = fresh.slice(0, Math.max(0, budget));
+  return { writes: registryWrites(admittedFps, nowMs), admitted: admittedFps.length, dropped: fresh.length - admittedFps.length };
 }
 
 /** `fpts:` prefix and per-key parsing, exported for `alerts/inbox-state.ts#newFingerprintsSince`
@@ -94,6 +141,7 @@ export async function pruneFingerprintRegistry(
     }
   }
   if (toDelete.length > 0) await deleteChunked(storage, toDelete);
+  const entriesDeleted = toDelete.length / 2;
 
   // Reached the end of the keyspace (fewer rows than the scan limit came
   // back) — resume from the beginning, so a quiet tail never starves the
@@ -101,5 +149,51 @@ export async function pruneFingerprintRegistry(
   const reachedEnd = page.size < FP_PRUNE_SCAN_LIMIT;
   const nextCursor = reachedEnd ? null : lastKey ? `${lastKey}\0` : null;
 
+  // Re-measure the size counter once per full lap: it is only incremented at
+  // ingest and decremented here, so this bounds any drift (a restart between
+  // a write and its counter, or a registry that predates the counter).
+  const lapSeen = ((await storage.get<number>(FP_LAP_SEEN_STORAGE_KEY)) ?? 0) + page.size - entriesDeleted;
+  if (reachedEnd) {
+    await storage.put({ [FP_COUNT_STORAGE_KEY]: lapSeen, [FP_LAP_SEEN_STORAGE_KEY]: 0 });
+  } else {
+    const count = entriesDeleted > 0 ? Math.max(0, (await readFpCount(storage)) - entriesDeleted) : null;
+    await storage.put({ [FP_LAP_SEEN_STORAGE_KEY]: lapSeen, ...(count === null ? {} : { [FP_COUNT_STORAGE_KEY]: count }) });
+  }
+
   return { fpDeleted: toDelete.length, nextCursor };
+}
+
+/** Evicts the oldest registry entries (via the `fpts:` time index) once the
+ *  counter exceeds `max`, at most `FP_EVICT_BATCH_LIMIT` per call. A flood
+ *  can push real fingerprints out; the cost is a re-alert for one that
+ *  reappears, the same trade as the TTL. */
+export async function evictOldestFingerprints(storage: StorageLike, max: number = FP_REGISTRY_MAX): Promise<number> {
+  const count = await readFpCount(storage);
+  const excess = count - max;
+  if (excess <= 0) return 0;
+  const oldest = await storage.list<number>({
+    start: FPTS_PREFIX,
+    end: `${FPTS_PREFIX}￿`,
+    limit: Math.min(excess, FP_EVICT_BATCH_LIMIT),
+  });
+  const oldestKeys = [...oldest.keys()];
+  const fpKeys = oldestKeys.map((key) => fingerprintStorageKey(fpFromFptsKey(key)));
+  // Count only entries whose `fp:` row still exists: an orphaned `fpts:` row
+  // is deleted but was never part of the counter.
+  const live = await getManyChunked<number>(storage, fpKeys);
+  // `fp:` first: a failure part-way leaves `fpts:` rows, which the next call
+  // walks again. The reverse order would strand `fp:` rows outside the index.
+  await deleteChunked(storage, fpKeys);
+  await deleteChunked(storage, oldestKeys);
+  const evicted = live.size;
+  // Eviction removes rows the in-progress prune lap may already have counted,
+  // so its running total is stale: restart the lap (total and cursor together,
+  // whether or not any live entry was evicted) and trust the counter until a
+  // fresh lap re-measures it.
+  await storage.put({
+    [FP_COUNT_STORAGE_KEY]: Math.max(0, count - evicted),
+    [FP_LAP_SEEN_STORAGE_KEY]: 0,
+    [FP_PRUNE_CURSOR_STORAGE_KEY]: null,
+  });
+  return evicted;
 }
