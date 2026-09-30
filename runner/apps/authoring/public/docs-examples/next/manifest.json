@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-7f4330c-20260929",
-  "count": 1536,
+  "hotVersion": "0.0.0-next-49ced47-20260929",
+  "count": 1541,
   "examples": [
     {
       "bucket": "next",
@@ -9277,6 +9277,22 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/columns/column-filter/angular/example17.ts",
+      "file": "guides__columns__column-filter__angular__example17.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "example17",
+      "exampleTitle": "Choose the conditions the filter menu offers (2)",
+      "docPermalink": "/column-filter",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/columns/column-filter/angular/example1.ts",
       "file": "guides__columns__column-filter__angular__example1.ts.json",
       "breadcrumb": [
@@ -9418,6 +9434,70 @@
       "docPermalink": "/column-filter",
       "framework": "angular",
       "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/javascript/exampleAvailableConditions.js",
+      "file": "guides__columns__column-filter__javascript__exampleAvailableConditions.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleAvailableConditions",
+      "exampleTitle": "Choose the conditions the filter menu offers",
+      "docPermalink": "/column-filter",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/react/exampleAvailableConditions.tsx",
+      "file": "guides__columns__column-filter__react__exampleAvailableConditions.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleAvailableConditions",
+      "exampleTitle": "Choose the conditions the filter menu offers",
+      "docPermalink": "/column-filter",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/javascript/exampleAvailableConditions.ts",
+      "file": "guides__columns__column-filter__javascript__exampleAvailableConditions.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleAvailableConditions",
+      "exampleTitle": "Choose the conditions the filter menu offers",
+      "docPermalink": "/column-filter",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/vue/exampleAvailableConditions.vue",
+      "file": "guides__columns__column-filter__vue__exampleAvailableConditions.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleAvailableConditions",
+      "exampleTitle": "Choose the conditions the filter menu offers",
+      "docPermalink": "/column-filter",
+      "framework": "vue",
+      "displayName": "Vue 3"
     },
     {
       "bucket": "next",
