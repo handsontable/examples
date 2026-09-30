@@ -120,6 +120,29 @@ test("symbolicateResourceLogs leaves a frame unresolved when no map exists (neve
   assert.equal(resolved.scopeLogs[0].logRecords[0].body.stringValue, record.scopeLogs[0].logRecords[0].body.stringValue);
 });
 
+test("symbolicateResourceLogs never asks for a map whose R2 key would exceed 1024 bytes", async () => {
+  // The frame path is browser-supplied; R2 throws on an overlong key, which would surface as a fetch_error.
+  const frameLine = formatStackFrame({
+    filename: `https://demos.handsontable.com/assets/${"a".repeat(1100)}.js`,
+    function: "fn",
+    lineno: 1,
+    colno: 1,
+  });
+  const record = exceptionRecord(["Error: x", frameLine]);
+  const asked = [];
+
+  const [resolved] = await symbolicateResourceLogs([record], {
+    getMap: async (key) => {
+      asked.push(key);
+      if (Buffer.byteLength(key, "utf8") > 1024) throw new Error("The specified object name is not valid. (10020)");
+      return null;
+    },
+  });
+
+  assert.deepEqual(asked, []);
+  assert.equal(resolved.scopeLogs[0].logRecords[0].body.stringValue, record.scopeLogs[0].logRecords[0].body.stringValue);
+});
+
 test("symbolicateResourceLogs never touches a non-exception record", async () => {
   const record = {
     resource: {
