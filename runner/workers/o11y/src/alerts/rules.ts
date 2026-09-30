@@ -382,8 +382,9 @@ export async function rejectedKeyRule(inboxWriter: InboxWriterApi, nowMs = Date.
 
 // ---- global admission cap overflow ------------------------------------------
 
-/** Two windows plus margin: a ten-minute tick always sees the whole
- *  previous window, and the rule resolves once a full quiet window passes. */
+/** The lookback rounds down to a window boundary, so a tick always sees the
+ *  whole previous window, and the rule resolves 20 to 30 minutes after the
+ *  last drop. */
 const ADMISSION_OVERFLOW_LOOKBACK_MS = 20 * 60 * 1000;
 
 export async function admissionOverflowRule(inboxWriter: InboxWriterApi, nowMs = Date.now()): Promise<RuleResult> {
@@ -393,7 +394,7 @@ export async function admissionOverflowRule(inboxWriter: InboxWriterApi, nowMs =
     rule: "admission-overflow",
     firing,
     detail: firing
-      ? `admission cap hit in the last 20 min: ${fpDropped} new fingerprint(s) and ${hashDropped} dedupe hash(es) not stored`
+      ? `admission cap hit recently: ${fpDropped} new fingerprint(s) and ${hashDropped} dedupe hash(es) not stored`
       : "no admission overflow",
   };
 }

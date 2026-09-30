@@ -62,8 +62,9 @@ function registryWrites(fresh: readonly string[], nowMs: number): Record<string,
 }
 
 /** Returns `fp:<fp>` → `nowMs` (plus its `fpts:` time-index twin) for
- *  every fingerprint not already present — commit these in the same
- *  transaction as the dedupe/row writes. */
+ *  every fingerprint not already present. Unbudgeted and not counted in
+ *  `fpCount`: the ingest path uses {@link admitNewFingerprints}; this is for
+ *  seeding a registry in tests. */
 export async function newFingerprintWrites(
   storage: StorageLike,
   fingerprints: readonly string[],
@@ -171,12 +172,16 @@ export async function evictOldestFingerprints(storage: StorageLike, max: number 
     end: `${FPTS_PREFIX}￿`,
     limit: Math.min(excess, FP_EVICT_BATCH_LIMIT),
   });
-  const toDelete: string[] = [];
-  for (const key of oldest.keys()) {
-    toDelete.push(key, fingerprintStorageKey(fpFromFptsKey(key)));
-  }
-  if (toDelete.length > 0) await deleteChunked(storage, toDelete);
-  const evicted = toDelete.length / 2;
-  await storage.put({ [FP_COUNT_STORAGE_KEY]: Math.max(0, count - evicted) });
+  const oldestKeys = [...oldest.keys()];
+  const fpKeys = oldestKeys.map((key) => fingerprintStorageKey(fpFromFptsKey(key)));
+  // Count only entries whose `fp:` row still exists: an orphaned `fpts:` row
+  // is deleted but was never part of the counter.
+  const live = await getManyChunked<number>(storage, fpKeys);
+  await deleteChunked(storage, [...oldestKeys, ...fpKeys]);
+  const evicted = live.size;
+  // Eviction removes rows the in-progress prune lap may already have counted,
+  // so its running total is stale: restart the lap (the caller resets the
+  // cursor) and trust the counter until a fresh lap re-measures it.
+  await storage.put({ [FP_COUNT_STORAGE_KEY]: Math.max(0, count - evicted), [FP_LAP_SEEN_STORAGE_KEY]: 0 });
   return evicted;
 }

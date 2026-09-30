@@ -262,7 +262,7 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
       console.error(JSON.stringify({ event: "o11y.prune.error", target: "fingerprint", message: String(err) }));
     }
     try {
-      await evictOldestFingerprints(storage);
+      if ((await evictOldestFingerprints(storage)) > 0) await storage.put({ [FP_PRUNE_CURSOR_STORAGE_KEY]: null });
     } catch (err) {
       console.error(JSON.stringify({ event: "o11y.prune.error", target: "fingerprint-evict", message: String(err) }));
     }

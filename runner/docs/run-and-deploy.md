@@ -253,7 +253,7 @@ or replay the fixtures) shows up locally instead of needing a real Slack webhook
 The new-fingerprint rule posts nothing to Slack: its fingerprints appear in the
 Observability self "New handled-error fingerprints" table.
 The `admission-overflow` rule does post: it fires once when the global cap on new
-fingerprints or dedupe hashes drops anything, and resolves after a quiet 20 minutes.
+fingerprints or dedupe hashes drops anything, and resolves 20 to 30 minutes after the last drop.
 
 **Crons never fire on their own under `wrangler dev`** — neither worker's,
 and this is by design, not a bug (both print "Scheduled Workers are not

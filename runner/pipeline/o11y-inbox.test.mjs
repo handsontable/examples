@@ -639,3 +639,26 @@ test("pruneAdmissionWindows: drops windows older than an hour, keeps recent ones
   assert.equal(await storage.get(admissionKey(WINDOW_BASE)), undefined);
   assert.notEqual(await storage.get(admissionKey(WINDOW_BASE + 5 * ADMISSION_WINDOW_MS)), undefined);
 });
+
+test("evictOldestFingerprints: an orphaned fpts: row is deleted but never counted as an evicted entry", async () => {
+  const storage = memoryStorage();
+  const seeded = await newFingerprintWrites(memoryStorage(), ["a", "b", "c"], 1000);
+  delete seeded["fp:a"]; // `a` lost its fp: twin (e.g. TTL-pruned first)
+  await putChunked(storage, seeded);
+  await storage.put({ [FP_COUNT_STORAGE_KEY]: 2 });
+
+  await evictOldestFingerprints(storage, 0);
+
+  assert.equal((await storage.list({ prefix: "fpts:" })).size, 1, "the orphan is cleaned up along with b; c is beyond the batch");
+  assert.equal(await readFpCount(storage), 1, "the counter drops by the 1 real entry evicted (b), not by the 2 rows deleted");
+});
+
+test("evictOldestFingerprints: discards the in-progress prune lap's running total, which the eviction just made stale", async () => {
+  const storage = memoryStorage();
+  await putChunked(storage, await newFingerprintWrites(memoryStorage(), ["a", "b"], 1000));
+  await storage.put({ [FP_COUNT_STORAGE_KEY]: 2, fpLapSeen: 4000 });
+
+  await evictOldestFingerprints(storage, 1);
+
+  assert.equal(await storage.get("fpLapSeen"), 0);
+});
