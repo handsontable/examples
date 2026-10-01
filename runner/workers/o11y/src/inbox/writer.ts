@@ -76,8 +76,7 @@ import {
   writeDrainsPaused,
 } from "../alerts/inbox-state.js";
 import { getGrafanaBoxStub } from "../box.js";
-
-const CLEAN_MARKER_PREFIX = "state/wakes/";
+import { markerExists } from "./marker.js";
 
 /** Paginates `O11Y_INBOX.list()` under `inbox/` into the shape `ledger.ts`
  *  needs — cheaper than a `.head()` per key, which would cost one
@@ -204,10 +203,7 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     const storage = adaptStorage(this.ctx.storage);
     const { resolved } = await resolveOverWakes(storage, {
       isBoxRunning: () => getGrafanaBoxStub(this.env).isAwake(),
-      markerExists: async (wakeId) => {
-        const head = await this.env.O11Y_LOKI_STATE.head(`${CLEAN_MARKER_PREFIX}${wakeId}/clean`);
-        return head !== null;
-      },
+      markerExists: (wakeId) => markerExists(this.env, wakeId),
     });
     // Contract §5's `o11y.wake` point — written here since only the
     // ledger learns whether a wake's stop was clean. `recordWakeReady`
@@ -270,8 +266,8 @@ export class InboxWriter extends DurableObject<Env> implements InboxWriterApi {
     }
   }
 
-  async nextWrittenKeys(limit: number, excludeTenants: Tenant[] = []): Promise<string[]> {
-    return ledgerNextWrittenKeys(adaptStorage(this.ctx.storage), limit, excludeTenants);
+  async nextWrittenKeys(limit: number, excludeTenants: Tenant[] = [], excludeKeys: string[] = []): Promise<string[]> {
+    return ledgerNextWrittenKeys(adaptStorage(this.ctx.storage), limit, excludeTenants, excludeKeys);
   }
 
   // Lets `box.ts#drainStepBody` know whether the batch it just pushed

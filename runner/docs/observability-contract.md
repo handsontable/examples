@@ -265,8 +265,9 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `payload.boot` | API worker | framework, outcome | count | `ok`, `error` |
 | `reconcile.run` | API worker cron | outcome | count, duration_ms, usd (billing total WRITTEN this run — not a delta against the estimate; D-M15 fix round) | `ok`, `skipped`, `error` |
 | `o11y.ingest` | o11y worker | reason, outcome | count, bytes | `accepted`, `dropped`, `duplicate`; reason = gate |
-| `o11y.drain` | o11y worker | reason, outcome | count (objects), duration_ms, bytes, value (records dropped for being too old — `reject_old_samples_max_age`) | `ok`, `partial`, `error`; reason `backlog`, `visit`, `reopen` (this batch replayed reopened keys) |
+| `o11y.drain` | o11y worker | reason, outcome | count (objects), duration_ms (the not-ready give-up error point: how long the box was not ready), bytes, value (records dropped for being too old — `reject_old_samples_max_age`) | `ok`, `partial`, `error`; reason `backlog`, `visit`, `reopen` (this batch replayed reopened keys) |
 | `o11y.wake` | o11y worker | reason, outcome | count, duration_ms (to ready) | reason `backlog`, `visit`; outcome `clean`, `unclean` |
+| `o11y.ae_degraded` | o11y worker | reason | count | reason `start` (a wake started with the ClickHouse route off), `reload` (re-applying it on an already-running box failed) |
 | `o11y.backlog` | o11y worker cron | — | value (oldest age s), bytes | — |
 | `o11y.alert` | o11y worker cron | reason (rule id), outcome | count | `fired`, `resolved` |
 | `o11y.new_fingerprint` | o11y worker cron | fingerprint | count (one point per fingerprint the registry saw for the first time; at most 100 per tick, the rest stay in the registry; no Slack message) | — |
@@ -623,8 +624,20 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   `nextWrittenKeys` pages past it), so the batch fills with the other tenant's keys, and
   one `o11y.drain.stream_limit` warning line names the tenant and Loki's message. Any
   other `429`, and a `5xx`, stays transient and stops the batch. An inbox read that
-  throws defers only that key; the rest of the batch still pushes and commits. A batch
+  throws defers only that key; the rest of the batch still pushes and commits. So does a
+  source-map read that still fails after two in-call retries (`deferral: "map_fetch_error"`,
+  logged as `o11y.drain.error`): the key stays `written` and nothing is pushed for it, so
+  a replay never sends an unsymbolicated copy first. The ledger counts no attempts, so the
+  deferral lasts only while the key's inbox hour is under 6 hours old
+  (`MAP_RETRY_MAX_AGE_MS`); after that the key pushes with its frames as they are, so a replay is byte-stable only once the maps are final. A batch
   of only deferred keys ends the wake's drain once no un-excluded tenant has keys left.
+  Either deferral (inbox read or source-map read) also excludes that key for the rest
+  of the wake (`deferredKeys` in the box's storage, reset by a new wake;
+  `nextWrittenKeys` skips it), so a deferred key is not re-read on every step and
+  cannot starve the batch: the keys behind it still drain. When only deferred keys
+  remain and a Grafana visitor keeps the box up, the drain clears that set and
+  rechecks after 60 s, like the spend-cap pause; with no visitor the box stops as for
+  an empty backlog.
 - **Symbolication read caps.** One inbox object reads at most 32 distinct maps
   (`MAX_MAP_KEYS_PER_CALL`, first-seen order), one body adds at most 8 of them
   (`MAX_NEW_MAP_KEYS_PER_BODY`), and at most 128 frames are looked up per body
@@ -633,6 +646,18 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   reported as `o11y.symbolicate.skip` with reason `over_cap`, plus one aggregate
   `over_cap` line with the call's capped `frames` and `keys` that `MAX_SKIP_REPORTS`
   never suppresses.
+  Before any read, each distinct `service.version` that has a resolvable frame is listed
+  once (`sourcemaps/<version>/`, paged through the R2 cursor); only a key the listing
+  shows is admitted, so a forged frame path costs no read and is reported as `no_map`.
+  `service.version` is client-supplied, so a call lists at most 8 versions
+  (`MAX_LISTED_VERSIONS_PER_CALL`); frames of the rest stay as they were and are
+  reported per version prefix as `over_version_cap`. A list that throws (or runs past
+  5 pages) is reported as `list_error`; while the key is under 6 hours old
+  (`MAP_RETRY_MAX_AGE_MS`) the object is deferred like a failing map read, so a replay
+  never admits by the caps what the first pass admitted by the listing, and past that age
+  the version falls back to the caps above. The per-call version cap is a stated residual
+  risk, not closed: at least 8 forged requests with distinct `service.version` packed ahead
+  of a real one can still push that real version to `over_version_cap`.
 
 ## 9. Lite beacon payload
 

@@ -1,0 +1,71 @@
+name: o11y GrafanaBox nightly
+
+# Builds the GrafanaBox image (Loki + Grafana + supervisor) and runs
+# containers/o11y/local/stop-roundtrip.mjs against a real docker compose
+# stack: the only CI exercise of the box's stop/restore ledger. Idle-stop
+# (sleepAfter) is not covered here; it needs a 15 minute wait.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Clear of the other windows (01:00 starter matrix, 02:30 o11y-local,
+    # 03:00 e2e-live, Monday 04:00 server-examples, Monday 05:00 examples-build).
+    - cron: '15 4 * * *'
+  pull_request:
+    paths:
+      - 'runner/containers/o11y/**'
+      - 'runner/workers/o11y/src/box.ts'
+      - '.github/workflows/o11y-box-nightly.yml'
+
+permissions:
+  contents: read
+
+# All state lives inside this runner's own Docker daemon, so cancelling is safe.
+concurrency:
+  group: o11y-box-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stop-roundtrip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      # stop-roundtrip.mjs is plain Node (no workspace install needed).
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          # setup-node v5 auto-enables pnpm caching from the root `packageManager`
+          # field; this job never installs pnpm.
+          package-manager-cache: false
+
+      - name: Build the box image
+        run: docker compose -p o11y-stop-roundtrip -f runner/containers/o11y/compose.yml build box
+
+      - name: Stop round-trip against the compose stack
+        # KEEP leaves the stack up so the log-collection step below can read it;
+        # the always() step at the end tears it down.
+        env:
+          O11Y_ROUNDTRIP_KEEP: "1"
+        run: node runner/containers/o11y/local/stop-roundtrip.mjs
+
+      - name: Collect compose logs
+        if: failure()
+        run: |
+          mkdir -p "${RUNNER_TEMP}/o11y-box-logs"
+          docker compose -p o11y-stop-roundtrip -f runner/containers/o11y/compose.yml \
+            logs --no-color --timestamps > "${RUNNER_TEMP}/o11y-box-logs/compose.log" 2>&1 || true
+
+      - name: Upload compose logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: o11y-box-compose-logs
+          path: ${{ runner.temp }}/o11y-box-logs/
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Tear down the compose stack
+        if: always()
+        run: docker compose -p o11y-stop-roundtrip -f runner/containers/o11y/compose.yml down -v

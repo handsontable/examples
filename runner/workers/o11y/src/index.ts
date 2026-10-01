@@ -6,7 +6,7 @@
 // it) but defined in `box.ts`/`inbox/writer.ts`.
 
 import { toAePoint } from "@handsontable/demo-runtime/telemetry";
-import type { Env } from "./env.js";
+import type { Env, IngestResult } from "./env.js";
 import "./lite.js";
 import { checkBrowserGates, checkPayloadEnvironment } from "./gates/browser.js";
 import { checkDeployGate } from "./gates/oidc.js";
@@ -100,20 +100,42 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
     }
 
     if (ingestItems.length > 0) {
-      const result = await inboxWriter(env).ingest("browser", receivedAtMs, ingestItems);
-      // Outcomes are matched to items BY INDEX, never by hash — two
-      // identical items can share a hash but get different outcomes. Every
-      // hash `InboxWriter.ingest` reports counts toward this route's
+      // Invalid/oversize records and AE points for items without an
+      // `ingestItem` are written above, before ingest, so a Faro retry after
+      // a timeout can double-count them (acceptable).
+      const ingested = await ingestWithDeadline(env, "browser", receivedAtMs, ingestItems);
+      // Writes the points of exactly the accepted items. Outcomes are matched
+      // to items BY INDEX, never by hash: two identical items can share a hash
+      // but get different outcomes.
+      const writeAcceptedPoints = (result: IngestResult) => {
+        withItem.forEach((p, idx) => {
+          if (result.results[idx]?.outcome === "accepted") {
+            for (const point of p.aePoints) writePoint(env, ctx, point);
+          }
+        });
+      };
+      if (!ingested.ok) {
+        // A call that commits after the deadline still owes its points: the
+        // client's retry comes back `duplicate` and writes none.
+        if (ingested.settled) {
+          ctx.waitUntil(
+            ingested.settled.then((late) => {
+              if (late) writeAcceptedPoints(late);
+            }),
+          );
+        }
+        return respondDrop(env, ctx, ingested.drop);
+      }
+      const result = ingested.result;
+      // Every hash `InboxWriter.ingest` reports counts toward this route's
       // `o11y.ingest` self-metric, whether or not it carries a stored
       // `record`: an AE-only item is still a record the pipeline accepted.
-      withItem.forEach((p, idx) => {
+      withItem.forEach((_p, idx) => {
         const outcome = result.results[idx]?.outcome;
         if (outcome === undefined) return;
         outcome === "duplicate" ? duplicate++ : accepted++;
-        if (outcome === "accepted") {
-          for (const point of p.aePoints) writePoint(env, ctx, point);
-        }
       });
+      writeAcceptedPoints(result);
     }
   } catch (err) {
     // `handleCollect`'s own backstop: every known throw site is fixed at

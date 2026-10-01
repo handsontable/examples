@@ -178,7 +178,9 @@ wake that ends without ever having a `provisional` key (an empty backlog, or a
 Grafana-visit-only wake with nothing to drain) never gets an index upload and so never
 gets a marker — that is expected, not an unclean stop, and the ledger now resolves such a
 wake as clean without requiring one. A wake that *did* push data still requires the real
-marker.
+marker. A box that stays not ready for 10 minutes after its wake began (Loki never
+answers its readiness probe) is a further stop trigger: the drain reports one error and
+runs the same stop decision, unless a stop for that wake is already in flight.
 
 **Waking page**: the Handsontable logo, one line of text, `<meta http-equiv="refresh"
 content="3">`, no script, served by the Worker while the box is not ready.
@@ -265,7 +267,14 @@ counted as `duplicate`, so a committed batch can go uncounted as `accepted`. Clo
 exporter is undocumented on its timeout, retry count and backoff, whether it back-pressures the
 source Worker, and what it treats as a failure; that stays a known unknown, watched passively
 through the "Observability self" dashboard's `o11y.ingest` outcome panel. `/telemetry/collect`
-keeps its own catch (`500`, `invalid_item`) and has no deadline yet.
+uses the same deadline; its own catch (`500`, `invalid_item`) remains only as a backstop for
+Faro body processing. Invalid and oversize records and Analytics Engine points for items without
+an inbox item are written before ingest, so a Faro retry after a timeout can double-count them.
+Points for items with an inbox item (browser metrics, hash-only `example.*` events) are written
+only for items the ingest reports `accepted`. When the deadline fires, the abandoned call is kept
+alive with `ctx.waitUntil` and, if it commits, writes the points of exactly its accepted items; the
+client's retry then comes back `duplicate` and writes none, so they are counted once. A call that
+rejects later writes none.
 
 Analytics Engine points for browser metrics are written by the route handler after step 3
 (§F.1), so they exist while the box sleeps. `example.*` events (ADR-0042) produce Analytics Engine points only
@@ -295,8 +304,9 @@ describes, so backlog and state are readable without starting the container. Eac
   `400` (for example `too_far_behind`) is logged with Loki's message. Two cases defer a
   key instead (it stays `written`, nothing is rejected, the batch goes on): a `429` whose
   body names Loki's stream limit, which is never retried, and an inbox object that
-  cannot be read. A stream-limited tenant's keys are skipped for the rest of the wake so
-  the other tenant keeps draining (contract §8, "Drain refusals"). A single too-old
+  cannot be read (a failing source-map read defers the same way). A stream-limited
+  tenant's keys, and every deferred key, are skipped for the rest of the wake so the keys
+  behind them keep draining (contract §8, "Drain refusals"). A single too-old
   record inside an otherwise-good packed object does not 400 (and so reject) the whole
   key — `drainKey` drops individual log records older than `reject_old_samples_max_age`
   minus a margin *before* pushing, counts
@@ -570,7 +580,7 @@ state would not survive a sleep.
 |---|---|---|
 | Uncaught error, new issue, regression | Sentry | seconds |
 | Spend thresholds (200/500/800) | `reconcile.ts` `captureMessage` to Sentry, as today | nightly |
-| `at_capacity` rate, 5xx rate from `api.request`, preview-ready rate per tier, session start p95, embed error rate per demo id, compile-error rate per `ht_major` day over day, snapshot-build failed rate per framework, LiteLLM error rate (`chat.answer` + `theme.ai`), inbox backlog age, a `rejected` inbox key, the o11y spend cap | o11y worker `*/10` cron over Analytics Engine and `InboxWriter` → Slack | minutes |
+| `at_capacity` rate, 5xx rate from `api.request`, preview-ready rate per tier, session start p95, embed error rate per demo id, compile-error rate per `ht_major` day over day, snapshot-build failed rate per framework, a wake or reload that ran without the `ae.internal` interception (`o11y.ae_degraded`), LiteLLM error rate (`chat.answer` + `theme.ai`), inbox backlog age, a `rejected` inbox key, the o11y spend cap | o11y worker `*/10` cron over Analytics Engine and `InboxWriter` → Slack | minutes |
 | New handled-error fingerprint | the exact first-seen registry in `InboxWriter` (not sampled data), excluding `surface = demo-runtime`, whose keystroke ladders are authored-code output. **Not a page**: the `*/10` cron writes one `o11y.new_fingerprint` point per new fingerprint and the Observability self dashboard lists them in a table; nothing goes to Slack | minutes, dashboard only |
 | The o11y stack itself stale (no cron tick or ingest for 30 min) | the API worker's `*/5` cron reads the o11y heartbeat over a service binding and sends `captureMessage` to Sentry | minutes |
 
@@ -582,7 +592,7 @@ session start p95 above 20 s, evaluated only with at least 20 `ready` starts in 
 (below either floor the rule is not firing, so a firing alert resolves through the normal path); `at_capacity` above 5/h; 5xx above 1 % over
 15 min, evaluated only with at least 100 requests after the exclusions (at 1 % one error exceeds the threshold only below 100 requests, so a single 500 cannot page);
 LiteLLM errors above 5 % over 1 h, evaluated only with at least 20 non-denied calls (same reasoning at 5 %); compile errors on one `ht_major` doubling day over
-day; snapshot builds failing above 50 % per framework over 30 min with at least 10
+day; any `o11y.ae_degraded` point in 2 h (written only at a wake or reload, so a short window would resolve before anyone read the page); snapshot builds failing above 50 % per framework over 30 min with at least 10
 failed; an embed above 20 % errors with more than 50 views in 24 h; backlog older
 than 2 h.
 

@@ -1,8 +1,8 @@
-// The deadline-and-backstop wrapper around `InboxWriter.ingest` for the
-// ingest routes that have no other catch (`v1/logs`, `deploy`,
-// `hooks/sentry`): a stuck or throwing Durable Object call becomes an
-// accounted 503 with `Retry-After` instead of a hung request or an
-// unhandled exception that writes no `o11y.ingest` point.
+// The deadline-and-backstop wrapper around `InboxWriter.ingest` for every
+// ingest route (`collect`, `v1/logs`, `deploy`, `hooks/sentry`): a stuck or
+// throwing Durable Object call becomes an accounted 503 with `Retry-After`
+// instead of a hung request or an unhandled exception that writes no
+// `o11y.ingest` point.
 
 import type { Env, IngestItem, IngestResult } from "../env.js";
 import type { GateDrop } from "../gates/types.js";
@@ -15,7 +15,11 @@ export const INGEST_DEADLINE_MS = 10_000;
 /** Seconds the caller is told to wait before redelivering. */
 export const INGEST_RETRY_AFTER_SECONDS = 30;
 
-export type IngestOutcome = { ok: true; result: IngestResult } | { ok: false; drop: GateDrop };
+/** `settled` exists only on an `ingest_timeout` drop: it resolves with the
+ *  abandoned call's result, or `undefined` if that call later rejects. */
+export type IngestOutcome =
+  | { ok: true; result: IngestResult }
+  | { ok: false; drop: GateDrop; settled?: Promise<IngestResult | undefined> };
 
 /** Races `InboxWriter.ingest` against {@link INGEST_DEADLINE_MS}. An
  *  `AbortSignal` cannot cancel a DO RPC, so the losing call is abandoned, not
@@ -32,9 +36,17 @@ export async function ingestWithDeadline(
     timer = setTimeout(() => resolve(timedOut), INGEST_DEADLINE_MS);
   });
   try {
-    const result = await Promise.race([inboxWriter(env).ingest(tenant, receivedAtMs, items), deadline]);
+    const call = inboxWriter(env).ingest(tenant, receivedAtMs, items);
+    const result = await Promise.race([call, deadline]);
     if (result === timedOut) {
-      return { ok: false, drop: { ok: false, reason: "ingest_timeout", status: 503, retryAfterSeconds: INGEST_RETRY_AFTER_SECONDS } };
+      return {
+        ok: false,
+        drop: { ok: false, reason: "ingest_timeout", status: 503, retryAfterSeconds: INGEST_RETRY_AFTER_SECONDS },
+        settled: call.then(
+          (late) => late,
+          () => undefined,
+        ),
+      };
     }
     return { ok: true, result };
   } catch (err) {

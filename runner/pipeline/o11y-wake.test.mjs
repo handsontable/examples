@@ -74,9 +74,9 @@ function makeInboxWriterStub(overrides = {}) {
     async drainsPaused() {
       return overrides.drainsPaused ?? false;
     },
-    async nextWrittenKeys() {
+    async nextWrittenKeys(_limit, _excludeTenants, excludeKeys = []) {
       calls.nextWrittenKeys = (calls.nextWrittenKeys ?? 0) + 1;
-      return overrides.writtenKeys ?? [];
+      return (overrides.writtenKeys ?? []).filter((k) => !excludeKeys.includes(k));
     },
     // Defaults to "no reopened keys in this batch" — a test proving the
     // `reason: "reopen"` emission overrides this via `overrides.reopenedFlag`
@@ -210,6 +210,125 @@ test("drainStep reschedules itself, without touching InboxWriter, while the box 
   assert.equal(inboxWriterStub.calls.resolveWakes, 0, "must not call the ledger before HTTP readiness");
   assert.equal(scheduled.length, 1);
   assert.equal(scheduled[0].callback, "drainStep");
+});
+
+// ---- drainStep: not-ready backoff and give-up ----------------------------
+
+const MIN = 60 * 1000;
+
+async function notReadyBox({ since, visitor = false, reason = "backlog" } = {}) {
+  const made = makeBox();
+  await made.box.wake(reason);
+  hooks.containerFetch = async () => new Response(null, { status: 503 }); // Loki answers, never 200
+  const wake = await made.box.ctx.storage.get("wake");
+  if (since !== undefined) await made.box.ctx.storage.put("notReadySince", { wakeId: wake.wakeId, since: Date.now() - since });
+  if (visitor) await made.box.noteVisitorActivity();
+  let stopped = 0;
+  hooks.stop = async (self) => {
+    stopped++;
+    self._state = { status: "stopped", lastChange: Date.now() };
+  };
+  made.scheduled.length = 0;
+  return { ...made, wake, stops: () => stopped };
+}
+
+const drainErrorPoints = (ae) => ae.points.filter((p) => p.indexes?.[0] === "o11y.drain" && outcomeOf(p) === "error");
+const gapOf = (entry) => entry.when.getTime() - Date.now();
+
+test("drainStep backs off while the box stays not ready: 1 s, then 5 s, then 30 s", async () => {
+  for (const [since, expectMs] of [[undefined, 1000], [40 * 1000, 5000], [3 * MIN, 30_000]]) {
+    const { box, wake, scheduled } = await notReadyBox({ since });
+    await box.drainStep({ wakeId: wake.wakeId });
+    assert.equal(scheduled.length, 1, `since=${since}`);
+    assert.equal(scheduled[0].callback, "drainStep");
+    const gap = gapOf(scheduled[0]);
+    assert.ok(gap > expectMs - 1500 && gap <= expectMs + 100, `since=${since}: expected ~${expectMs}ms, got ${gap}ms`);
+    const record = await box.ctx.storage.get("notReadySince");
+    assert.equal(record.wakeId, wake.wakeId);
+  }
+});
+
+test("drainStep keeps the first not-ready time across steps and clears it once the box is ready", async () => {
+  const { box, wake } = await notReadyBox();
+  await box.drainStep({ wakeId: wake.wakeId });
+  const first = (await box.ctx.storage.get("notReadySince")).since;
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal((await box.ctx.storage.get("notReadySince")).since, first, "the clock starts once");
+
+  installContainerFetchRouter();
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(await box.ctx.storage.get("notReadySince"), undefined, "ready resets it");
+});
+
+test("drainStep gives up after 10 minutes not ready: logs, writes a drain error point, stops a quiet box", async () => {
+  const { box, wake, ae, scheduled, stops } = await notReadyBox({ since: 11 * MIN });
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(stops(), 1, "a box nobody is looking at is stopped");
+  assert.equal(scheduled.length, 0, "the chain ends; the next cron wake retries");
+  assert.equal(drainErrorPoints(ae).length, 1);
+  assert.equal(reasonOf(drainErrorPoints(ae)[0]), "backlog");
+});
+
+test("drainStep before the 10-minute threshold neither stops nor writes an error point", async () => {
+  const { box, wake, ae, stops } = await notReadyBox({ since: 9 * MIN });
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(stops(), 0);
+  assert.equal(drainErrorPoints(ae).length, 0);
+});
+
+test("drainStep past the threshold leaves a box with a visitor running and reports once", async () => {
+  const { box, wake, ae, scheduled, stops } = await notReadyBox({ since: 11 * MIN, visitor: true, reason: "visit" });
+  await box.drainStep({ wakeId: wake.wakeId });
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(stops(), 0, "never SIGTERM someone reading a dashboard");
+  assert.equal(scheduled.length, 2, "still polling");
+  assert.ok(gapOf(scheduled[1]) > 28_000, "at the slowest cadence");
+  assert.equal(drainErrorPoints(ae).length, 1, "one point per wake, not one per step");
+});
+
+test("drainStep: a throw inside the not-ready path records an error point and runs the post-drain stop decision", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const { box, wake, ae, scheduled, stops } = await notReadyBox({ since: 2 * MIN });
+  const put = box.ctx.storage.put.bind(box.ctx.storage);
+  box.ctx.storage.put = async (key, value) => {
+    if (key === "notReadySince") throw new Error("storage unavailable");
+    return put(key, value);
+  };
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(drainErrorPoints(ae).length, 1, "the throw is reported like any other drainStep error");
+  assert.equal(stops(), 1, "a quiet box is stopped by the same fallback");
+  assert.equal(scheduled.length, 0);
+});
+
+test("drainStep: when the not-ready path and its fallback both throw, it still reschedules", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const { box, wake, scheduled } = await notReadyBox({ since: 2 * MIN });
+  const put = box.ctx.storage.put.bind(box.ctx.storage);
+  box.ctx.storage.put = async (key, value) => {
+    if (key === "notReadySince") throw new Error("storage unavailable");
+    return put(key, value);
+  };
+  hooks.stop = async () => {
+    throw new Error("stop failed");
+  };
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.deepEqual(scheduled.map((s) => s.callback), ["drainStep"]);
+});
+
+test("drainStep past the threshold does not give up on a wake whose stop is already in flight", async () => {
+  const { box, wake, ae, scheduled, stops } = await notReadyBox({ since: 11 * MIN });
+  await box.ctx.storage.put("stoppingFor", wake.wakeId);
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(stops(), 0, "no second stop while one is in flight");
+  assert.equal(drainErrorPoints(ae).length, 0, "and no give-up report for a box that is already going down");
+  assert.deepEqual(scheduled.map((s) => s.callback), ["drainStep"], "the chain ends itself once the container is gone");
+});
+
+test("drainStep ends its chain when the container is no longer running", async () => {
+  const { box, wake, scheduled } = await notReadyBox();
+  box._state = { status: "stopped", lastChange: Date.now() };
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(scheduled.length, 0, "a stopped box has nothing to wait for");
 });
 
 test("drainStep is a no-op once a newer wake has superseded the payload's wakeId", async () => {
@@ -512,7 +631,7 @@ test("drainStep: an inbox read that throws on key 2 of 3 leaves only that key wr
   assert.equal(outcomeOf(ae.points.find((p) => p.indexes?.[0] === "o11y.drain")), "error");
 });
 
-test("drainStep: a batch in which every inbox read throws ends the drain instead of repeating itself every step", async () => {
+test("drainStep: a batch in which every inbox read throws excludes those keys, then ends the drain instead of repeating itself every step", async () => {
   const keys = [0, 1].map((i) => `inbox/worker/2026-01-01/00/00000000000${i}.ndjson.gz`);
   const { box, scheduled } = makeBox({
     inboxWriter: { writtenKeys: keys },
@@ -528,6 +647,9 @@ test("drainStep: a batch in which every inbox read throws ends the drain instead
   scheduled.length = 0;
 
   const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 1, "the deferred keys are excluded, then the next step finds nothing");
+  scheduled.length = 0;
   await box.drainStep({ wakeId: wake.wakeId });
 
   assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 0);
@@ -724,6 +846,54 @@ test("drainStep pushes nothing while drainsPaused: a visit wake keeps serving (n
     assert.ok(!ae.points.some((p) => p.indexes?.[0] === "o11y.drain"), `${reason}: no o11y.drain point`);
     assert.equal(stopped, expectStop, reason);
   }
+});
+
+// A visit wake that outlives the spend-cap pause keeps serving; its drain chain
+// must keep polling the flag at a slow cadence so clearing the cap resumes the drain.
+test("drainStep while paused with a visitor present reschedules a slow recheck, and drains once the pause clears", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000009.ndjson.gz";
+  const inboxWriter = { writtenKeys: [key], drainsPaused: true };
+  const { box, inboxWriterStub, scheduled } = makeBox({ inboxWriter });
+  await box.wake("visit");
+  installContainerFetchRouter();
+  await box.noteVisitorActivity();
+  let stopped = false;
+  hooks.stop = async () => { stopped = true; };
+  scheduled.length = 0;
+  const wake = await box.ctx.storage.get("wake");
+
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(stopped, false, "a visitor keeps the box up");
+  assert.equal(scheduled.length, 1, "exactly one follow-up step, so the chain never forks");
+  assert.equal(scheduled[0].callback, "drainStep");
+  assert.deepEqual(scheduled[0].payload, { wakeId: wake.wakeId });
+  const gapMs = scheduled[0].when.getTime() - Date.now();
+  assert.ok(gapMs > 55_000 && gapMs <= 61_000, `expected a ~60 s recheck, got ${gapMs}ms`);
+  assert.equal(inboxWriterStub.calls.nextWrittenKeys ?? 0, 0, "still paused: nothing taken");
+
+  inboxWriter.drainsPaused = false; // the cap resolved
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(inboxWriterStub.calls.nextWrittenKeys, 1, "the next step drains");
+});
+
+test("drainStep while paused ends the recheck chain once the visitor has gone quiet", async () => {
+  const { box, scheduled } = makeBox({ inboxWriter: { drainsPaused: true } });
+  await box.wake("visit");
+  installContainerFetchRouter();
+  await box.ctx.storage.put("lastGrafanaAt", Date.now() - 11 * 60 * 1000);
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopped", lastChange: Date.now() };
+  };
+  scheduled.length = 0;
+  const wake = await box.ctx.storage.get("wake");
+
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(stopped, true);
+  assert.equal(scheduled.length, 0, "a stopped box has no follow-up step");
 });
 
 test("drainStep drains normally once drainsPaused is cleared", async () => {
@@ -1272,4 +1442,118 @@ test("item 2 (revert-check shape): a stop() that itself throws clears the marker
   // failed stop() must not leave isReady() reporting not-ready for the rest
   // of a wake that is, in fact, still very much up.
   assert.equal(await box.isReady(), true);
+});
+
+// ---- drainStep: source-map listing and read failures ----------------------
+
+const { inboxKey } = await import("@handsontable/demo-runtime/telemetry");
+
+const ONE_MAPPING_MAP = JSON.stringify({ version: 3, sources: ["../../src/a.ts"], names: [], mappings: "AAAA" });
+
+/** A gzipped inbox object holding one recent exception per `[version, filename]`. */
+async function exceptionObject(entries) {
+  const lines = entries.map(([version, filename]) =>
+    JSON.stringify({
+      resource: { attributes: [{ key: "service.version", value: { stringValue: version } }] },
+      scopeLogs: [
+        {
+          logRecords: [
+            {
+              timeUnixNano: String(BigInt(Date.now()) * 1_000_000n),
+              body: { stringValue: `TypeError: x\n    at f (${filename}:1:1)` },
+              attributes: [{ key: "hot.kind", value: { stringValue: "exception" } }],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const stream = new Blob([lines.join("\n") + "\n"]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function pushedBodies(requests) {
+  const bodies = [];
+  for (const request of requests) {
+    const text = await new Response(request.body.pipeThrough(new DecompressionStream("gzip"))).text();
+    for (const rl of JSON.parse(text).resourceLogs) bodies.push(rl.scopeLogs[0].logRecords[0].body.stringValue);
+  }
+  return bodies;
+}
+
+test("drainStep lists the maps of each version through the R2 cursor, and a forged path is never read", async () => {
+  const key = inboxKey("worker", new Date(), 0);
+  const gz = await exceptionObject([
+    ["forged", "https://demos.handsontable.com/assets/nope.js"],
+    ["realsha", "https://demos.handsontable.com/assets/app.js"],
+  ]);
+  const gets = [];
+  const lists = [];
+  const stored = ["sourcemaps/realsha/assets/other.js.map", "sourcemaps/realsha/assets/app.js.map"];
+  const O11Y_MAPS = {
+    async get(k) {
+      gets.push(k);
+      return k === stored[1] ? { text: async () => ONE_MAPPING_MAP } : null;
+    },
+    // Two keys, one per page, so the cursor loop is what finds the second.
+    async list({ prefix, cursor }) {
+      lists.push({ prefix, cursor });
+      const page = prefix === "sourcemaps/realsha/" ? (cursor === undefined ? 0 : 1) : null;
+      if (page === null) return { objects: [], truncated: false };
+      return { objects: [{ key: stored[page] }], truncated: page === 0, cursor: page === 0 ? "c1" : undefined };
+    },
+  };
+  const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects: new Map([[key, gz]]), env: { O11Y_MAPS } });
+  await box.wake("backlog");
+  const requests = [];
+  installContainerFetchRouter({ otlp: (request) => (requests.push(request), new Response(null, { status: 204 })) });
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.deepEqual(lists, [
+    { prefix: "sourcemaps/forged/", cursor: undefined },
+    { prefix: "sourcemaps/realsha/", cursor: undefined },
+    { prefix: "sourcemaps/realsha/", cursor: "c1" },
+  ]);
+  assert.deepEqual(gets, [stored[1]], "only the key the listing shows is read");
+  const [forged, real] = await pushedBodies(requests);
+  assert.match(forged, /assets\/nope\.js:1:1/);
+  assert.match(real, /\(src\/a\.ts:1:1\)/);
+  assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 1);
+});
+
+test("drainStep: a map read that keeps failing leaves only that fresh key written and logs it; the other key still goes provisional", async (t) => {
+  const keys = [inboxKey("worker", new Date(), 0), inboxKey("worker", new Date(), 1)];
+  const r2Objects = new Map([
+    [keys[0], await exceptionObject([["realsha", "https://demos.handsontable.com/assets/app.js"]])],
+    [keys[1], await recentObject("plain")],
+  ]);
+  const errors = [];
+  t.mock.method(console, "error", (line) => errors.push(JSON.parse(line)));
+  const O11Y_MAPS = {
+    async get() {
+      throw new Error("R2 get timed out");
+    },
+    async list() {
+      return { objects: [{ key: "sourcemaps/realsha/assets/app.js.map" }], truncated: false };
+    },
+  };
+  const { box, inboxWriterStub, scheduled } = makeBox({ inboxWriter: { writtenKeys: keys }, r2Objects, env: { O11Y_MAPS } });
+  await box.wake("backlog");
+  const requests = [];
+  installContainerFetchRouter({ otlp: (request) => (requests.push(request), new Response(null, { status: 204 })) });
+  scheduled.length = 0;
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.deepEqual(inboxWriterStub.calls.markKeysProvisional.map((c) => c.keys), [[keys[1]]]);
+  assert.equal(inboxWriterStub.calls.rejectKey.length, 0);
+  assert.deepEqual(await pushedBodies(requests), ["plain"]);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].event, "o11y.drain.error");
+  assert.equal(errors[0].key, keys[0]);
+  assert.match(errors[0].message, /^map_fetch_error: /);
+  assert.deepEqual(scheduled.map((s) => s.callback), ["drainStep"], "the drain goes on with the next step");
 });

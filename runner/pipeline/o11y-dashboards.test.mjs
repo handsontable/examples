@@ -1001,3 +1001,14 @@ test("runner-overview.json and observability-self.json each link to the Logs das
     );
   }
 });
+
+test("observability-self.json has an o11y.ingest dropped-by-reason panel that filters on outcome dropped and groups by reason", () => {
+  const { dashboard } = dashboards.find((d) => d.file === "observability-self.json");
+  const panel = dashboard.panels.find((p) => p.title === "o11y.ingest dropped by reason");
+  assert.ok(panel, "observability-self.json has no 'o11y.ingest dropped by reason' panel");
+  const query = panel.targets[0].query;
+  assert.match(query, /index1 = 'o11y\.ingest'/);
+  assert.match(query, /blob8 = 'dropped'/);
+  assert.match(query, /blob9 AS reason/);
+  assert.match(query, /GROUP BY t, reason/);
+});

@@ -37,9 +37,18 @@ const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
 /** `{ wakeId, tenants }`: tenants that hit Loki's stream limit in this wake,
  *  whose keys later steps skip, because the ingester keeps its streams until it stops. */
 const STREAM_LIMITED_STORAGE_KEY = "streamLimitedTenants";
+/** `{ wakeId, keys }`: keys the drain deferred in this wake (a failing map or
+ *  inbox read), skipped by later steps so they cannot starve the batch. */
+const DEFERRED_KEYS_STORAGE_KEY = "deferredKeys";
+/** Bounds the persisted deferred set; a key that defers once it is full is not recorded,
+ *  so it is retried by later steps and ends the drain only when a whole batch defers. */
+const DEFERRED_KEYS_MAX = 1000;
 /** The wakeId whose wake-to-ready time was already reported to InboxWriter,
  *  so only a wake's first successful `isReady()` reports it. */
 const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
+/** `{ wakeId, since, gaveUp }`: when `drainStep` first found this wake's box
+ *  not ready, and whether the give-up was already reported. Per wake. */
+const NOT_READY_STORAGE_KEY = "notReadySince";
 const HARD_CAP_SCHEDULE = "hardCapStop";
 const DRAIN_STEP_SCHEDULE = "drainStep";
 /** ADR §A: "after 4 hours awake regardless." */
@@ -47,10 +56,12 @@ const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
 /** ADR §A stop protocol: "if no Grafana request arrived in the last 10
  *  minutes the Worker calls `stop()`." */
 const GRAFANA_QUIET_STOP_MS = 10 * 60 * 1000;
-/** Objects drained per `drainStep` invocation (one `alarm()`): bounds its CPU,
- *  and its subrequests at 10 inbox GETs + 10 × `MAX_MAP_KEYS_PER_CALL` map GETs
- *  + ~200 push attempts, far under the Workers limit of 10,000. */
+/** Objects per `drainStep` (one `alarm()`), bounding CPU and subrequests: 10 inbox GETs,
+ *  10 × `MAX_MAP_KEYS_PER_CALL` × 3 map GETs, 10 × `MAX_LISTED_VERSIONS_PER_CALL` ×
+ *  `MAP_LIST_MAX_PAGES` lists and ~200 pushes stay far under the Workers limit of 10,000. */
 const DRAIN_BATCH_SIZE = 10;
+/** List pages of `limit: 1000` one `service.version` prefix may take. */
+const MAP_LIST_MAX_PAGES = 5;
 /** Minimum gap before `drainStep` reschedules itself: the base
  *  `Container.alarm()` loop reads every due `container_schedules` row ONCE
  *  at the top of its own invocation and compares each row's `time` (whole
@@ -61,6 +72,20 @@ const DRAIN_BATCH_SIZE = 10;
  *  `row.time <= now` for the `now` captured at the start of the invocation
  *  that inserted it. */
 const DRAIN_STEP_GAP_MS = 1000;
+/** Gap between `drainStep` rechecks of the spend-cap pause while a visitor
+ *  keeps the box up: the pause is cleared by the ten-minute cron, so a slow
+ *  poll is enough and costs almost nothing. */
+const PAUSED_DRAIN_RECHECK_MS = 60_000;
+/** A box not ready this long after its wake began is stuck (a normal start is
+ *  well under `START_DEADLINE_MS`): `drainStep` reports it and, if nobody is
+ *  looking at Grafana, stops it. */
+const NOT_READY_GIVE_UP_MS = 10 * 60 * 1000;
+/** `drainStep` gap while not ready, by time spent not ready: 1 s, 5 s after
+ *  30 s, 30 s after 2 minutes. */
+function notReadyGapMs(notReadyForMs: number): number {
+  if (notReadyForMs < 30_000) return DRAIN_STEP_GAP_MS;
+  return notReadyForMs < 120_000 ? 5_000 : 30_000;
+}
 
 // Every await on the container is bounded: an accepted-but-silent port can
 // hang `start()`/`isReady()` forever, since the library's healthy-state
@@ -222,6 +247,7 @@ export function getGrafanaBoxStub(env: Env) {
   return ns.getByName("box");
 }
 
+// @ts-expect-error `applyOutboundInterception` is private in the SDK typings and overridden below on purpose
 export class GrafanaBox extends Container<Env> {
   // Grafana is the box's own default target; Loki (3100) is reached
   // explicitly (readiness probe) — see docs/observability-contract.md §1's
@@ -242,6 +268,7 @@ export class GrafanaBox extends Container<Env> {
   wakeWaitMs = WAKE_WAIT_MS;
   startDeadlineMs = START_DEADLINE_MS;
   lokiPushTimeoutMs = LOKI_PUSH_TIMEOUT_MS;
+  deferredKeysMax = DEFERRED_KEYS_MAX;
   /** When an `isReady()` probe first ran out of time with no probe settling
    *  since. In memory only: a fresh instance starts clean. */
   #probesStuckSince: number | null = null;
@@ -337,20 +364,56 @@ export class GrafanaBox extends Container<Env> {
    */
   async #startFailOpen(wakeId: string, envVars: Record<string, string>): Promise<void> {
     const interception = this.usingInterception;
+    this.#inStartFailOpen = true;
     try {
       await this.start({ envVars });
     } catch (err) {
       // A running container means the failure came after the interception
       // setup, so it is not ours to swallow.
       if (!interception || this.ctx.container?.running) throw err;
-      console.error(JSON.stringify({ event: "o11y.ae_outbound.degraded", wakeId, message: String(err) }));
+      this.#reportAeDegraded(wakeId, err, "start");
       this.usingInterception = false;
       try {
         await this.start({ envVars });
       } finally {
         this.usingInterception = interception;
       }
+    } finally {
+      this.#inStartFailOpen = false;
     }
+  }
+
+  /** True while `#startFailOpen` runs: it reports its own failure, so the
+   *  `applyOutboundInterception` override stays quiet then. */
+  #inStartFailOpen = false;
+
+  /** Logs the event and writes the point the `ae-outbound-degraded` alert
+   *  counts. The point goes through the Worker's own AE binding, not
+   *  `ae.internal`, so it lands while the interception is down. */
+  #reportAeDegraded(wakeId: string, err: unknown, reason: "start" | "reload"): void {
+    console.error(JSON.stringify({ event: "o11y.ae_outbound.degraded", wakeId, message: String(err) }));
+    writeBoxPoint(this.env, this.ctx, "o11y.ae_degraded", { count: 1 }, { reason });
+  }
+
+  /**
+   * The SDK's constructor re-applies the interception for an already-running
+   * container without awaiting or catching it, so a rejection there (after
+   * `ctx.abort()` or a deploy) would be an unhandled rejection this class
+   * cannot catch. Returns the SDK's own promise with a handler attached, so
+   * `start()` and `refreshOutboundInterception()` still see the throw.
+   * TS-private in the typings, a prototype method at runtime;
+   * `o11y-box-ae-fail-open.test.mjs` pins that against the package.
+   */
+  applyOutboundInterception(): Promise<void> {
+    // @ts-expect-error private in the SDK typings
+    const applied: Promise<void> = super.applyOutboundInterception();
+    if (!this.#inStartFailOpen) {
+      applied.catch(async (err: unknown) => {
+        const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY).catch(() => undefined);
+        this.#reportAeDegraded(wake?.wakeId ?? "unknown", err, "reload");
+      });
+    }
+    return applied;
   }
 
   /**
@@ -591,11 +654,6 @@ export class GrafanaBox extends Container<Env> {
     const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
     if (current?.wakeId !== payload.wakeId) return;
 
-    if (!(await this.isReady())) {
-      await this.schedule(new Date(Date.now() + DRAIN_STEP_GAP_MS), DRAIN_STEP_SCHEDULE, payload);
-      return;
-    }
-
     const startedAt = Date.now();
     // Fills in whether this batch replayed a reopened key, read back in the
     // catch below so an error point reports `reason: "reopen"` too (not
@@ -603,6 +661,11 @@ export class GrafanaBox extends Container<Env> {
     // so this is the only chance to observe it once anything below throws.
     const reopenState: { replayed: boolean } = { replayed: false };
     try {
+      if (!(await this.isReady())) {
+        await this.#notReadyStep(payload.wakeId, current);
+        return;
+      }
+      if (await this.ctx.storage.get(NOT_READY_STORAGE_KEY)) await this.ctx.storage.delete(NOT_READY_STORAGE_KEY);
       await this.#drainStepBody(payload, current, startedAt, reopenState);
     } catch (err) {
       // Any throw here (an R2 get, an InboxWriter RPC, or a symbolication
@@ -637,6 +700,43 @@ export class GrafanaBox extends Container<Env> {
     }
   }
 
+  /**
+   * The box is not answering `isReady()`. Backs off the retry gap, and past
+   * {@link NOT_READY_GIVE_UP_MS} reports once and runs the usual stop decision
+   * (a box with a visitor stays up and keeps polling at the slowest gap). The
+   * readiness probes renew the idle clock, so without this a box whose Loki
+   * keeps answering 503 would never idle-stop.
+   */
+  async #notReadyStep(wakeId: string, current: WakeRecord): Promise<void> {
+    // A stopped container has nothing to wait for: its next wake starts a new chain.
+    if (!(await this.isAwake())) {
+      await this.ctx.storage.delete(NOT_READY_STORAGE_KEY);
+      return;
+    }
+    const now = Date.now();
+    let record = await this.ctx.storage.get<{ wakeId: string; since: number; gaveUp?: boolean }>(NOT_READY_STORAGE_KEY);
+    if (record?.wakeId !== wakeId) record = { wakeId, since: now };
+    const notReadyForMs = now - record.since;
+    // A stop already in flight also reads as not ready; the box is going down.
+    const giveUp = notReadyForMs >= NOT_READY_GIVE_UP_MS && (await this.ctx.storage.get<string>(STOPPING_FOR_STORAGE_KEY)) !== wakeId;
+    if (giveUp && !record.gaveUp) {
+      record.gaveUp = true;
+      writeBoxPoint(
+        this.env,
+        this.ctx,
+        "o11y.drain",
+        { count: 0, duration_ms: notReadyForMs, bytes: 0, value: 0 },
+        { reason: current.reason, outcome: "error" },
+      );
+      console.error(
+        JSON.stringify({ event: "o11y.drain.error", wakeId, stage: "not_ready", message: `box not ready for ${Math.round(notReadyForMs / 1000)} s` }),
+      );
+    }
+    await this.ctx.storage.put(NOT_READY_STORAGE_KEY, record);
+    if (giveUp && !(await this.#finishDrain(wakeId))) return;
+    await this.schedule(new Date(now + notReadyGapMs(notReadyForMs)), DRAIN_STEP_SCHEDULE, { wakeId });
+  }
+
   /** The actual drain-batch work `drainStep` runs inside a try/catch guard
    *  above — split out so every throw inside it is caught by that same
    *  handler. */
@@ -657,15 +757,25 @@ export class GrafanaBox extends Container<Env> {
     // batch, and a backlog wake that started before the pause stops the box
     // once it is quiet (`#finishDrain`), exactly like an empty backlog.
     if (await writer.drainsPaused()) {
-      await this.#finishDrain(payload.wakeId);
+      // A visitor keeps the box up past this step, and nothing else restarts
+      // the chain, so poll the flag slowly until the pause clears or the box
+      // goes quiet.
+      if (await this.#finishDrain(payload.wakeId)) {
+        await this.schedule(new Date(Date.now() + PAUSED_DRAIN_RECHECK_MS), DRAIN_STEP_SCHEDULE, payload);
+      }
       return;
     }
     const limitedRecord = await this.ctx.storage.get<{ wakeId: string; tenants: Tenant[] }>(STREAM_LIMITED_STORAGE_KEY);
     const streamLimited = new Set<Tenant>(limitedRecord?.wakeId === payload.wakeId ? limitedRecord.tenants : []);
-    const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE, [...streamLimited]);
+    const deferredRecord = await this.ctx.storage.get<{ wakeId: string; keys: string[] }>(DEFERRED_KEYS_STORAGE_KEY);
+    const deferredKeys = new Set<string>(deferredRecord?.wakeId === payload.wakeId ? deferredRecord.keys : []);
+    const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE, [...streamLimited], [...deferredKeys]);
 
     if (keys.length === 0) {
-      await this.#finishDrain(payload.wakeId);
+      // Only deferred keys are left. A visitor keeps the box up past this
+      // step, so poll slowly with a clean slate; otherwise the wake is done.
+      if (deferredKeys.size > 0) await this.#endDrainOrRecheckDeferred(payload);
+      else await this.#finishDrain(payload.wakeId);
       return;
     }
 
@@ -706,7 +816,12 @@ export class GrafanaBox extends Container<Env> {
         await releaseBody(res); // no-op once `text()` consumed it; releases it if `text()` threw early
         return { status: res.status, message };
       },
-      symbolicate: (records) => symbolicateResourceLogs(records, { getMap: (key) => this.#getMap(key) }),
+      symbolicate: (records, opts) =>
+        symbolicateResourceLogs(records, {
+          getMap: (key) => this.#getMap(key),
+          listMaps: (prefix) => this.#listMaps(prefix),
+          deferTransient: opts.deferTransient,
+        }),
     };
 
     const limitedBefore = new Set(streamLimited);
@@ -747,9 +862,15 @@ export class GrafanaBox extends Container<Env> {
     const droppedOld = result.outcomes.reduce((sum, o) => sum + o.droppedOld, 0);
     // Deferred keys stay `written`; the rest of the batch still commits.
     const deferred = result.outcomes.filter((o) => o.outcome === "deferred");
+    const sizeBefore = deferredKeys.size;
     for (const d of deferred) {
-      if (d.deferral !== "fetch_error") continue;
+      if (d.deferral !== "fetch_error" && d.deferral !== "map_fetch_error") continue;
       console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, key: d.key, message: d.reason }));
+      if (deferredKeys.size < this.deferredKeysMax) deferredKeys.add(d.key);
+    }
+    const newlyDeferred = deferredKeys.size > sizeBefore;
+    if (newlyDeferred) {
+      await this.ctx.storage.put(DEFERRED_KEYS_STORAGE_KEY, { wakeId: payload.wakeId, keys: [...deferredKeys] });
     }
 
     if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
@@ -787,38 +908,67 @@ export class GrafanaBox extends Container<Env> {
 
     // A batch of only deferred keys would come back unchanged on every step,
     // so it ends this wake's drain like a Loki outage does — unless a tenant
-    // was just limited, whose exclusion lets the next step reach the other one.
-    if (result.stoppedEarly || (deferred.length === result.outcomes.length && newlyLimited.length === 0)) {
+    // was just limited or a key just deferred, whose exclusion lets the next
+    // step reach the rest.
+    if (result.stoppedEarly) {
       // Everything from here on stays `written` for the next wake to
       // retry (a possibly-recovered Loki by then) — but this wake itself
       // is done trying, so run the same post-drain stop decision.
       await this.#finishDrain(payload.wakeId);
       return;
     }
+    if (deferred.length === result.outcomes.length && newlyLimited.length === 0 && !newlyDeferred) {
+      await this.#endDrainOrRecheckDeferred(payload);
+      return;
+    }
 
     await this.schedule(new Date(Date.now() + DRAIN_STEP_GAP_MS), DRAIN_STEP_SCHEDULE, payload);
+  }
+
+  /** Only deferred keys are left: stop like `#finishDrain`, but while a visitor
+   *  holds the box poll slowly with a clean deferred set so the keys get retried. */
+  async #endDrainOrRecheckDeferred(payload: { wakeId: string }): Promise<void> {
+    if (!(await this.#finishDrain(payload.wakeId))) return;
+    await this.ctx.storage.delete(DEFERRED_KEYS_STORAGE_KEY);
+    await this.schedule(new Date(Date.now() + PAUSED_DRAIN_RECHECK_MS), DRAIN_STEP_SCHEDULE, payload);
   }
 
   /** ADR §A stop protocol: "the drain finishes; if no Grafana request
    *  arrived in the last 10 minutes the Worker calls `stop()` (otherwise
    *  the idle timer does, later, so a drain never SIGTERMs someone reading
    *  a dashboard)." A no-op if a newer wake has already superseded
-   *  `wakeId`. */
-  async #finishDrain(wakeId: string): Promise<void> {
+   *  `wakeId`. Resolves true when an active Grafana user keeps the box up. */
+  async #finishDrain(wakeId: string): Promise<boolean> {
     const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
-    if (current?.wakeId !== wakeId) return;
+    if (current?.wakeId !== wakeId) return false;
 
     const lastGrafana = await this.lastGrafanaActivityMs();
     const quiet = lastGrafana === null || Date.now() - lastGrafana >= GRAFANA_QUIET_STOP_MS;
-    if (!quiet) return; // an active Grafana user — leave it to the idle timer / hard cap
+    if (!quiet) return true; // an active Grafana user — leave it to the idle timer / hard cap
 
     const state = await this.getState();
     if (state.status === "running" || state.status === "healthy") await this.stop();
+    return false;
   }
 
   async #getMap(key: string): Promise<string | null> {
     const obj = await this.env.O11Y_MAPS.get(key);
     return obj ? obj.text() : null;
+  }
+
+  /** Every key under `prefix`. A version holds a handful of maps, so more than
+   *  {@link MAP_LIST_MAX_PAGES} pages of 1000 is not a build: it throws, and
+   *  a young object is then deferred, an older one admits keys by its caps. */
+  async #listMaps(prefix: string): Promise<Set<string>> {
+    const keys = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < MAP_LIST_MAX_PAGES; page++) {
+      const listing = await this.env.O11Y_MAPS.list({ prefix, limit: 1000, ...(cursor !== undefined ? { cursor } : {}) });
+      for (const object of listing.objects) keys.add(object.key);
+      if (!listing.truncated) return keys;
+      cursor = listing.cursor;
+    }
+    throw new Error(`more than ${MAP_LIST_MAX_PAGES} list pages under ${prefix}`);
   }
 
   /**

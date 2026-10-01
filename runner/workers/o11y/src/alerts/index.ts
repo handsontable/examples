@@ -10,6 +10,7 @@ import { evaluateAndNotify, slackPoster, writeNewFingerprintPoints } from "./not
 import {
   admissionOverflowRule,
   alertEvalErrorRule,
+  aeOutboundDegradedRule,
   atCapacityRule,
   backlogAgeRule,
   compileErrorDoublingRule,
@@ -64,6 +65,7 @@ type RuleFn = (env: Env) => Promise<RuleResult>;
  *  fire/resolve messages name it the same way. */
 const QUERY_RULES: { id: string; fn: RuleFn }[] = [
   { id: "at-capacity-rate", fn: atCapacityRule },
+  { id: "ae-outbound-degraded", fn: aeOutboundDegradedRule },
   { id: "api-5xx-rate", fn: fiveXxRateRule },
   { id: "preview-ready-rate", fn: previewReadyRateRule },
   { id: "session-start-p95", fn: sessionStartP95Rule },
