@@ -1866,14 +1866,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `rebuild ${row.framework}` });
           if (rebuildDenied) return rebuildDenied;
           await recordUsageEvent(env, "build", row.framework);
-          // Attributed to the example this demo came from (ADR-0042 §2), so the funnel's
-          // "saved" lands on its guide's row. The lineage read is skipped when the point
-          // will not be written, and a failed read only costs the attribution.
-          let savedAttrs = exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor);
-          if (savedAttrs) {
-            const source = await resolveExampleSource(row.forked_from, async (parentId) => (await getDemo(env, parentId))?.forked_from).catch(() => null);
-            savedAttrs = exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor, source);
-          }
+          const savedAttrs = exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor);
           // Registered with `waitUntil` so a visitor leaving mid-rebuild (8–9 s) does not
           // cancel the save or its point; still awaited, so a failure reaches the 5xx path.
           const saved = updateDemo(env, {
@@ -1893,7 +1886,18 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             ...(patchTitle ? { title: patchTitle } : {}),
             ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
-          }).then(() => (savedAttrs ? emitPoint(env, "example.saved", { count: 1 }, savedAttrs) : undefined));
+          }).then(async () => {
+            if (!savedAttrs) return;
+            // Attributed to the example this demo came from (ADR-0042 §2), so the funnel's
+            // "saved" lands on its guide's row. Resolved here, inside the `waitUntil` chain,
+            // so the lineage reads cannot delay or cancel the save; a failed read only costs
+            // the attribution.
+            const source = await resolveExampleSource(
+              row.forked_from,
+              async (parentId) => (await getDemo(env, parentId))?.forked_from,
+            ).catch(() => null);
+            await emitPoint(env, "example.saved", { count: 1 }, exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor, source) ?? savedAttrs);
+          });
           ctx.waitUntil(saved.catch(() => {}));
           await saved;
           // The ref the rebuild actually used, which the picker may not have asked

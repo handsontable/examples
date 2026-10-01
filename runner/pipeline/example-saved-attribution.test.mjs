@@ -122,6 +122,28 @@ test("a lineage read that throws costs the attribution, never the save", async (
   assert.deepEqual([point.blobs[16], point.blobs[17]], ["saved", DEMO_ID]);
 });
 
+test("the lineage walk reads at most 5 parents, and only after the demo's own D1 update was issued", async () => {
+  const { env, ctx, saved } = setup([
+    row("h1"), ...Array.from({ length: 8 }, (_, i) => row(`h${i + 2}`, `h${i + 1}`)),
+  ]);
+  const events = [];
+  const get = env.CACHE.get.bind(env.CACHE);
+  env.CACHE.get = async (key, ...rest) => {
+    if (key.startsWith("demo:h")) events.push(key);
+    return get(key, ...rest);
+  };
+  const prepare = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (sql) => {
+    if (/UPDATE demos SET ht_version=/.test(sql)) events.push("update");
+    return prepare(sql);
+  };
+  const res = await worker.fetch(patch(SAVE), env, ctx);
+  assert.equal(res.status, 200);
+  await saved();
+  assert.equal(events.filter((e) => e !== "update").length, 5);
+  assert.equal(events[0], "update", "the save is registered before any lineage read");
+});
+
 test("no lineage read happens when the Save writes no point", async () => {
   const { env, ctx } = setup([row("parent1")]);
   const lookups = [];

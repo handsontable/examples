@@ -4,7 +4,7 @@
 // to the demo itself, so the Examples funnel can show saves per area.
 
 import { HT_MAJORS, type HotAttrs, type HtMajor } from "@handsontable/demo-runtime/telemetry";
-import { DOCS_GUIDES, DOCS_PATH_GUIDE } from "../docs-taxonomy.generated.js";
+import { DOCS_BUCKET_OVERRIDES, DOCS_GUIDES, DOCS_PATH_GUIDE } from "../docs-taxonomy.generated.js";
 
 /** How many saved-demo hops a lineage is followed through (a fork of a fork of ...). */
 const MAX_LINEAGE_HOPS = 5;
@@ -14,6 +14,14 @@ export interface ExampleSource {
   ref: string;
   area?: string;
   bucket?: string;
+}
+
+/** The bucket's own answer when it differs from the newest bucket's; the legacy
+ *  bucket-less lineage gets the newest. `hasOwn` keeps `__proto__` out. */
+function docsGuide(bucket: string | undefined, docsPath: string): readonly [string, string] | undefined {
+  const overrides = bucket !== undefined && Object.hasOwn(DOCS_BUCKET_OVERRIDES, bucket) ? DOCS_BUCKET_OVERRIDES[bucket] : undefined;
+  const at = overrides && Object.hasOwn(overrides, docsPath) ? overrides[docsPath] : Object.hasOwn(DOCS_PATH_GUIDE, docsPath) ? DOCS_PATH_GUIDE[docsPath] : undefined;
+  return at === undefined ? undefined : DOCS_GUIDES[at];
 }
 
 /**
@@ -35,7 +43,7 @@ export async function resolveExampleSource(
     if (!lineage) return null;
     const colon = lineage.indexOf(":");
     if (colon === -1) {
-      if (seen.has(lineage)) return null;
+      if (hop === MAX_LINEAGE_HOPS || seen.has(lineage)) return null;
       seen.add(lineage);
       lineage = await loadParent(lineage);
       continue;
@@ -53,8 +61,7 @@ export async function resolveExampleSource(
         const split = rest.indexOf(":");
         const bucket = split === -1 ? undefined : rest.slice(0, split);
         const docsPath = split === -1 ? rest : rest.slice(split + 1);
-        const guideAt = Object.hasOwn(DOCS_PATH_GUIDE, docsPath) ? DOCS_PATH_GUIDE[docsPath] : undefined;
-        const guide = guideAt === undefined ? undefined : DOCS_GUIDES[guideAt];
+        const guide = docsGuide(bucket, docsPath);
         if (!guide) return null;
         return { kind: "docs", ref: guide[0], area: guide[1] || undefined, ...(bucket ? { bucket } : {}) };
       }

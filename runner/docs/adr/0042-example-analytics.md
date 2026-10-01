@@ -78,6 +78,13 @@ Constraint: anonymous by construction. Counts only, no user id, no per-request r
    freshness test. A rollup-side lineage join was rejected: the funnel reads Analytics
    Engine, not D1. Unresolvable lineages (MCP demos, unknown docs paths) stay
    `kind=saved, ref=<demo id>`. Saves counted before this change keep that shape.
+   The taxonomy resolves per bucket (the lineage's own, newest for the legacy bucket-less
+   form), and the lineage reads run inside the `waitUntil` chain after the D1 update, so they
+   cannot delay or cancel a save. The funnel's "saved" stage counts Save actions on any
+   descendant of an example (repeat saves, saves of a fork's fork), while `engaged`, `shared`,
+   `forked` and `downloaded` fired from a reopened saved demo still go out as `kind=saved`; so
+   per area `saved` can exceed `forked`, and the stage is not a strict narrowing of the one
+   before it.
    `serve.share` still undercounts edge-cached views; a server-side share route does not
    exist, so there is nothing to count on yet.
 3. **No migration for attribution**: rollups join `demos.forked_from` against `/d` and
