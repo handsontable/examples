@@ -1481,3 +1481,38 @@ test("drainStep lists the maps of each version through the R2 cursor, and a forg
   assert.match(real, /\(src\/a\.ts:1:1\)/);
   assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 1);
 });
+
+test("drainStep: a map read that keeps failing leaves only that fresh key written and logs it; the other key still goes provisional", async (t) => {
+  const keys = [inboxKey("worker", new Date(), 0), inboxKey("worker", new Date(), 1)];
+  const r2Objects = new Map([
+    [keys[0], await exceptionObject([["realsha", "https://demos.handsontable.com/assets/app.js"]])],
+    [keys[1], await recentObject("plain")],
+  ]);
+  const errors = [];
+  t.mock.method(console, "error", (line) => errors.push(JSON.parse(line)));
+  const O11Y_MAPS = {
+    async get() {
+      throw new Error("R2 get timed out");
+    },
+    async list() {
+      return { objects: [{ key: "sourcemaps/realsha/assets/app.js.map" }], truncated: false };
+    },
+  };
+  const { box, inboxWriterStub, scheduled } = makeBox({ inboxWriter: { writtenKeys: keys }, r2Objects, env: { O11Y_MAPS } });
+  await box.wake("backlog");
+  const requests = [];
+  installContainerFetchRouter({ otlp: (request) => (requests.push(request), new Response(null, { status: 204 })) });
+  scheduled.length = 0;
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.deepEqual(inboxWriterStub.calls.markKeysProvisional.map((c) => c.keys), [[keys[1]]]);
+  assert.equal(inboxWriterStub.calls.rejectKey.length, 0);
+  assert.deepEqual(await pushedBodies(requests), ["plain"]);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].event, "o11y.drain.error");
+  assert.equal(errors[0].key, keys[0]);
+  assert.match(errors[0].message, /^map_fetch_error: /);
+  assert.deepEqual(scheduled.map((s) => s.callback), ["drainStep"], "the drain goes on with the next step");
+});

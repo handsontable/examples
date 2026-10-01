@@ -137,6 +137,21 @@ export const MAX_NEW_MAP_KEYS_PER_BODY = 8;
  *  GETs for lists. A real inbox object carries one or two builds. */
 export const MAX_LISTED_VERSIONS_PER_CALL = 8;
 
+/** Thrown instead of returning when {@link SymbolicateDeps.deferTransient} is
+ *  set and a map read still failed after its retries: the caller leaves the
+ *  object for a later wake rather than push frames that a retry could resolve. */
+export class TransientSymbolicateError extends Error {
+  readonly keys: readonly string[];
+  constructor(keys: readonly string[], detail: string) {
+    super(`${keys.length} map read(s) failed: ${keys.slice(0, 3).join(", ")}: ${detail}`);
+    this.name = "TransientSymbolicateError";
+    this.keys = keys;
+  }
+}
+
+/** Waits before the 2nd and 3rd attempt of a map read that threw. */
+const MAP_READ_RETRY_DELAYS_MS: readonly number[] = [100, 300];
+
 export interface SymbolicateSkip {
   /** The maps-bucket key, e.g. `sourcemaps/<sha>/assets/index-abc.js.map`. */
   key: string;
@@ -157,6 +172,11 @@ export interface SymbolicateDeps {
    *  then costs no `getMap`. Absent, or throwing, falls back to admitting
    *  keys by the caps alone (a throw is reported as `list_error`). */
   listMaps?(prefix: string): Promise<Set<string>>;
+  /** Throw {@link TransientSymbolicateError} when a map read still fails after
+   *  its retries, instead of leaving the frames unresolved. */
+  deferTransient?: boolean;
+  /** Overrides the pauses between a failing read's attempts. */
+  retryDelaysMs?: readonly number[];
   /** Called at most once per call when any key had unresolved frames, up
    *  to {@link MAX_SKIP_REPORTS} entries, plus the call's total of capped
    *  frames and keys (never suppressed). Defaults to
@@ -208,6 +228,12 @@ class DrainMapCache {
   /** Why a key resolved to `null`, for the skip signal. */
   #failures = new Map<string, { reason: SymbolicateSkipReason; detail?: string }>();
   #parsedBytes = 0;
+  /** Keys whose read threw on every attempt. */
+  #transient: string[] = [];
+  #transientDetail: string | undefined;
+  /** Set by the first key to exhaust its retries: the store is likely down,
+   *  so later keys get one attempt each instead of waiting out the delays. */
+  #degraded = false;
   /** A generous per-invocation ceiling on total parsed map JSON, well
    *  under the 64 MB isolate-memory budget criterion 5 sets — a
    *  batch-wide cap against a pathological object with many chunk files. */
@@ -237,13 +263,35 @@ class DrainMapCache {
     return null;
   }
 
+  transientFailures(): { keys: readonly string[]; detail: string } | null {
+    return this.#transient.length > 0 ? { keys: this.#transient, detail: this.#transientDetail ?? "" } : null;
+  }
+
+  async #read(key: string): Promise<string | null> {
+    const delays = this.#degraded ? [] : (this.#deps.retryDelaysMs ?? MAP_READ_RETRY_DELAYS_MS);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.#deps.getMap(key);
+      } catch (err) {
+        const delay = delays[attempt];
+        if (delay === undefined) {
+          this.#degraded = true;
+          throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
   async get(key: string): Promise<TraceMap | null> {
     if (this.#parsed.has(key)) return this.#parsed.get(key) ?? null;
     if (this.#parsedBytes >= DrainMapCache.MAX_PARSED_BYTES) return this.#fail(key, "over_budget");
     let text: string | null;
     try {
-      text = await this.#deps.getMap(key);
+      text = await this.#read(key);
     } catch (err) {
+      this.#transient.push(key);
+      this.#transientDetail ??= errorDetail(err);
       return this.#fail(key, "fetch_error", errorDetail(err));
     }
     if (text === null) return this.#fail(key, "no_map");
@@ -481,6 +529,9 @@ export async function symbolicateResourceLogs(
   }
 
   for (const mapKey of admitted) await cache.get(mapKey);
+
+  const transient = cache.transientFailures();
+  if (transient && deps.deferTransient) throw new TransientSymbolicateError(transient.keys, transient.detail);
 
   const out: OtlpResourceLogs[] = [];
   for (const record of records) {

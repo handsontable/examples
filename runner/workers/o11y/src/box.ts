@@ -804,9 +804,11 @@ export class GrafanaBox extends Container<Env> {
         await releaseBody(res); // no-op once `text()` consumed it; releases it if `text()` threw early
         return { status: res.status, message };
       },
-      symbolicate: (records) => symbolicateResourceLogs(records, {
+      symbolicate: (records, opts) =>
+        symbolicateResourceLogs(records, {
           getMap: (key) => this.#getMap(key),
           listMaps: (prefix) => this.#listMaps(prefix),
+          deferTransient: opts.deferTransient,
         }),
     };
 
@@ -849,7 +851,7 @@ export class GrafanaBox extends Container<Env> {
     // Deferred keys stay `written`; the rest of the batch still commits.
     const deferred = result.outcomes.filter((o) => o.outcome === "deferred");
     for (const d of deferred) {
-      if (d.deferral !== "fetch_error") continue;
+      if (d.deferral !== "fetch_error" && d.deferral !== "map_fetch_error") continue;
       console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, key: d.key, message: d.reason }));
     }
 

@@ -31,7 +31,7 @@ import vm from "node:vm";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { symbolicateResourceLogs, normaliseSourcePath, MAX_SKIP_REPORTS, MAX_MAP_KEYS_PER_CALL, MAX_FRAMES_PER_BODY, MAX_NEW_MAP_KEYS_PER_BODY, MAX_LISTED_VERSIONS_PER_CALL } =
+const { symbolicateResourceLogs, normaliseSourcePath, MAX_SKIP_REPORTS, MAX_MAP_KEYS_PER_CALL, MAX_FRAMES_PER_BODY, MAX_NEW_MAP_KEYS_PER_BODY, MAX_LISTED_VERSIONS_PER_CALL, TransientSymbolicateError } =
   await import(
   "../workers/o11y/src/drain/symbolicate.ts"
 );
@@ -521,6 +521,56 @@ test("with listing on, the same frames resolve on every replay whatever order th
     outputs.push(JSON.stringify(out));
   }
   assert.equal(outputs[0], outputs[1]);
+});
+
+// ---- retrying a failed map read ---------------------------------------------------
+
+test("a map read that throws is retried within the call, and a later answer resolves the frame", async () => {
+  let reads = 0;
+  const out = await symbolicateResourceLogs([exceptionRecord([frame("app.js", 1, 1)])], {
+    getMap: async () => {
+      if (reads++ < 2) throw new Error("R2 get timed out");
+      return ONE_MAPPING_MAP;
+    },
+    retryDelaysMs: [0, 0],
+    onSkip() {},
+  });
+  assert.equal(reads, 3);
+  assert.equal(bodyOf(out[0]).split("\n")[1], "    at f (src/a.ts:1:1)");
+});
+
+test("deferTransient: a read that fails every attempt throws TransientSymbolicateError naming the keys", async () => {
+  let reads = 0;
+  await assert.rejects(
+    symbolicateResourceLogs([exceptionRecord([frame("app.js", 1, 1)])], {
+      getMap: async () => {
+        reads++;
+        throw new Error("R2 get timed out");
+      },
+      retryDelaysMs: [0, 0],
+      deferTransient: true,
+    }),
+    (err) => err instanceof TransientSymbolicateError && err.keys.join() === "sourcemaps/cafe1234/assets/app.js.map" && /timed out/.test(err.message),
+  );
+  assert.equal(reads, 3);
+});
+
+test("without deferTransient the same failure leaves the frames as they were and is reported as fetch_error", async () => {
+  const record = exceptionRecord([frame("app.js", 1, 1)]);
+  const { out, calls } = await collectSkips([record], async () => {
+    throw new Error("R2 get timed out");
+  }, { retryDelaysMs: [0, 0] });
+  assert.deepEqual(out, [record]);
+  assert.equal(calls[0].skips[0].reason, "fetch_error");
+});
+
+test("once one key has used up its retries, the next keys get a single attempt each", async () => {
+  const reads = [];
+  await collectSkips([exceptionRecord([frame("a.js"), frame("b.js"), frame("c.js")])], async (key) => {
+    reads.push(key);
+    throw new Error("down");
+  }, { retryDelaysMs: [0, 0] });
+  assert.deepEqual(reads.map((k) => k.split("/").pop()), ["a.js.map", "a.js.map", "a.js.map", "b.js.map", "c.js.map"]);
 });
 
 test("frames past MAX_FRAMES_PER_BODY in one body are left as they were and reported as over_cap", async () => {
