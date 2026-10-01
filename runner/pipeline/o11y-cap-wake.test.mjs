@@ -11,9 +11,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
 
+import { hooks, defaultHooks } from "./fixtures/cloudflare-containers-stub.mjs";
+
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
 const { default: worker, InboxWriter } = await import("../workers/o11y/src/index.ts");
+const { GrafanaBox } = await import("../workers/o11y/src/box.ts");
 const { handleGrafana } = await import("../workers/o11y/src/grafana/proxy.ts");
 const { makeEnv, ctx } = await import("./fixtures/o11y-harness.mjs");
 const { inboxKeyStorageKey } = await import("@handsontable/demo-runtime/telemetry");
@@ -151,4 +154,77 @@ test("the tick whose spend-cap fires wakes nothing for the backlog; the tick aft
   await ctx.drain();
   assert.equal(await writer.drainsPaused(), false, "the next tick after the cap resolves unpauses");
   assert.deepEqual(grafanaBox.calls, ["backlog"], "and wakes the box for the waiting backlog");
+});
+
+function makeMapStorage() {
+  const map = new Map();
+  return { get: async (k) => map.get(k), put: async (k, v) => void map.set(k, v), delete: async (k) => map.delete(k) };
+}
+
+// The real InboxWriter flag and the real GrafanaBox: a visit wake that is still
+// being served when the cap pauses drains must resume draining on its own once
+// the cron clears the pause, with no new wake.
+test("an awake box paused by the cap resumes draining after the cron clears the pause", async () => {
+  Object.assign(hooks, defaultHooks());
+  hooks.start = async (self) => {
+    self._state = { status: "running", lastChange: Date.now() };
+    await self.onStart();
+  };
+  hooks.containerFetch = async () => new Response(null, { status: 200 });
+
+  let spend = { spendUsd: 0.32, capUsd: 0.1 };
+  const { env, doStorage } = makeEnv(InboxWriter, {
+    env: {
+      O11Y_ENV: "local",
+      RUNNER_EVENTS_CLICKHOUSE_URL: "http://127.0.0.1:1",
+      API: { fetch: async () => new Response(null, { status: 204 }), o11ySpend: async () => spend },
+    },
+  });
+  const objectKey = "inbox/worker/2026-09-01/00/000000000003.ndjson.gz";
+  env.O11Y_INBOX = {
+    ...makeListableR2([{ key: objectKey, size: 1024, uploaded: new Date(Date.now() - 60 * 1000) }]),
+    get: async () => null,
+  };
+  await doStorage.put({ [inboxKeyStorageKey(objectKey)]: "written" });
+  const realWriter = env.INBOX_WRITER.jurisdiction("eu").get();
+
+  let takes = 0;
+  const writerForBox = new Proxy(realWriter, {
+    get(target, prop) {
+      if (prop === "nextWrittenKeys") return async (...a) => (takes++, target.nextWrittenKeys(...a));
+      const v = target[prop];
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  });
+  const boxEnv = { ...env, INBOX_WRITER: { getByName: () => writerForBox } };
+  const boxCtx = { storage: makeMapStorage(), waitUntil: (p) => Promise.resolve(p).catch(() => {}) };
+  const box = new GrafanaBox(boxCtx, boxEnv);
+  const scheduled = [];
+  box.schedule = async (when, callback, payload) => void scheduled.push({ when, callback, payload });
+  // The cron reads the real box's awake state, as production does.
+  env.GRAFANA_BOX = {
+    jurisdiction() { return this; },
+    getByName: () => ({ isAwake: () => box.isAwake(), wake: async () => {} }),
+  };
+  await box.wake("visit");
+  await box.noteVisitorActivity();
+  const wake = await boxCtx.storage.get("wake");
+
+  // The tick that fires the cap pauses drains while the box is awake.
+  await worker.scheduled({ cron: "*/10 * * * *" }, env, ctx);
+  await ctx.drain();
+  assert.equal(await realWriter.drainsPaused(), true, "precondition: the cap paused drains");
+
+  scheduled.length = 0;
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(takes, 0, "paused: nothing taken");
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 1, "the chain keeps a slow recheck");
+
+  spend = { spendUsd: 0.32, capUsd: 15 };
+  await worker.scheduled({ cron: "*/10 * * * *" }, env, ctx);
+  await ctx.drain();
+  assert.equal(await realWriter.drainsPaused(), false, "precondition: the cron cleared the pause");
+
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.ok(takes >= 1, "the rescheduled step drains again without a new wake");
 });

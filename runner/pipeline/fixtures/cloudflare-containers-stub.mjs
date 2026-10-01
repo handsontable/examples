@@ -102,12 +102,32 @@ export class Container {
     // setting `_state`, deliberately breaking the lockstep for that one
     // assertion.
     if (!this.ctx.container) this.ctx.container = { running: false };
-    this._state = { status: "stopped", lastChange: Date.now() };
+    const alreadyRunning = this.ctx.container.running === true;
+    this._state = { status: alreadyRunning ? "running" : "stopped", lastChange: Date.now() };
     // SDK `container.js:344`/`:361-369`: a public, writable field, armed once
     // in the constructor when the class registered an outbound handler (the
     // SDK does it inside `blockConcurrencyWhile`, after its first await;
     // nothing here reads it before that settles).
     this.usingInterception = outboundByHostRegistry.get(this.constructor.name) !== undefined;
+    // SDK `container.js:370-372`: inside `blockConcurrencyWhile`, after its
+    // first await (so subclass fields and prototype methods exist), a container
+    // that is already running re-applies the interception, neither awaited nor
+    // caught. A microtask models that ordering.
+    queueMicrotask(() => {
+      if (this.ctx.container.running) this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
+    });
+  }
+
+  /** SDK `container.js:1170`: TS-private, a plain prototype method at runtime. */
+  async applyOutboundInterception() {
+    await hooks.applyOutboundInterception(this);
+  }
+
+  /** SDK `container.js:1151-1156`. */
+  async refreshOutboundInterception() {
+    if (!this.usingInterception) return;
+    this.applyOutboundInterceptionPromise = this.applyOutboundInterception();
+    await this.applyOutboundInterceptionPromise;
   }
 
   get _state() {
@@ -128,7 +148,7 @@ export class Container {
     // refreshed before `container.start()` and only when the container is not
     // yet running and `usingInterception` is set; a throw there escapes `start()`.
     if (!this.ctx.container.running && this.usingInterception) {
-      await hooks.applyOutboundInterception(this);
+      await this.refreshOutboundInterception();
     }
     return hooks.start(this, startOptions, waitOptions);
   }

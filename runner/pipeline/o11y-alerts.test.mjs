@@ -16,6 +16,7 @@ const { evaluateAndNotify, slackPoster, escapeSlackMrkdwn, writeNewFingerprintPo
   "../workers/o11y/src/alerts/notify.ts"
 );
 const {
+  aeOutboundDegradedRule,
   atCapacityRule,
   fiveXxRateRule,
   FIVE_XX_MIN_REQUESTS,
@@ -872,6 +873,22 @@ test("atCapacityRule: over threshold (6 > 5) fires; under threshold (5) does not
   const under = makeFakeAeQuery([{ metric: "session.start", outcome: "at_capacity", count: 5 }]);
   const underResult = await atCapacityRule({}, under.queryFn);
   assert.equal(underResult.firing, false);
+});
+
+test("aeOutboundDegradedRule: one o11y.ae_degraded point in the window fires; none, or one older than 2 h, does not", async () => {
+  const one = makeFakeAeQuery([{ metric: "o11y.ae_degraded", reason: "start", count: 1 }]);
+  const fired = await aeOutboundDegradedRule({}, one.queryFn);
+  assert.equal(fired.rule, "ae-outbound-degraded");
+  assert.equal(fired.firing, true);
+  assert.match(fired.detail, /^1 wake/);
+  assert.ok(one.calls[0].includes(AE_COLUMNS.reason), "SQL must reference the reason column (AE_COLUMNS.reason)");
+  assert.ok(one.calls[0].includes("INTERVAL '7200' SECOND"), "a 2 h window");
+
+  const none = makeFakeAeQuery([]);
+  assert.equal((await aeOutboundDegradedRule({}, none.queryFn)).firing, false);
+
+  const stale = makeFakeAeQuery([{ metric: "o11y.ae_degraded", reason: "reload", count: 1, ageMs: 3 * 60 * 60 * 1000 }]);
+  assert.equal((await aeOutboundDegradedRule({}, stale.queryFn)).firing, false);
 });
 
 test("fiveXxRateRule: over threshold (5%) fires; under threshold (0.5%) does not", async () => {

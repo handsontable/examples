@@ -212,6 +212,87 @@ test("drainStep reschedules itself, without touching InboxWriter, while the box 
   assert.equal(scheduled[0].callback, "drainStep");
 });
 
+// ---- drainStep: not-ready backoff and give-up ----------------------------
+
+const MIN = 60 * 1000;
+
+async function notReadyBox({ since, visitor = false, reason = "backlog" } = {}) {
+  const made = makeBox();
+  await made.box.wake(reason);
+  hooks.containerFetch = async () => new Response(null, { status: 503 }); // Loki answers, never 200
+  const wake = await made.box.ctx.storage.get("wake");
+  if (since !== undefined) await made.box.ctx.storage.put("notReadySince", { wakeId: wake.wakeId, since: Date.now() - since });
+  if (visitor) await made.box.noteVisitorActivity();
+  let stopped = 0;
+  hooks.stop = async (self) => {
+    stopped++;
+    self._state = { status: "stopped", lastChange: Date.now() };
+  };
+  made.scheduled.length = 0;
+  return { ...made, wake, stops: () => stopped };
+}
+
+const drainErrorPoints = (ae) => ae.points.filter((p) => p.indexes?.[0] === "o11y.drain" && outcomeOf(p) === "error");
+const gapOf = (entry) => entry.when.getTime() - Date.now();
+
+test("drainStep backs off while the box stays not ready: 1 s, then 5 s, then 30 s", async () => {
+  for (const [since, expectMs] of [[undefined, 1000], [40 * 1000, 5000], [3 * MIN, 30_000]]) {
+    const { box, wake, scheduled } = await notReadyBox({ since });
+    await box.drainStep({ wakeId: wake.wakeId });
+    assert.equal(scheduled.length, 1, `since=${since}`);
+    assert.equal(scheduled[0].callback, "drainStep");
+    const gap = gapOf(scheduled[0]);
+    assert.ok(gap > expectMs - 1500 && gap <= expectMs + 100, `since=${since}: expected ~${expectMs}ms, got ${gap}ms`);
+    const record = await box.ctx.storage.get("notReadySince");
+    assert.equal(record.wakeId, wake.wakeId);
+  }
+});
+
+test("drainStep keeps the first not-ready time across steps and clears it once the box is ready", async () => {
+  const { box, wake } = await notReadyBox();
+  await box.drainStep({ wakeId: wake.wakeId });
+  const first = (await box.ctx.storage.get("notReadySince")).since;
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal((await box.ctx.storage.get("notReadySince")).since, first, "the clock starts once");
+
+  installContainerFetchRouter();
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(await box.ctx.storage.get("notReadySince"), undefined, "ready resets it");
+});
+
+test("drainStep gives up after 10 minutes not ready: logs, writes a drain error point, stops a quiet box", async () => {
+  const { box, wake, ae, scheduled, stops } = await notReadyBox({ since: 11 * MIN });
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(stops(), 1, "a box nobody is looking at is stopped");
+  assert.equal(scheduled.length, 0, "the chain ends; the next cron wake retries");
+  assert.equal(drainErrorPoints(ae).length, 1);
+  assert.equal(reasonOf(drainErrorPoints(ae)[0]), "backlog");
+});
+
+test("drainStep before the 10-minute threshold neither stops nor writes an error point", async () => {
+  const { box, wake, ae, stops } = await notReadyBox({ since: 9 * MIN });
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(stops(), 0);
+  assert.equal(drainErrorPoints(ae).length, 0);
+});
+
+test("drainStep past the threshold leaves a box with a visitor running and reports once", async () => {
+  const { box, wake, ae, scheduled, stops } = await notReadyBox({ since: 11 * MIN, visitor: true, reason: "visit" });
+  await box.drainStep({ wakeId: wake.wakeId });
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(stops(), 0, "never SIGTERM someone reading a dashboard");
+  assert.equal(scheduled.length, 2, "still polling");
+  assert.ok(gapOf(scheduled[1]) > 28_000, "at the slowest cadence");
+  assert.equal(drainErrorPoints(ae).length, 1, "one point per wake, not one per step");
+});
+
+test("drainStep ends its chain when the container is no longer running", async () => {
+  const { box, wake, scheduled } = await notReadyBox();
+  box._state = { status: "stopped", lastChange: Date.now() };
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(scheduled.length, 0, "a stopped box has nothing to wait for");
+});
+
 test("drainStep is a no-op once a newer wake has superseded the payload's wakeId", async () => {
   const { box, inboxWriterStub, scheduled } = makeBox();
   await box.wake("backlog");
@@ -724,6 +805,54 @@ test("drainStep pushes nothing while drainsPaused: a visit wake keeps serving (n
     assert.ok(!ae.points.some((p) => p.indexes?.[0] === "o11y.drain"), `${reason}: no o11y.drain point`);
     assert.equal(stopped, expectStop, reason);
   }
+});
+
+// A visit wake that outlives the spend-cap pause keeps serving; its drain chain
+// must keep polling the flag at a slow cadence so clearing the cap resumes the drain.
+test("drainStep while paused with a visitor present reschedules a slow recheck, and drains once the pause clears", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000009.ndjson.gz";
+  const inboxWriter = { writtenKeys: [key], drainsPaused: true };
+  const { box, inboxWriterStub, scheduled } = makeBox({ inboxWriter });
+  await box.wake("visit");
+  installContainerFetchRouter();
+  await box.noteVisitorActivity();
+  let stopped = false;
+  hooks.stop = async () => { stopped = true; };
+  scheduled.length = 0;
+  const wake = await box.ctx.storage.get("wake");
+
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(stopped, false, "a visitor keeps the box up");
+  assert.equal(scheduled.length, 1, "exactly one follow-up step, so the chain never forks");
+  assert.equal(scheduled[0].callback, "drainStep");
+  assert.deepEqual(scheduled[0].payload, { wakeId: wake.wakeId });
+  const gapMs = scheduled[0].when.getTime() - Date.now();
+  assert.ok(gapMs > 55_000 && gapMs <= 61_000, `expected a ~60 s recheck, got ${gapMs}ms`);
+  assert.equal(inboxWriterStub.calls.nextWrittenKeys ?? 0, 0, "still paused: nothing taken");
+
+  inboxWriter.drainsPaused = false; // the cap resolved
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(inboxWriterStub.calls.nextWrittenKeys, 1, "the next step drains");
+});
+
+test("drainStep while paused ends the recheck chain once the visitor has gone quiet", async () => {
+  const { box, scheduled } = makeBox({ inboxWriter: { drainsPaused: true } });
+  await box.wake("visit");
+  installContainerFetchRouter();
+  await box.ctx.storage.put("lastGrafanaAt", Date.now() - 11 * 60 * 1000);
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopped", lastChange: Date.now() };
+  };
+  scheduled.length = 0;
+  const wake = await box.ctx.storage.get("wake");
+
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(stopped, true);
+  assert.equal(scheduled.length, 0, "a stopped box has no follow-up step");
 });
 
 test("drainStep drains normally once drainsPaused is cleared", async () => {
