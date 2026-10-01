@@ -315,6 +315,15 @@ test("drainStep: when the not-ready path and its fallback both throw, it still r
   assert.deepEqual(scheduled.map((s) => s.callback), ["drainStep"]);
 });
 
+test("drainStep past the threshold does not give up on a wake whose stop is already in flight", async () => {
+  const { box, wake, ae, scheduled, stops } = await notReadyBox({ since: 11 * MIN });
+  await box.ctx.storage.put("stoppingFor", wake.wakeId);
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(stops(), 0, "no second stop while one is in flight");
+  assert.equal(drainErrorPoints(ae).length, 0, "and no give-up report for a box that is already going down");
+  assert.deepEqual(scheduled.map((s) => s.callback), ["drainStep"], "the chain ends itself once the container is gone");
+});
+
 test("drainStep ends its chain when the container is no longer running", async () => {
   const { box, wake, scheduled } = await notReadyBox();
   box._state = { status: "stopped", lastChange: Date.now() };

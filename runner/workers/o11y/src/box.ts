@@ -716,7 +716,9 @@ export class GrafanaBox extends Container<Env> {
     let record = await this.ctx.storage.get<{ wakeId: string; since: number; gaveUp?: boolean }>(NOT_READY_STORAGE_KEY);
     if (record?.wakeId !== wakeId) record = { wakeId, since: now };
     const notReadyForMs = now - record.since;
-    if (notReadyForMs >= NOT_READY_GIVE_UP_MS && !record.gaveUp) {
+    // A stop already in flight also reads as not ready; the box is going down.
+    const giveUp = notReadyForMs >= NOT_READY_GIVE_UP_MS && (await this.ctx.storage.get<string>(STOPPING_FOR_STORAGE_KEY)) !== wakeId;
+    if (giveUp && !record.gaveUp) {
       record.gaveUp = true;
       writeBoxPoint(
         this.env,
@@ -730,7 +732,7 @@ export class GrafanaBox extends Container<Env> {
       );
     }
     await this.ctx.storage.put(NOT_READY_STORAGE_KEY, record);
-    if (notReadyForMs >= NOT_READY_GIVE_UP_MS && !(await this.#finishDrain(wakeId))) return;
+    if (giveUp && !(await this.#finishDrain(wakeId))) return;
     await this.schedule(new Date(now + notReadyGapMs(notReadyForMs)), DRAIN_STEP_SCHEDULE, { wakeId });
   }
 

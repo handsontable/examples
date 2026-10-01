@@ -178,7 +178,9 @@ wake that ends without ever having a `provisional` key (an empty backlog, or a
 Grafana-visit-only wake with nothing to drain) never gets an index upload and so never
 gets a marker — that is expected, not an unclean stop, and the ledger now resolves such a
 wake as clean without requiring one. A wake that *did* push data still requires the real
-marker.
+marker. A box that stays not ready for 10 minutes after its wake began (Loki never
+answers its readiness probe) is a further stop trigger: the drain reports one error and
+runs the same stop decision, unless a stop for that wake is already in flight.
 
 **Waking page**: the Handsontable logo, one line of text, `<meta http-equiv="refresh"
 content="3">`, no script, served by the Worker while the box is not ready.
