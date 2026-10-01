@@ -294,6 +294,12 @@ const REGISTRY_DATA = {
     doubles: ["count", "duration_ms"],
     values: { reason: ["backlog", "visit"], outcome: ["clean", "unclean"] },
   },
+  "o11y.ae_degraded": {
+    emittedBy: "o11y worker",
+    blobs: ["reason"],
+    doubles: ["count"],
+    values: { reason: ["start", "reload"] },
+  },
   "o11y.backlog": {
     emittedBy: "o11y worker cron",
     blobs: [],

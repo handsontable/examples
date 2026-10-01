@@ -345,7 +345,7 @@ export class GrafanaBox extends Container<Env> {
       // A running container means the failure came after the interception
       // setup, so it is not ours to swallow.
       if (!interception || this.ctx.container?.running) throw err;
-      this.#reportAeDegraded(wakeId, err);
+      this.#reportAeDegraded(wakeId, err, "start");
       this.usingInterception = false;
       try {
         await this.start({ envVars });
@@ -361,8 +361,12 @@ export class GrafanaBox extends Container<Env> {
    *  `applyOutboundInterception` override stays quiet then. */
   #inStartFailOpen = false;
 
-  #reportAeDegraded(wakeId: string, err: unknown): void {
+  /** Logs the event and writes the point the `ae-outbound-degraded` alert
+   *  counts. The point goes through the Worker's own AE binding, not
+   *  `ae.internal`, so it lands while the interception is down. */
+  #reportAeDegraded(wakeId: string, err: unknown, reason: "start" | "reload"): void {
     console.error(JSON.stringify({ event: "o11y.ae_outbound.degraded", wakeId, message: String(err) }));
+    writeBoxPoint(this.env, this.ctx, "o11y.ae_degraded", { count: 1 }, { reason });
   }
 
   /**
@@ -380,7 +384,7 @@ export class GrafanaBox extends Container<Env> {
     if (!this.#inStartFailOpen) {
       applied.catch(async (err: unknown) => {
         const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY).catch(() => undefined);
-        this.#reportAeDegraded(wake?.wakeId ?? "unknown", err);
+        this.#reportAeDegraded(wake?.wakeId ?? "unknown", err, "reload");
       });
     }
     return applied;

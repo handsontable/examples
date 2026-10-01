@@ -167,6 +167,30 @@ export async function atCapacityRule(env: Env, queryFn: AeQueryFn = runAeQuery):
   };
 }
 
+// ---- ae.internal interception degraded: any in 2 h -------------------------
+
+/** Degradation is only written at a wake or a reload, a few times a day at
+ *  most, so a short window would resolve before anyone saw the page while the
+ *  box (up to 4 h) is still running without the ClickHouse route. */
+const AE_DEGRADED_WINDOW_MS = 2 * HOUR_MS;
+
+export async function aeOutboundDegradedRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
+  const reasonCol = col("reason");
+  const countCol = col("count");
+  const sql =
+    `SELECT ${reasonCol} AS reason, sum(_sample_interval * ${countCol}) AS c ` +
+    `FROM runner_events WHERE index1 = 'o11y.ae_degraded' ` +
+    `AND timestamp >= now() - INTERVAL '${Math.round(AE_DEGRADED_WINDOW_MS / 1000)}' SECOND ` +
+    `GROUP BY ${reasonCol}`;
+  const rows = await queryFn(env, sql);
+  const n = rows.reduce((sum, row) => sum + Number(row.c ?? 0), 0);
+  return {
+    rule: "ae-outbound-degraded",
+    firing: n > 0,
+    detail: `${n} wake(s)/reload(s) in the last 2 h ran without the ae.internal interception (Grafana's ClickHouse datasource is down)`,
+  };
+}
+
 // ---- api.request 5xx rate: above 1% over 15 min ---------------------------
 
 /** The API's deliberate 503s (at-capacity, container-starting, chat/theme

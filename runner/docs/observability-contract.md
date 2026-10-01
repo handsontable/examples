@@ -267,6 +267,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `o11y.ingest` | o11y worker | reason, outcome | count, bytes | `accepted`, `dropped`, `duplicate`; reason = gate |
 | `o11y.drain` | o11y worker | reason, outcome | count (objects), duration_ms, bytes, value (records dropped for being too old — `reject_old_samples_max_age`) | `ok`, `partial`, `error`; reason `backlog`, `visit`, `reopen` (this batch replayed reopened keys) |
 | `o11y.wake` | o11y worker | reason, outcome | count, duration_ms (to ready) | reason `backlog`, `visit`; outcome `clean`, `unclean` |
+| `o11y.ae_degraded` | o11y worker | reason | count | reason `start` (a wake started with the ClickHouse route off), `reload` (re-applying it on an already-running box failed) |
 | `o11y.backlog` | o11y worker cron | — | value (oldest age s), bytes | — |
 | `o11y.alert` | o11y worker cron | reason (rule id), outcome | count | `fired`, `resolved` |
 | `o11y.new_fingerprint` | o11y worker cron | fingerprint | count (one point per fingerprint the registry saw for the first time; at most 100 per tick, the rest stay in the registry; no Slack message) | — |

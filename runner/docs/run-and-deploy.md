@@ -969,7 +969,7 @@ npx wrangler secret put O11Y_SESSION_SECRET          # step 5 above
 `AE_SQL_TOKEN` is the Analytics Engine SQL API token — same token shape as the
 API worker's own `CF_ANALYTICS_TOKEN` (Account → Account Analytics → Read),
 added by `GrafanaBox`'s outbound handler to the ClickHouse datasource's requests; it is never passed to the box.
-If the outbound interception setup fails at wake (for example `ContainerProxy` is not exported), the box starts without the `ae.internal` route and the Worker logs an `o11y.ae_outbound.degraded` event with the wake id and error; look for that event when the ClickHouse datasource errors while Grafana and Loki are fine.
+If the outbound interception setup fails at wake (for example `ContainerProxy` is not exported), the box starts without the `ae.internal` route and the Worker logs an `o11y.ae_outbound.degraded` event with the wake id and error; look for that event when the ClickHouse datasource errors while Grafana and Loki are fine. The same failure also writes an `o11y.ae_degraded` point (reason `start` or `reload`) and trips the `ae-outbound-degraded` alert, which reads Analytics Engine directly and so still pages while the box is degraded.
 
 `RATE_LIMITER` needs no dashboard step — a Workers rate-limiting binding's
 `namespace_id` (`1001`, already in `wrangler.jsonc`) is a self-chosen scoping

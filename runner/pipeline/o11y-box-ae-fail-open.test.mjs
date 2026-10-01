@@ -8,14 +8,16 @@ import { readFileSync } from "node:fs";
 import { hooks, defaultHooks } from "./fixtures/cloudflare-containers-stub.mjs";
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 const { GrafanaBox } = await import("../workers/o11y/src/box.ts");
+const { AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
 
 function makeBox(container) {
   const map = new Map();
-  const ctx = { ...(container ? { container } : {}), storage: { get: async (k) => map.get(k), put: async (k, v) => void map.set(k, v), delete: async (k) => map.delete(k) } };
+  const ae = { points: [], writeDataPoint(p) { this.points.push(p); } };
+  const ctx = { ...(container ? { container } : {}), waitUntil: (p) => Promise.resolve(p).catch(() => {}), storage: { get: async (k) => map.get(k), put: async (k, v) => void map.set(k, v), delete: async (k) => map.delete(k) } };
   const env = {
     INBOX_WRITER: { jurisdiction: () => ({ getByName: () => ({ recordWake: async () => {} }) }) },
     GRAFANA_BOX: {}, CLOUDFLARE_ACCOUNT_ID: "acct", LOKI_S3_ACCESS_KEY_ID: "k", LOKI_S3_SECRET_ACCESS_KEY: "s",
-    AE_SQL_TOKEN: "t", O11Y_ENV: "production",
+    AE_SQL_TOKEN: "t", O11Y_ENV: "production", RUNNER_EVENTS: ae,
   };
   return new GrafanaBox(ctx, env);
 }
@@ -33,6 +35,15 @@ function trace(interceptionFailure) {
     return realStart(self, ...rest);
   };
   return calls;
+}
+
+/** The `o11y.ae_degraded` points the box wrote to its (fake) AE binding. */
+function degradedPoints(box) {
+  const slot = (name) => Number(/^blob(\d+)$/.exec(AE_COLUMNS[name])[1]) - 1;
+  const dslot = Number(/^double(\d+)$/.exec(AE_COLUMNS.count)[1]) - 1;
+  return box.env.RUNNER_EVENTS.points
+    .filter((p) => p.indexes[0] === "o11y.ae_degraded")
+    .map((p) => ({ metric: p.indexes[0], reason: p.blobs[slot("reason")], count: p.doubles[dslot] }));
 }
 
 function captureErrors() {
@@ -63,6 +74,7 @@ for (const failure of [
       assert.ok(ev, "degraded event logged");
       assert.equal(ev.wakeId, rec.wakeId);
       assert.match(ev.message, new RegExp(failure.slice(0, 20)));
+      assert.deepEqual(degradedPoints(box), [{ metric: "o11y.ae_degraded", reason: "start", count: 1 }], "one alertable point");
     } finally {
       logs.restore();
     }
@@ -141,8 +153,9 @@ test("a rejected constructor-time interception refresh is logged, not an unhandl
   const unhandled = captureUnhandled();
   const logs = captureErrors();
   try {
-    makeBox({ running: true });
+    const box = makeBox({ running: true });
     await settle();
+    assert.deepEqual(degradedPoints(box), [{ metric: "o11y.ae_degraded", reason: "reload", count: 1 }]);
     assert.deepEqual(unhandled.seen, [], "nothing escapes as an unhandled rejection");
     const events = logs.out.map((s) => JSON.parse(s)).filter((e) => e.event === "o11y.ae_outbound.degraded");
     assert.equal(events.length, 1);
