@@ -2,8 +2,9 @@ name: o11y GrafanaBox nightly
 
 # Builds the GrafanaBox image (Loki + Grafana + supervisor) and runs
 # containers/o11y/local/stop-roundtrip.mjs against a real docker compose
-# stack: the only CI exercise of the box's stop/restore ledger. Idle-stop
-# (sleepAfter) is not covered here; it needs a 15 minute wait.
+# stack: the only CI exercise of the box's stop/restore ledger. The idle-stop
+# job runs containers/o11y/local/idle-stop.mjs under `wrangler dev` with a
+# shortened sleepAfter (O11Y_SLEEP_AFTER, honored only when O11Y_ENV=local).
 
 on:
   workflow_dispatch: {}
@@ -50,6 +51,11 @@ jobs:
           O11Y_ROUNDTRIP_KEEP: "1"
         run: node runner/containers/o11y/local/stop-roundtrip.mjs
 
+      # The production ClickHouse datasource variant (empty header env) is the
+      # one no other boot exercises.
+      - name: Production datasource variant boots
+        run: node runner/containers/o11y/local/prod-datasource-check.mjs
+
       - name: Collect compose logs
         if: failure()
         run: |
@@ -69,3 +75,66 @@ jobs:
       - name: Tear down the compose stack
         if: always()
         run: docker compose -p o11y-stop-roundtrip -f runner/containers/o11y/compose.yml down -v
+
+  # Schedule and manual runs only: it needs a wrangler dev container build and
+  # compose.ci.yml (MinIO/ClickHouse on 0.0.0.0, reachable from workerd's
+  # host-gateway), so a PR is not gated on it.
+  idle-stop:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v5
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - name: Install and build the workspace
+        working-directory: runner
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Isolate this job's wrangler dev registry
+        run: echo "WRANGLER_REGISTRY_PATH=${RUNNER_TEMP}/wrangler-registry" >> "$GITHUB_ENV"
+
+      - name: Idle stop against the real image
+        id: idle
+        env:
+          # Linux host-gateway cannot reach ports published on 127.0.0.1 only.
+          O11Y_COMPOSE_EXTRA_FILE: runner/containers/o11y/compose.ci.yml
+          O11Y_IDLE_LOG: ${{ runner.temp }}/o11y-idle-stop/wrangler.log
+        run: |
+          mkdir -p "${RUNNER_TEMP}/o11y-idle-stop"
+          node runner/containers/o11y/local/idle-stop.mjs
+
+      - name: Upload the wrangler log on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: o11y-idle-stop-logs
+          path: ${{ runner.temp }}/o11y-idle-stop/
+          retention-days: 7
+          if-no-files-found: warn
+
+      # A step summary line, so the nightly outcome is readable without opening logs.
+      - name: Report the idle-stop outcome
+        if: always()
+        env:
+          IDLE_OUTCOME: ${{ steps.idle.outcome }}
+        run: |
+          echo "### idle-stop: ${IDLE_OUTCOME}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${IDLE_OUTCOME}" != "success" ]; then
+            echo "::warning title=o11y idle-stop::idle-stop check outcome was ${IDLE_OUTCOME} (see the o11y-idle-stop-logs artifact)"
+          fi
+
+      - name: Tear down the compose stack
+        if: always()
+        run: docker compose -p o11y-idle-stop -f runner/containers/o11y/compose.yml -f runner/containers/o11y/compose.ci.yml down -v

@@ -7,7 +7,8 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -21,6 +22,15 @@ const RUNNER_ROOT = join(__dirname, "..");
 
 function readText(relPath) {
   return readFileSync(join(O11Y_DIR, relPath), "utf8");
+}
+
+// Every provisioned datasource: the Loki file plus both ClickHouse variants.
+function readAllDatasourceYaml() {
+  return [
+    "grafana/provisioning/datasources/datasources.yaml",
+    "grafana/clickhouse/clickhouse-headers.yaml",
+    "grafana/clickhouse/clickhouse-bare.yaml",
+  ].map(readText).join("\n");
 }
 
 // String-aware JSONC comment stripper (`//` and `/* */`, respecting quoted
@@ -298,7 +308,7 @@ test("grafana.ini: viewers_can_edit is on (Explore for Viewers), but provisionin
   const dashboardsYaml = readText("grafana/provisioning/dashboards/dashboards.yaml");
   assert.match(dashboardsYaml, /allowUiUpdates:\s*false\s*$/m, "provisioned dashboards refuse a UI save");
 
-  const datasourcesYaml = readText("grafana/provisioning/datasources/datasources.yaml");
+  const datasourcesYaml = readAllDatasourceYaml();
   // Every provisioned datasource block must say `editable: false` — a bare
   // count check (not per-block) is enough here because a missing line for
   // any one datasource would fail this, and the file has no other
@@ -315,7 +325,7 @@ test("grafana.ini: viewers_can_edit is on (Explore for Viewers), but provisionin
 // -------------------------------------------------------------------------
 
 test("datasources.yaml: fixed uids and tenant headers are pinned", () => {
-  const raw = readText("grafana/provisioning/datasources/datasources.yaml");
+  const raw = readAllDatasourceYaml();
 
   // Grafana's sqlite state is disposable — a fresh DB on every wake — so a
   // dashboard that references a datasource by uid breaks on every wake if
@@ -345,7 +355,7 @@ test("datasources.yaml: fixed uids and tenant headers are pinned", () => {
 // `loki-something` would silently gain the strict Loki allowlist instead
 // of its own type's normal, unrestricted proxy access).
 test("datasources.yaml: every type: loki datasource has a loki-* uid, and no other datasource does (box.ts's proxy-gate assumption)", () => {
-  const raw = readText("grafana/provisioning/datasources/datasources.yaml");
+  const raw = readAllDatasourceYaml();
   const blocks = raw.split(/\n(?=\s*- name:)/);
   let lokiCount = 0;
   for (const block of blocks) {
@@ -362,6 +372,130 @@ test("datasources.yaml: every type: loki datasource has a loki-* uid, and no oth
     }
   }
   assert.equal(lokiCount, 2, "expected exactly the two provisioned Loki datasources (browser, worker)");
+});
+
+// --- ClickHouse datasource: header shape per environment --------------------
+
+// Runs the real supervisor function against the shipped files, then expands
+// `${VAR}` the way Grafana does. Returns the ClickHouse datasource text.
+function provisionClickhouse(env) {
+  const dest = mkdtempSync(join(tmpdir(), "o11y-prov-"));
+  try {
+    const r = spawnSync(
+      "bash",
+      ["-c", `. "${O11Y_DIR}/supervisor/lib.sh" && prepare_grafana_provisioning`],
+      {
+        env: {
+          PATH: process.env.PATH,
+          O11Y_PROVISIONING_SRC: join(O11Y_DIR, "grafana", "provisioning"),
+          O11Y_CLICKHOUSE_VARIANTS_DIR: join(O11Y_DIR, "grafana", "clickhouse"),
+          O11Y_PROVISIONING_DEST: dest,
+          ...env,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.equal(r.status, 0, r.stderr);
+    const raw = readFileSync(join(dest, "datasources", "clickhouse.yaml"), "utf8");
+    assert.ok(existsSync(join(dest, "datasources", "datasources.yaml")), "Loki datasources are carried over");
+    return raw.replace(/^\s*#.*$/gm, "").replace(/\$\{(\w+)\}/g, (_, name) => env[name] ?? "");
+  } finally {
+    rmSync(dest, { recursive: true, force: true });
+  }
+}
+
+test("ClickHouse provisioning: production env (empty header vars) emits no httpHeader* key at all", () => {
+  // The plugin's Go backend turns every httpHeaderName* into a request header,
+  // so an empty name fails /api/ds/query with `invalid header field name ""`.
+  const rendered = provisionClickhouse({
+    O11Y_CLICKHOUSE_URL: "http://ae.internal/sql",
+    O11Y_CLICKHOUSE_DATABASE: "",
+    O11Y_CLICKHOUSE_HEADER1_NAME: "",
+    O11Y_CLICKHOUSE_HEADER1_VALUE: "",
+    O11Y_CLICKHOUSE_HEADER2_NAME: "",
+    O11Y_CLICKHOUSE_HEADER2_VALUE: "",
+  });
+  assert.match(rendered, /uid:\s*clickhouse-runner-events\s*$/m);
+  assert.match(rendered, /url:\s*http:\/\/ae\.internal\/sql/);
+  assert.doesNotMatch(rendered, /httpHeader/i, "no header key, empty or not, reaches the datasource");
+});
+
+test("ClickHouse provisioning: local env keeps the X-ClickHouse-User/-Key header pair", () => {
+  const rendered = provisionClickhouse({
+    O11Y_CLICKHOUSE_URL: "http://clickhouse:8123",
+    O11Y_CLICKHOUSE_DATABASE: "default",
+    O11Y_CLICKHOUSE_HEADER1_NAME: "X-ClickHouse-User",
+    O11Y_CLICKHOUSE_HEADER1_VALUE: "default",
+    O11Y_CLICKHOUSE_HEADER2_NAME: "X-ClickHouse-Key",
+    O11Y_CLICKHOUSE_HEADER2_VALUE: "local-dev-token",
+  });
+  assert.match(rendered, /httpHeaderName1:\s*X-ClickHouse-User\s*$/m);
+  assert.match(rendered, /httpHeaderName2:\s*X-ClickHouse-Key\s*$/m);
+  assert.match(rendered, /httpHeaderValue1:\s*default\s*$/m);
+  assert.match(rendered, /httpHeaderValue2:\s*local-dev-token\s*$/m);
+});
+
+// A provisioning failure must not take the box down: each visitor refresh
+// wakes the box again, so exiting would loop forever on a fixable fault.
+test("select_grafana_provisioning: a failing prepare leaves GF_PATHS_PROVISIONING on the image tree, logs loudly and returns 0", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "o11y-prov-fail-"));
+  try {
+    const blocker = join(scratch, "not-a-dir");
+    writeFileSync(blocker, "x");
+    const r = spawnSync(
+      "bash",
+      ["-c", `. "${O11Y_DIR}/supervisor/lib.sh" && select_grafana_provisioning; echo "rc=$? prov=$GF_PATHS_PROVISIONING"`],
+      {
+        env: {
+          PATH: process.env.PATH,
+          GF_PATHS_PROVISIONING: "/etc/grafana/provisioning",
+          O11Y_PROVISIONING_SRC: join(O11Y_DIR, "grafana", "provisioning"),
+          O11Y_CLICKHOUSE_VARIANTS_DIR: join(O11Y_DIR, "grafana", "clickhouse"),
+          // A path below a regular file can never be created.
+          O11Y_PROVISIONING_DEST: join(blocker, "dest"),
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.match(r.stdout, /rc=0 prov=\/etc\/grafana\/provisioning$/m, r.stdout + r.stderr);
+    assert.match(r.stdout, /supervisor: .*cannot prepare grafana provisioning/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("select_grafana_provisioning: a successful prepare points GF_PATHS_PROVISIONING at the prepared copy", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "o11y-prov-ok-"));
+  try {
+    const dest = join(scratch, "prov");
+    const r = spawnSync(
+      "bash",
+      ["-c", `. "${O11Y_DIR}/supervisor/lib.sh" && select_grafana_provisioning; echo "prov=$GF_PATHS_PROVISIONING"`],
+      {
+        env: {
+          PATH: process.env.PATH,
+          GF_PATHS_PROVISIONING: "/etc/grafana/provisioning",
+          O11Y_PROVISIONING_SRC: join(O11Y_DIR, "grafana", "provisioning"),
+          O11Y_CLICKHOUSE_VARIANTS_DIR: join(O11Y_DIR, "grafana", "clickhouse"),
+          O11Y_PROVISIONING_DEST: dest,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.match(r.stdout, new RegExp(`prov=${dest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"), r.stdout + r.stderr);
+    assert.ok(existsSync(join(dest, "datasources", "clickhouse.yaml")));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("entrypoint.sh: provisioning is selected before Loki starts and never exits the container", () => {
+  const code = readText("supervisor/entrypoint.sh").replace(/^\s*#.*$/gm, "");
+  const select = code.indexOf("select_grafana_provisioning");
+  const loki = code.indexOf("/usr/bin/loki");
+  assert.ok(select !== -1 && loki !== -1 && select < loki, "select_grafana_provisioning runs before Loki starts");
+  assert.doesNotMatch(code.split("\n").find((l) => l.includes("select_grafana_provisioning")), /exit/, "the call does not exit on failure");
+  assert.doesNotMatch(code, /prepare_grafana_provisioning/, "the entrypoint goes through the fail-open wrapper only");
 });
 
 // --- compose.yml: no GF_* env var may silently override a pinned key -------
@@ -535,6 +669,7 @@ test("Dockerfile: loads the same config files this test pins (source-grep pin)",
   assert.match(dockerfile, /loki\/runtime-config\.yaml/, "COPYs runtime-config.yaml");
   assert.match(dockerfile, /grafana\/grafana\.ini/, "COPYs grafana.ini");
   assert.match(dockerfile, /grafana\/provisioning/, "COPYs the Grafana provisioning directory");
+  assert.match(dockerfile, /COPY grafana\/clickhouse /, "COPYs the ClickHouse datasource variants");
   // No secret baked into the image (ADR-0041 traps): the S3 credential env
   // names must never appear as a literal ENV/ARG default in the Dockerfile.
   // `KEY\s*=` alone misses Dockerfile's space-separated `ENV KEY value` form

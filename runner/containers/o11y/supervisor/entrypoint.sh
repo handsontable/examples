@@ -37,6 +37,9 @@ trap term_handler TERM
 
 log "wakeId=${WAKE_ID:-<unset>} storage=${STORAGE:-s3} config=${LOKI_CONFIG_FILE}"
 
+# Before Loki: a fault here must not restart the box (every visitor refresh wakes it).
+select_grafana_provisioning
+
 log "starting loki"
 /usr/bin/loki -config.file="$LOKI_CONFIG_FILE" -config.expand-env=true &
 LOKI_PID=$!

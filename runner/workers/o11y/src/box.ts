@@ -50,7 +50,15 @@ const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
  *  not ready, and whether the give-up was already reported. Per wake. */
 const NOT_READY_STORAGE_KEY = "notReadySince";
 const HARD_CAP_SCHEDULE = "hardCapStop";
+const STOP_BACKSTOP_SCHEDULE = "stopBackstop";
+/** The wakeId whose stop already has a backstop scheduled, so repeated `stop()` calls
+ *  (idle timer, drain end, hard cap) schedule it once. */
+const STOP_BACKSTOP_FOR_STORAGE_KEY = "stopBackstopFor";
 const DRAIN_STEP_SCHEDULE = "drainStep";
+/** ADR-0041 §A stop grace bound: the shutdown script's worst case is ~660 s and the
+ *  documented platform window is 900 s (unverified for Worker-initiated stops); this
+ *  Worker-side `destroy()` does not depend on it. */
+const STOP_BACKSTOP_MS = 780 * 1000;
 /** ADR §A: "after 4 hours awake regardless." */
 const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
 /** ADR §A stop protocol: "if no Grafana request arrived in the last 10
@@ -260,6 +268,16 @@ export class GrafanaBox extends Container<Env> {
   // protocol.
   sleepAfter = "15m";
 
+  // `O11Y_SLEEP_AFTER` shortens the idle window for the local idle-stop check;
+  // it is honored only under `O11Y_ENV === "local"`. The SDK reads
+  // `sleepAfter` after this constructor returns, so the first timer uses it.
+  constructor(ctx: ConstructorParameters<typeof Container<Env>>[0], env: Env) {
+    super(ctx, env);
+    if (env.O11Y_ENV === "local" && /^[1-9]\d*[smh]$/.test(env.O11Y_SLEEP_AFTER ?? "")) {
+      this.sleepAfter = env.O11Y_SLEEP_AFTER as string;
+    }
+  }
+
   #startingPromise: Promise<WakeRecord> | null = null;
 
   // Instance fields only so tests can shrink these bounds; production never
@@ -268,6 +286,7 @@ export class GrafanaBox extends Container<Env> {
   wakeWaitMs = WAKE_WAIT_MS;
   startDeadlineMs = START_DEADLINE_MS;
   lokiPushTimeoutMs = LOKI_PUSH_TIMEOUT_MS;
+  stopBackstopMs = STOP_BACKSTOP_MS;
   deferredKeysMax = DEFERRED_KEYS_MAX;
   /** When an `isReady()` probe first ran out of time with no probe settling
    *  since. In memory only: a fresh instance starts clean. */
@@ -466,6 +485,12 @@ export class GrafanaBox extends Container<Env> {
    *  `isReady()` reporting not-ready for a wake that is still up. */
   override async stop(...args: Parameters<Container<Env>["stop"]>): Promise<void> {
     const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    // The SDK re-fires its idle expiry every `sleepAfter` while the container still
+    // runs; a wake already signalled must not be signalled again mid-protocol.
+    if (wake && (await this.ctx.storage.get<string>(STOPPING_FOR_STORAGE_KEY)) === wake.wakeId) {
+      await this.#scheduleStopBackstop(wake.wakeId);
+      return;
+    }
     if (wake) await this.ctx.storage.put(STOPPING_FOR_STORAGE_KEY, wake.wakeId);
     try {
       await super.stop(...args);
@@ -473,6 +498,30 @@ export class GrafanaBox extends Container<Env> {
       await this.ctx.storage.delete(STOPPING_FOR_STORAGE_KEY);
       throw err;
     }
+    if (wake) await this.#scheduleStopBackstop(wake.wakeId);
+  }
+
+  /** One `destroy()` per wake, `stopBackstopMs` after its first `stop()`. A failure to
+   *  schedule is logged, never thrown: the SIGTERM was already sent. */
+  async #scheduleStopBackstop(wakeId: string): Promise<void> {
+    try {
+      if ((await this.ctx.storage.get<string>(STOP_BACKSTOP_FOR_STORAGE_KEY)) === wakeId) return;
+      await this.schedule(new Date(Date.now() + this.stopBackstopMs), STOP_BACKSTOP_SCHEDULE, { wakeId });
+      await this.ctx.storage.put(STOP_BACKSTOP_FOR_STORAGE_KEY, wakeId);
+    } catch (err) {
+      console.error("GrafanaBox: could not schedule the stop backstop", err);
+    }
+  }
+
+  /** {@link STOP_BACKSTOP_SCHEDULE}'s callback. Destroys the container only if it still
+   *  runs under the wake that asked to stop; a newer wake or a finished stop is left alone. */
+  async stopBackstop(payload: { wakeId: string }): Promise<void> {
+    const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    if (current?.wakeId !== payload.wakeId) return;
+    // Persisted state can read running after an eviction with no container left.
+    if (this.ctx.container?.running !== true) return;
+    const state = await this.getState();
+    if (state.status === "running" || state.status === "healthy") await this.destroy();
   }
 
   /** {@link HARD_CAP_SCHEDULE}'s callback. A no-op if a newer wake has

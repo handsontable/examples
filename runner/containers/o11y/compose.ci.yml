@@ -1,0 +1,13 @@
+# CI-only override for the idle-stop check (O11Y_COMPOSE_EXTRA_FILE). On Linux
+# the container runtime's host-gateway is the docker0 address, which cannot
+# reach a port published on 127.0.0.1 only, so MinIO and ClickHouse listen on
+# every interface here. Never used locally by default.
+services:
+  minio:
+    ports: !override
+      - "0.0.0.0:${O11Y_MINIO_PORT:-9000}:9000"
+      - "0.0.0.0:${O11Y_MINIO_CONSOLE_PORT:-9001}:9001"
+  clickhouse:
+    ports: !override
+      - "0.0.0.0:${O11Y_CLICKHOUSE_PORT:-8123}:8123"
+      - "0.0.0.0:${O11Y_CLICKHOUSE_NATIVE_PORT:-9009}:9000"

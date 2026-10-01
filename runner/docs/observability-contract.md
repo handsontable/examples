@@ -82,6 +82,7 @@ Ports inside the Grafana box, reached only through `GrafanaBox.containerFetch`:
 | `RUNNER_EVENTS_CLICKHOUSE_URL` | `.dev.vars` only | local-mode stand-in for the Analytics Engine SQL API's URL (alert queries, §10); defaults to `http://localhost:8123` when absent |
 | `O11Y_LOCAL_MINIO_PORT`, `O11Y_LOCAL_CLICKHOUSE_PORT` | `.dev.vars` only | host ports `containers/o11y/compose.yml`'s `minio`/`clickhouse` are published on, reached from the box's Container via `host.docker.internal`; never set in production |
 | `O11Y_LOCAL_PUBLIC_ORIGIN` | `.dev.vars` only | the origin `wrangler dev` is actually reachable on, for Grafana's own `GF_SERVER_ROOT_URL` |
+| `O11Y_SLEEP_AFTER` | `--var` only | shortens `GrafanaBox`'s 15-minute idle window (`"20s"`) for `containers/o11y/local/idle-stop.mjs`; honored only under `O11Y_ENV=local`, ignored in production |
 | `DEV_ADMIN` | `.dev.vars` only | fail-closed local bypass of the session check |
 
 The box reaches the Loki bucket over S3 at

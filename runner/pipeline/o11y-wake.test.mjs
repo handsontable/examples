@@ -264,7 +264,7 @@ test("drainStep gives up after 10 minutes not ready: logs, writes a drain error 
   const { box, wake, ae, scheduled, stops } = await notReadyBox({ since: 11 * MIN });
   await box.drainStep({ wakeId: wake.wakeId });
   assert.equal(stops(), 1, "a box nobody is looking at is stopped");
-  assert.equal(scheduled.length, 0, "the chain ends; the next cron wake retries");
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 0, "the chain ends; the next cron wake retries");
   assert.equal(drainErrorPoints(ae).length, 1);
   assert.equal(reasonOf(drainErrorPoints(ae)[0]), "backlog");
 });
@@ -297,7 +297,7 @@ test("drainStep: a throw inside the not-ready path records an error point and ru
   await box.drainStep({ wakeId: wake.wakeId });
   assert.equal(drainErrorPoints(ae).length, 1, "the throw is reported like any other drainStep error");
   assert.equal(stops(), 1, "a quiet box is stopped by the same fallback");
-  assert.equal(scheduled.length, 0);
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 0);
 });
 
 test("drainStep: when the not-ready path and its fallback both throw, it still reschedules", async (t) => {
@@ -328,7 +328,7 @@ test("drainStep ends its chain when the container is no longer running", async (
   const { box, wake, scheduled } = await notReadyBox();
   box._state = { status: "stopped", lastChange: Date.now() };
   await box.drainStep({ wakeId: wake.wakeId });
-  assert.equal(scheduled.length, 0, "a stopped box has nothing to wait for");
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 0, "a stopped box has nothing to wait for");
 });
 
 test("drainStep is a no-op once a newer wake has superseded the payload's wakeId", async () => {
@@ -893,7 +893,7 @@ test("drainStep while paused ends the recheck chain once the visitor has gone qu
   await box.drainStep({ wakeId: wake.wakeId });
 
   assert.equal(stopped, true);
-  assert.equal(scheduled.length, 0, "a stopped box has no follow-up step");
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 0, "a stopped box has no follow-up step");
 });
 
 test("drainStep drains normally once drainsPaused is cleared", async () => {
@@ -1133,6 +1133,117 @@ test("hardCapStop is a no-op once a newer wake has started", async () => {
   await box.hardCapStop({ wakeId: staleWakeId });
 
   assert.equal(stopped, false);
+});
+
+// ---- stop backstop ------------------------------------------------------
+
+async function stoppedBox() {
+  const made = makeBox();
+  await made.box.wake("visit");
+  hooks.stop = async () => {}; // SIGTERM sent; the container keeps running
+  made.scheduled.length = 0;
+  await made.box.stop();
+  const wakeId = (await made.box.ctx.storage.get("wake")).wakeId;
+  let destroyed = 0;
+  made.box.destroy = async () => { destroyed++; };
+  return { ...made, wakeId, destroyed: () => destroyed };
+}
+
+test("stop() schedules one destroy backstop at the stop bound, however many times it is called", async () => {
+  const { box, scheduled, wakeId } = await stoppedBox();
+  await box.stop();
+  const backstops = scheduled.filter((s) => s.callback === "stopBackstop");
+  assert.equal(backstops.length, 1);
+  assert.deepEqual(backstops[0].payload, { wakeId });
+  const delay = backstops[0].when.getTime() - Date.now();
+  assert.ok(delay > 700_000 && delay <= 780_000, `delay ${delay}`);
+});
+
+test("one backstop per wake: a second wake stopped after the first gets its own", async () => {
+  const { box, ctx, scheduled, wakeId: wake1 } = await stoppedBox();
+  box._state = { status: "stopped", lastChange: Date.now() };
+  ctx.container.running = false;
+  await box.wake("visit");
+  const wake2 = (await ctx.storage.get("wake")).wakeId;
+  assert.notEqual(wake2, wake1);
+  await box.stop();
+  const backstops = scheduled.filter((s) => s.callback === "stopBackstop");
+  assert.deepEqual(backstops.map((s) => s.payload.wakeId), [wake1, wake2]);
+});
+
+test("a repeated stop() for the same wake sends no second signal but keeps one backstop", async () => {
+  const made = makeBox();
+  await made.box.wake("visit");
+  let signals = 0;
+  hooks.stop = async () => { signals++; };
+  await made.box.stop();
+  await made.box.stop();
+  assert.equal(signals, 1);
+  assert.equal(made.scheduled.filter((s) => s.callback === "stopBackstop").length, 1);
+});
+
+test("stop() for a new wake signals again", async () => {
+  const made = makeBox();
+  await made.box.wake("visit");
+  let signals = 0;
+  hooks.stop = async () => { signals++; };
+  await made.box.stop();
+  made.box._state = { status: "stopped", lastChange: Date.now() };
+  made.ctx.container.running = false;
+  await made.box.wake("visit");
+  await made.box.stop();
+  assert.equal(signals, 2);
+});
+
+test("a stop() whose backstop scheduling failed is retried by the next stop() without a second signal", async () => {
+  const made = makeBox();
+  await made.box.wake("visit");
+  let signals = 0;
+  hooks.stop = async () => { signals++; };
+  const realSchedule = made.box.schedule;
+  made.box.schedule = async () => { throw new Error("alarm unavailable"); };
+  await made.box.stop();
+  made.box.schedule = realSchedule;
+  await made.box.stop();
+  assert.equal(signals, 1);
+  assert.equal(made.scheduled.filter((s) => s.callback === "stopBackstop").length, 1);
+});
+
+test("stopBackstop destroys a container still running under the stopping wake", async () => {
+  const { box, wakeId, destroyed } = await stoppedBox();
+  await box.stopBackstop({ wakeId });
+  assert.equal(destroyed(), 1);
+});
+
+test("stopBackstop does nothing once the container already stopped", async () => {
+  const { box, wakeId, destroyed } = await stoppedBox();
+  box._state = { status: "stopped", lastChange: Date.now() };
+  await box.stopBackstop({ wakeId });
+  assert.equal(destroyed(), 0);
+});
+
+test("stopBackstop does nothing when persisted state says running but the container is gone", async () => {
+  const { box, wakeId, destroyed } = await stoppedBox();
+  box.ctx.container.running = false;
+  await box.stopBackstop({ wakeId });
+  assert.equal(destroyed(), 0);
+});
+
+test("stopBackstop does nothing for a superseded wake", async () => {
+  const { box, wakeId, destroyed } = await stoppedBox();
+  box._state = { status: "stopped", lastChange: Date.now() };
+  await box.wake("visit"); // newer wake, container running again
+  await box.stopBackstop({ wakeId });
+  assert.equal(destroyed(), 0);
+});
+
+test("a failed stop() schedules no backstop", async () => {
+  const { box, scheduled } = makeBox();
+  await box.wake("visit");
+  hooks.stop = async () => { throw new Error("stop failed"); };
+  scheduled.length = 0;
+  await assert.rejects(box.stop());
+  assert.equal(scheduled.filter((s) => s.callback === "stopBackstop").length, 0);
 });
 
 // ---- isAwake / noteVisitorActivity ---------------------------------------

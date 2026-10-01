@@ -10,6 +10,36 @@ log() {
   printf '%s supervisor: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$*"
 }
 
+# prepare_grafana_provisioning — copies the read-only provisioning tree to a
+# writable one and adds the ClickHouse datasource variant matching the env:
+# both header names set (local) -> headers variant, otherwise (production) -> bare.
+# The plugin's Go backend calls (health, resources, alert queries) fail on an empty header
+# name, while the legacy proxy path still works; provisioning cannot omit a key via ${VAR}, hence two files.
+prepare_grafana_provisioning() {
+  local src="${O11Y_PROVISIONING_SRC:-/etc/grafana/provisioning}"
+  local variants="${O11Y_CLICKHOUSE_VARIANTS_DIR:-/etc/grafana/clickhouse}"
+  local dest="${O11Y_PROVISIONING_DEST:-/tmp/grafana-provisioning}"
+  local variant="clickhouse-bare.yaml"
+  if [ -n "${O11Y_CLICKHOUSE_HEADER1_NAME:-}" ] && [ -n "${O11Y_CLICKHOUSE_HEADER2_NAME:-}" ]; then
+    variant="clickhouse-headers.yaml"
+  fi
+  rm -rf "$dest" && mkdir -p "$dest" && cp -r "$src"/. "$dest"/ \
+    && cp "$variants/$variant" "$dest/datasources/clickhouse.yaml"
+}
+
+# select_grafana_provisioning — prepares the provisioning copy and points
+# GF_PATHS_PROVISIONING at it (the image ENV beats Grafana's cfg: override).
+# Fails open: on error the image's own tree stays selected (Loki datasources
+# and dashboards still serve, the ClickHouse datasource is missing).
+select_grafana_provisioning() {
+  if prepare_grafana_provisioning; then
+    export GF_PATHS_PROVISIONING="${O11Y_PROVISIONING_DEST:-/tmp/grafana-provisioning}"
+  else
+    log "ERROR: cannot prepare grafana provisioning; falling back to ${GF_PATHS_PROVISIONING:-/etc/grafana/provisioning} (the ClickHouse datasource will be missing)"
+  fi
+  return 0
+}
+
 # Build the base curl args for a signed request against the Loki bucket.
 # The credentials reach the box as LOKI_S3_* envVars, scoped to that bucket
 # only (ADR-0041 §A) — the shutdown script never touches any other bucket.

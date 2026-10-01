@@ -182,6 +182,19 @@ marker. A box that stays not ready for 10 minutes after its wake began (Loki nev
 answers its readiness probe) is a further stop trigger: the drain reports one error and
 runs the same stop decision, unless a stop for that wake is already in flight.
 
+**Stop grace bound**: the container side is bounded step by step: Loki's wait is
+`O11Y_STOP_GRACE_SECONDS` (120 s in production), each R2 call has a 15 s limit, and the
+Grafana wait is limited to 30 s (`O11Y_GRAFANA_STOP_GRACE_SECONDS`), after which the script logs
+and exits with the marker decision it already made. The worst case is 240 s (pre-SIGTERM
+snapshot) + 120 s + 240 s (post-exit snapshot) + 30 s (marker PUT and HEAD) + 30 s ≈ 660 s.
+The Worker schedules a one-shot `destroy()` 780 s after `stop()`, 120 s above that worst case.
+Cloudflare documents a 15-minute (900 s) SIGTERM-to-SIGKILL window, but that is unverified for a
+Worker-initiated `signal()`/`stop()` and may apply only to platform-initiated shutdowns. The
+backstop is correct either way: it is a Worker-side `destroy()` that does not depend on that
+window, so the container is gone by 780 s whatever the platform does. It fires only if that wake's
+container is still running and no newer wake has started. A destroy before the marker leaves
+the wake unclean, so the ledger replays it, which is the safe direction.
+
 **Waking page**: the Handsontable logo, one line of text, `<meta http-equiv="refresh"
 content="3">`, no script, served by the Worker while the box is not ready.
 
@@ -727,6 +740,7 @@ end-to-end walkthrough and launch.
     each produce a structured line in Loki with `invocation_logs: false`.
 12. **Stop semantics**: what `onStop` reports for our own `stop()` is recorded, and a
     Worker-initiated stop does not escalate to SIGKILL before the clean marker is written.
+    A stop that outlasts the 780 s bound is destroyed and resolved unclean.
 13. **Retention**: R2 lifecycle deletes expired chunk prefixes per tenant, and queries past
     `max_query_lookback` return nothing.
 14. **Image**: compressed size recorded and at most 1 GB, and it fits the instance disk.

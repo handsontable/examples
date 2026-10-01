@@ -1,0 +1,23 @@
+# ADR-0041 §A, §B.5. ClickHouse datasource for the local ClickHouse container
+# (credentials sent as two custom headers). Same fixed uid as the other variant.
+apiVersion: 1
+
+datasources:
+  # vertamedia-clickhouse-datasource (ADR-0041 §A), not grafana-clickhouse-datasource:
+  # a full URL plus custom HTTP headers, never host/port/user/password. The
+  # header NAMES are env-driven (compose.yml supplies X-ClickHouse-User/-Key
+  # locally); production uses clickhouse-bare.yaml.
+  - name: ClickHouse (runner_events)
+    uid: clickhouse-runner-events
+    type: vertamedia-clickhouse-datasource
+    access: proxy
+    url: ${O11Y_CLICKHOUSE_URL}
+    jsonData:
+      httpHeaderName1: ${O11Y_CLICKHOUSE_HEADER1_NAME}
+      httpHeaderName2: ${O11Y_CLICKHOUSE_HEADER2_NAME}
+      defaultDatabase: ${O11Y_CLICKHOUSE_DATABASE}
+      addCorsHeader: false
+    secureJsonData:
+      httpHeaderValue1: ${O11Y_CLICKHOUSE_HEADER1_VALUE}
+      httpHeaderValue2: ${O11Y_CLICKHOUSE_HEADER2_VALUE}
+    editable: false
