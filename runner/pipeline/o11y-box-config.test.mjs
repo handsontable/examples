@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -433,6 +433,69 @@ test("ClickHouse provisioning: local env keeps the X-ClickHouse-User/-Key header
   assert.match(rendered, /httpHeaderName2:\s*X-ClickHouse-Key\s*$/m);
   assert.match(rendered, /httpHeaderValue1:\s*default\s*$/m);
   assert.match(rendered, /httpHeaderValue2:\s*local-dev-token\s*$/m);
+});
+
+// A provisioning failure must not take the box down: each visitor refresh
+// wakes the box again, so exiting would loop forever on a fixable fault.
+test("select_grafana_provisioning: a failing prepare leaves GF_PATHS_PROVISIONING on the image tree, logs loudly and returns 0", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "o11y-prov-fail-"));
+  try {
+    const blocker = join(scratch, "not-a-dir");
+    writeFileSync(blocker, "x");
+    const r = spawnSync(
+      "bash",
+      ["-c", `. "${O11Y_DIR}/supervisor/lib.sh" && select_grafana_provisioning; echo "rc=$? prov=$GF_PATHS_PROVISIONING"`],
+      {
+        env: {
+          PATH: process.env.PATH,
+          GF_PATHS_PROVISIONING: "/etc/grafana/provisioning",
+          O11Y_PROVISIONING_SRC: join(O11Y_DIR, "grafana", "provisioning"),
+          O11Y_CLICKHOUSE_VARIANTS_DIR: join(O11Y_DIR, "grafana", "clickhouse"),
+          // A path below a regular file can never be created.
+          O11Y_PROVISIONING_DEST: join(blocker, "dest"),
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.match(r.stdout, /rc=0 prov=\/etc\/grafana\/provisioning$/m, r.stdout + r.stderr);
+    assert.match(r.stdout, /supervisor: .*cannot prepare grafana provisioning/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("select_grafana_provisioning: a successful prepare points GF_PATHS_PROVISIONING at the prepared copy", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "o11y-prov-ok-"));
+  try {
+    const dest = join(scratch, "prov");
+    const r = spawnSync(
+      "bash",
+      ["-c", `. "${O11Y_DIR}/supervisor/lib.sh" && select_grafana_provisioning; echo "prov=$GF_PATHS_PROVISIONING"`],
+      {
+        env: {
+          PATH: process.env.PATH,
+          GF_PATHS_PROVISIONING: "/etc/grafana/provisioning",
+          O11Y_PROVISIONING_SRC: join(O11Y_DIR, "grafana", "provisioning"),
+          O11Y_CLICKHOUSE_VARIANTS_DIR: join(O11Y_DIR, "grafana", "clickhouse"),
+          O11Y_PROVISIONING_DEST: dest,
+        },
+        encoding: "utf8",
+      },
+    );
+    assert.match(r.stdout, new RegExp(`prov=${dest.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"), r.stdout + r.stderr);
+    assert.ok(existsSync(join(dest, "datasources", "clickhouse.yaml")));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("entrypoint.sh: provisioning is selected before Loki starts and never exits the container", () => {
+  const code = readText("supervisor/entrypoint.sh").replace(/^\s*#.*$/gm, "");
+  const select = code.indexOf("select_grafana_provisioning");
+  const loki = code.indexOf("/usr/bin/loki");
+  assert.ok(select !== -1 && loki !== -1 && select < loki, "select_grafana_provisioning runs before Loki starts");
+  assert.doesNotMatch(code.split("\n").find((l) => l.includes("select_grafana_provisioning")), /exit/, "the call does not exit on failure");
+  assert.doesNotMatch(code, /prepare_grafana_provisioning/, "the entrypoint goes through the fail-open wrapper only");
 });
 
 // --- compose.yml: no GF_* env var may silently override a pinned key -------
