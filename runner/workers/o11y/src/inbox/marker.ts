@@ -70,7 +70,7 @@ async function localMarkerExists(env: Env, objectKey: string): Promise<boolean> 
   const res = await fetch(url, { method: "HEAD", headers: { ...headers, authorization } });
   if (res.status === 200) return true;
   if (res.status === 404) return false;
-  // Unknown is not "clean": the caller's rejection resolves the wake unclean.
+  // Unknown is neither clean nor absent: a throw leaves the wake over and retried on the next resolve.
   throw new Error(`local marker HEAD ${objectKey}: unexpected status ${res.status}`);
 }
 
