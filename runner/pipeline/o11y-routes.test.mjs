@@ -535,10 +535,10 @@ test("POST /telemetry/collect: a batch mixing an AE-only accept, a stored accept
 });
 
 // `handleCollect` must not answer 2xx when `InboxWriter.ingest` threw and
-// nothing was committed (it answers the deadline helper's 503 + Retry-After) — a batch that gets dropped on the floor must not
-// tell the client it succeeded (ADR §B.2: 2xx only after commit), and
-// Faro's own client only retries a non-2xx, so a 2xx here also means the
-// batch is gone for good, not just mis-reported.
+// nothing was committed (it answers the deadline helper's 503 + Retry-After).
+// A dropped batch must not tell the client it succeeded (ADR §B.2: 2xx only
+// after commit), and Faro's own client only retries a non-2xx, so a 2xx here
+// also means the batch is gone for good, not just mis-reported.
 test("POST /telemetry/collect: answers 5xx (not 2xx) when InboxWriter.ingest throws, and commits nothing", async () => {
   const { env, doStorage, inboxWriterInstance, ae } = freshEnv();
   const originalIngest = inboxWriterInstance.ingest.bind(inboxWriterInstance);

@@ -103,9 +103,9 @@ async function handleCollect(req: Request, env: Env, ctx: ExecutionContext): Pro
       // Invalid/oversize records and AE points for items without an
       // `ingestItem` are written above, before ingest, so a Faro retry after
       // a timeout can double-count them (acceptable).
-      const outcome = await ingestWithDeadline(env, "browser", receivedAtMs, ingestItems);
-      if (!outcome.ok) return respondDrop(env, ctx, outcome.drop);
-      const result = outcome.result;
+      const ingested = await ingestWithDeadline(env, "browser", receivedAtMs, ingestItems);
+      if (!ingested.ok) return respondDrop(env, ctx, ingested.drop);
+      const result = ingested.result;
       // Outcomes are matched to items BY INDEX, never by hash — two
       // identical items can share a hash but get different outcomes. Every
       // hash `InboxWriter.ingest` reports counts toward this route's
