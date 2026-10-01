@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-28ef1fb-20260930",
-  "count": 1542,
+  "hotVersion": "0.0.0-next-770903c-20261001",
+  "count": 1547,
   "examples": [
     {
       "bucket": "next",
@@ -9293,6 +9293,22 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/columns/column-filter/angular/example18.ts",
+      "file": "guides__columns__column-filter__angular__example18.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "example18",
+      "exampleTitle": "Filtering with nested headers (2)",
+      "docPermalink": "/column-filter",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/columns/column-filter/angular/example1.ts",
       "file": "guides__columns__column-filter__angular__example1.ts.json",
       "breadcrumb": [
@@ -9943,6 +9959,70 @@
       "guideTitle": "Column filter",
       "exampleId": "exampleFilterDifferentTypes",
       "exampleTitle": "Filter different types of data",
+      "docPermalink": "/column-filter",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/javascript/exampleFilterNestedHeaders.js",
+      "file": "guides__columns__column-filter__javascript__exampleFilterNestedHeaders.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleFilterNestedHeaders",
+      "exampleTitle": "Filtering with nested headers",
+      "docPermalink": "/column-filter",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/react/exampleFilterNestedHeaders.tsx",
+      "file": "guides__columns__column-filter__react__exampleFilterNestedHeaders.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleFilterNestedHeaders",
+      "exampleTitle": "Filtering with nested headers",
+      "docPermalink": "/column-filter",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/javascript/exampleFilterNestedHeaders.ts",
+      "file": "guides__columns__column-filter__javascript__exampleFilterNestedHeaders.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleFilterNestedHeaders",
+      "exampleTitle": "Filtering with nested headers",
+      "docPermalink": "/column-filter",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-filter/vue/exampleFilterNestedHeaders.vue",
+      "file": "guides__columns__column-filter__vue__exampleFilterNestedHeaders.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column filter"
+      ],
+      "guide": "guides/columns/column-filter/column-filter.md",
+      "guideTitle": "Column filter",
+      "exampleId": "exampleFilterNestedHeaders",
+      "exampleTitle": "Filtering with nested headers",
       "docPermalink": "/column-filter",
       "framework": "vue",
       "displayName": "Vue 3"
