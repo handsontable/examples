@@ -213,6 +213,8 @@ export interface Env {
   /** The origin `wrangler dev` is actually reachable on, for Grafana's
    *  own `GF_SERVER_ROOT_URL` — local-only. */
   O11Y_LOCAL_PUBLIC_ORIGIN?: string;
+  /** Local-only idle window for `GrafanaBox` (`"20s"`); ignored in production. */
+  O11Y_SLEEP_AFTER?: string;
 
   // Optional secrets: a required field would force `wrangler dev` to
   // typecheck against `.dev.vars`-only values. Every gate that reads one

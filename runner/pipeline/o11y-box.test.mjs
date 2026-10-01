@@ -796,3 +796,20 @@ test("onStop(): a host loss and a clean stop() report identically — onStop can
   // clean. The marker in the Loki bucket is the only thing that claim rests
   // on (T03's ledger), never this record.
 });
+
+// --- sleepAfter override ---------------------------------------------------
+
+test("sleepAfter: O11Y_SLEEP_AFTER shortens the idle window under O11Y_ENV=local", () => {
+  const { box } = makeBox({ env: { O11Y_ENV: "local", O11Y_SLEEP_AFTER: "20s" } });
+  assert.equal(box.sleepAfter, "20s");
+});
+
+test("sleepAfter: O11Y_SLEEP_AFTER is ignored in production", () => {
+  const { box } = makeBox({ env: { O11Y_ENV: "production", O11Y_SLEEP_AFTER: "20s" } });
+  assert.equal(box.sleepAfter, "15m");
+});
+
+test("sleepAfter: stays 15m locally when unset or not a time expression", () => {
+  assert.equal(makeBox({ env: { O11Y_ENV: "local" } }).box.sleepAfter, "15m");
+  assert.equal(makeBox({ env: { O11Y_ENV: "local", O11Y_SLEEP_AFTER: "soon" } }).box.sleepAfter, "15m");
+});

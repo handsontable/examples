@@ -2,8 +2,9 @@ name: o11y GrafanaBox nightly
 
 # Builds the GrafanaBox image (Loki + Grafana + supervisor) and runs
 # containers/o11y/local/stop-roundtrip.mjs against a real docker compose
-# stack: the only CI exercise of the box's stop/restore ledger. Idle-stop
-# (sleepAfter) is not covered here; it needs a 15 minute wait.
+# stack: the only CI exercise of the box's stop/restore ledger. The idle-stop
+# job runs containers/o11y/local/idle-stop.mjs under `wrangler dev` with a
+# shortened sleepAfter (O11Y_SLEEP_AFTER, honored only when O11Y_ENV=local).
 
 on:
   workflow_dispatch: {}
@@ -69,3 +70,39 @@ jobs:
       - name: Tear down the compose stack
         if: always()
         run: docker compose -p o11y-stop-roundtrip -f runner/containers/o11y/compose.yml down -v
+
+  # Schedule and manual runs only: wrangler's container runtime reaches MinIO
+  # through host.docker.internal, which this Linux runner has not yet proven it
+  # resolves, so a PR is not gated on it.
+  idle-stop:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v5
+        with:
+          package_json_file: runner/package.json
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: runner/pnpm-lock.yaml
+
+      - name: Install and build the workspace
+        working-directory: runner
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Isolate this job's wrangler dev registry
+        run: echo "WRANGLER_REGISTRY_PATH=${RUNNER_TEMP}/wrangler-registry" >> "$GITHUB_ENV"
+
+      - name: Idle stop against the real image
+        run: node runner/containers/o11y/local/idle-stop.mjs
+
+      - name: Tear down the compose stack
+        if: always()
+        run: docker compose -p o11y-idle-stop -f runner/containers/o11y/compose.yml down -v
