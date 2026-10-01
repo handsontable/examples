@@ -560,6 +560,55 @@
       "options": {
         "showHeader": true
       }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "o11y.ingest dropped by reason",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT toStartOfInterval(timestamp, INTERVAL '$interval' SECOND) AS t, blob9 AS reason, sum(_sample_interval * double1) AS cnt FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'o11y.ingest' AND blob8 = 'dropped' AND blob3 = '$environment' GROUP BY t, reason ORDER BY t",
+          "format": "time_series",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        }
+      }
     }
   ]
 }
