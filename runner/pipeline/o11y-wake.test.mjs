@@ -726,6 +726,54 @@ test("drainStep pushes nothing while drainsPaused: a visit wake keeps serving (n
   }
 });
 
+// A visit wake that outlives the spend-cap pause keeps serving; its drain chain
+// must keep polling the flag at a slow cadence so clearing the cap resumes the drain.
+test("drainStep while paused with a visitor present reschedules a slow recheck, and drains once the pause clears", async () => {
+  const key = "inbox/worker/2026-01-01/00/000000000009.ndjson.gz";
+  const inboxWriter = { writtenKeys: [key], drainsPaused: true };
+  const { box, inboxWriterStub, scheduled } = makeBox({ inboxWriter });
+  await box.wake("visit");
+  installContainerFetchRouter();
+  await box.noteVisitorActivity();
+  let stopped = false;
+  hooks.stop = async () => { stopped = true; };
+  scheduled.length = 0;
+  const wake = await box.ctx.storage.get("wake");
+
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(stopped, false, "a visitor keeps the box up");
+  assert.equal(scheduled.length, 1, "exactly one follow-up step, so the chain never forks");
+  assert.equal(scheduled[0].callback, "drainStep");
+  assert.deepEqual(scheduled[0].payload, { wakeId: wake.wakeId });
+  const gapMs = scheduled[0].when.getTime() - Date.now();
+  assert.ok(gapMs > 55_000 && gapMs <= 61_000, `expected a ~60 s recheck, got ${gapMs}ms`);
+  assert.equal(inboxWriterStub.calls.nextWrittenKeys ?? 0, 0, "still paused: nothing taken");
+
+  inboxWriter.drainsPaused = false; // the cap resolved
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(inboxWriterStub.calls.nextWrittenKeys, 1, "the next step drains");
+});
+
+test("drainStep while paused ends the recheck chain once the visitor has gone quiet", async () => {
+  const { box, scheduled } = makeBox({ inboxWriter: { drainsPaused: true } });
+  await box.wake("visit");
+  installContainerFetchRouter();
+  await box.ctx.storage.put("lastGrafanaAt", Date.now() - 11 * 60 * 1000);
+  let stopped = false;
+  hooks.stop = async (self) => {
+    stopped = true;
+    self._state = { status: "stopped", lastChange: Date.now() };
+  };
+  scheduled.length = 0;
+  const wake = await box.ctx.storage.get("wake");
+
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.equal(stopped, true);
+  assert.equal(scheduled.length, 0, "a stopped box has no follow-up step");
+});
+
 test("drainStep drains normally once drainsPaused is cleared", async () => {
   const key = "inbox/worker/2026-01-01/00/000000000008.ndjson.gz";
   const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key], drainsPaused: false } });

@@ -61,6 +61,10 @@ const DRAIN_BATCH_SIZE = 10;
  *  `row.time <= now` for the `now` captured at the start of the invocation
  *  that inserted it. */
 const DRAIN_STEP_GAP_MS = 1000;
+/** Gap between `drainStep` rechecks of the spend-cap pause while a visitor
+ *  keeps the box up: the pause is cleared by the ten-minute cron, so a slow
+ *  poll is enough and costs almost nothing. */
+const PAUSED_DRAIN_RECHECK_MS = 60_000;
 
 // Every await on the container is bounded: an accepted-but-silent port can
 // hang `start()`/`isReady()` forever, since the library's healthy-state
@@ -694,7 +698,12 @@ export class GrafanaBox extends Container<Env> {
     // batch, and a backlog wake that started before the pause stops the box
     // once it is quiet (`#finishDrain`), exactly like an empty backlog.
     if (await writer.drainsPaused()) {
-      await this.#finishDrain(payload.wakeId);
+      // A visitor keeps the box up past this step, and nothing else restarts
+      // the chain, so poll the flag slowly until the pause clears or the box
+      // goes quiet.
+      if (await this.#finishDrain(payload.wakeId)) {
+        await this.schedule(new Date(Date.now() + PAUSED_DRAIN_RECHECK_MS), DRAIN_STEP_SCHEDULE, payload);
+      }
       return;
     }
     const limitedRecord = await this.ctx.storage.get<{ wakeId: string; tenants: Tenant[] }>(STREAM_LIMITED_STORAGE_KEY);
@@ -840,17 +849,18 @@ export class GrafanaBox extends Container<Env> {
    *  arrived in the last 10 minutes the Worker calls `stop()` (otherwise
    *  the idle timer does, later, so a drain never SIGTERMs someone reading
    *  a dashboard)." A no-op if a newer wake has already superseded
-   *  `wakeId`. */
-  async #finishDrain(wakeId: string): Promise<void> {
+   *  `wakeId`. Resolves true when an active Grafana user keeps the box up. */
+  async #finishDrain(wakeId: string): Promise<boolean> {
     const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
-    if (current?.wakeId !== wakeId) return;
+    if (current?.wakeId !== wakeId) return false;
 
     const lastGrafana = await this.lastGrafanaActivityMs();
     const quiet = lastGrafana === null || Date.now() - lastGrafana >= GRAFANA_QUIET_STOP_MS;
-    if (!quiet) return; // an active Grafana user — leave it to the idle timer / hard cap
+    if (!quiet) return true; // an active Grafana user — leave it to the idle timer / hard cap
 
     const state = await this.getState();
     if (state.status === "running" || state.status === "healthy") await this.stop();
+    return false;
   }
 
   async #getMap(key: string): Promise<string | null> {
