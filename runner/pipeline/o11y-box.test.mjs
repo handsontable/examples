@@ -474,10 +474,9 @@ test("containerFetch(): a ClickHouse query issued through the numeric-id form is
   const { box } = makeBox();
   hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
 
-  // ClickHouse happens to be provisioned 3rd (clickhouse.yaml), so a real
-  // numeric id COULD front it — but every dashboard here references it by
-  // uid only (`o11y-box-config.test.mjs` pins that), so refusing the
-  // numeric-id form entirely, for every datasource, is the safe default
+  // Every dashboard here references ClickHouse by uid only
+  // (`o11y-box-config.test.mjs` pins that), so refusing the numeric-id
+  // form entirely, for every datasource, is the safe default
   // (this file's own doc comment on `isBlockedLokiProxyPath`).
   const res = await box.containerFetch(new Request("https://box.example/api/datasources/proxy/3/"));
   assert.ok(res.status === 403 || res.status === 404, `expected the numeric-id form to be refused, got ${res.status}`);

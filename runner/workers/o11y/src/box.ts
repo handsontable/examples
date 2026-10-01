@@ -56,7 +56,8 @@ const STOP_BACKSTOP_SCHEDULE = "stopBackstop";
 const STOP_BACKSTOP_FOR_STORAGE_KEY = "stopBackstopFor";
 const DRAIN_STEP_SCHEDULE = "drainStep";
 /** ADR-0041 §A stop grace bound: the shutdown script's worst case is ~660 s and the
- *  platform sends SIGKILL 900 s after SIGTERM; `destroy()` fires between the two. */
+ *  documented platform window is 900 s (unverified for Worker-initiated stops); this
+ *  Worker-side `destroy()` does not depend on it. */
 const STOP_BACKSTOP_MS = 780 * 1000;
 /** ADR §A: "after 4 hours awake regardless." */
 const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
@@ -484,6 +485,12 @@ export class GrafanaBox extends Container<Env> {
    *  `isReady()` reporting not-ready for a wake that is still up. */
   override async stop(...args: Parameters<Container<Env>["stop"]>): Promise<void> {
     const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    // The SDK re-fires its idle expiry every `sleepAfter` while the container still
+    // runs; a wake already signalled must not be signalled again mid-protocol.
+    if (wake && (await this.ctx.storage.get<string>(STOPPING_FOR_STORAGE_KEY)) === wake.wakeId) {
+      await this.#scheduleStopBackstop(wake.wakeId);
+      return;
+    }
     if (wake) await this.ctx.storage.put(STOPPING_FOR_STORAGE_KEY, wake.wakeId);
     try {
       await super.stop(...args);
@@ -499,8 +506,8 @@ export class GrafanaBox extends Container<Env> {
   async #scheduleStopBackstop(wakeId: string): Promise<void> {
     try {
       if ((await this.ctx.storage.get<string>(STOP_BACKSTOP_FOR_STORAGE_KEY)) === wakeId) return;
-      await this.ctx.storage.put(STOP_BACKSTOP_FOR_STORAGE_KEY, wakeId);
       await this.schedule(new Date(Date.now() + this.stopBackstopMs), STOP_BACKSTOP_SCHEDULE, { wakeId });
+      await this.ctx.storage.put(STOP_BACKSTOP_FOR_STORAGE_KEY, wakeId);
     } catch (err) {
       console.error("GrafanaBox: could not schedule the stop backstop", err);
     }
@@ -511,6 +518,8 @@ export class GrafanaBox extends Container<Env> {
   async stopBackstop(payload: { wakeId: string }): Promise<void> {
     const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
     if (current?.wakeId !== payload.wakeId) return;
+    // Persisted state can read running after an eviction with no container left.
+    if (this.ctx.container?.running !== true) return;
     const state = await this.getState();
     if (state.status === "running" || state.status === "healthy") await this.destroy();
   }
