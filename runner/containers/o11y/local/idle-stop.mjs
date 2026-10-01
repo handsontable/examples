@@ -6,10 +6,10 @@
 // nothing gets no clean marker by design (ADR-0041 stop protocol).
 
 import { spawn, spawnSync } from "node:child_process";
-import { createWriteStream, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createWriteStream, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { scrubSecrets } from "./redact.mjs";
 import { defaultComposeProjectName } from "../../../scripts/dev-lib.mjs";
@@ -27,10 +27,18 @@ if (PROJECT === defaultComposeProjectName()) {
 }
 const WRANGLER_PORT = process.env.O11Y_IDLE_WRANGLER_PORT || "4510";
 const INSPECTOR_PORT = process.env.O11Y_IDLE_INSPECTOR_PORT || "4511";
-const MINIO_PORT = process.env.O11Y_MINIO_PORT || "4512";
-const MINIO_CONSOLE_PORT = process.env.O11Y_MINIO_CONSOLE_PORT || "4513";
-const CLICKHOUSE_PORT = process.env.O11Y_CLICKHOUSE_PORT || "4514";
-const CLICKHOUSE_NATIVE_PORT = process.env.O11Y_CLICKHOUSE_NATIVE_PORT || "4515";
+// Dedicated names: the dev stack's generic O11Y_*_PORT exports must not leak in.
+const MINIO_PORT = process.env.O11Y_IDLE_MINIO_PORT || "4512";
+const MINIO_CONSOLE_PORT = process.env.O11Y_IDLE_MINIO_CONSOLE_PORT || "4513";
+const CLICKHOUSE_PORT = process.env.O11Y_IDLE_CLICKHOUSE_PORT || "4514";
+const CLICKHOUSE_NATIVE_PORT = process.env.O11Y_IDLE_CLICKHOUSE_NATIVE_PORT || "4515";
+// An extra compose file (CI publishes MinIO/ClickHouse on 0.0.0.0 so the
+// container runtime's host-gateway can reach them on Linux).
+const EXTRA_COMPOSE_FILE = process.env.O11Y_COMPOSE_EXTRA_FILE ? resolve(process.env.O11Y_COMPOSE_EXTRA_FILE) : null;
+if (EXTRA_COMPOSE_FILE && !existsSync(EXTRA_COMPOSE_FILE)) {
+  console.error(`error: O11Y_COMPOSE_EXTRA_FILE="${EXTRA_COMPOSE_FILE}" does not exist.`);
+  process.exit(1);
+}
 const MINIO_USER = "minioadmin";
 const MINIO_PASSWORD = "minioadmin";
 const SLEEP_AFTER = process.env.O11Y_IDLE_SLEEP_AFTER || "20s";
@@ -66,7 +74,8 @@ function sh(cmd, args, opts = {}) {
   }
   return res;
 }
-const compose = (...args) => sh("docker", ["compose", "-p", PROJECT, "-f", "compose.yml", ...args]);
+const composeFiles = ["-f", "compose.yml", ...(EXTRA_COMPOSE_FILE ? ["-f", EXTRA_COMPOSE_FILE] : [])];
+const compose = (...args) => sh("docker", ["compose", "-p", PROJECT, ...composeFiles, ...args]);
 
 function s3(args) {
   return sh(
@@ -164,10 +173,11 @@ function teardown() {
 async function main() {
   console.log(`o11y box idle-stop — project=${PROJECT} sleepAfter=${SLEEP_AFTER} wrangler=:${WRANGLER_PORT} minio=:${MINIO_PORT}`);
 
-  // wrangler reads `.dev.vars` ahead of `--var`, so an existing one could
-  // override the idle window or the env; refuse rather than guess.
-  if (existsSync(join(WORKER_DIR, ".dev.vars"))) {
-    console.error("error: workers/o11y/.dev.vars exists and would override this script's --var values; move it aside.");
+  // wrangler reads `.dev.vars*` and `.env*` ahead of `--var`, so any of them
+  // could override the idle window or the env; refuse rather than guess.
+  const envFiles = readdirSync(WORKER_DIR).filter((f) => /^(\.dev\.vars|\.env)(\..+)?$/.test(f) && !f.endsWith(".example"));
+  if (envFiles.length > 0) {
+    console.error(`error: workers/o11y/${envFiles.join(", workers/o11y/")} would override this script's --var values; move it aside.`);
     process.exit(1);
   }
 

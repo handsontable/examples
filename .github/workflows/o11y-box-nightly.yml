@@ -51,6 +51,11 @@ jobs:
           O11Y_ROUNDTRIP_KEEP: "1"
         run: node runner/containers/o11y/local/stop-roundtrip.mjs
 
+      # The production ClickHouse datasource variant (empty header env) is the
+      # one no other boot exercises.
+      - name: Production datasource variant boots
+        run: node runner/containers/o11y/local/prod-datasource-check.mjs
+
       - name: Collect compose logs
         if: failure()
         run: |
@@ -103,7 +108,10 @@ jobs:
         run: echo "WRANGLER_REGISTRY_PATH=${RUNNER_TEMP}/wrangler-registry" >> "$GITHUB_ENV"
 
       - name: Idle stop against the real image
+        id: idle
         env:
+          # Linux host-gateway cannot reach ports published on 127.0.0.1 only.
+          O11Y_COMPOSE_EXTRA_FILE: runner/containers/o11y/compose.ci.yml
           O11Y_IDLE_LOG: ${{ runner.temp }}/o11y-idle-stop/wrangler.log
         run: |
           mkdir -p "${RUNNER_TEMP}/o11y-idle-stop"
@@ -118,6 +126,17 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+      # continue-on-error hides a failed step from the run status, so surface it.
+      - name: Report the idle-stop outcome
+        if: always()
+        env:
+          IDLE_OUTCOME: ${{ steps.idle.outcome }}
+        run: |
+          echo "### idle-stop: ${IDLE_OUTCOME}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${IDLE_OUTCOME}" != "success" ]; then
+            echo "::warning title=o11y idle-stop::idle-stop check outcome was ${IDLE_OUTCOME} (job is continue-on-error; see the o11y-idle-stop-logs artifact)"
+          fi
+
       - name: Tear down the compose stack
         if: always()
-        run: docker compose -p o11y-idle-stop -f runner/containers/o11y/compose.yml down -v
+        run: docker compose -p o11y-idle-stop -f runner/containers/o11y/compose.yml -f runner/containers/o11y/compose.ci.yml down -v
