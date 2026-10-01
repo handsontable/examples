@@ -1,0 +1,16 @@
+# ADR-0041 §A, §B.5. ClickHouse datasource for production: no header keys at
+# all, because the plugin's Go backend turns an empty `httpHeaderName*` into a
+# request header with an empty name and fails every backend call. GrafanaBox's
+# outbound handler adds the bearer token Worker-side.
+apiVersion: 1
+
+datasources:
+  - name: ClickHouse (runner_events)
+    uid: clickhouse-runner-events
+    type: vertamedia-clickhouse-datasource
+    access: proxy
+    url: ${O11Y_CLICKHOUSE_URL}
+    jsonData:
+      defaultDatabase: ${O11Y_CLICKHOUSE_DATABASE}
+      addCorsHeader: false
+    editable: false

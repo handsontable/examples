@@ -41,6 +41,10 @@ log "starting loki"
 /usr/bin/loki -config.file="$LOKI_CONFIG_FILE" -config.expand-env=true &
 LOKI_PID=$!
 
+prepare_grafana_provisioning || { log "cannot prepare grafana provisioning"; exit 1; }
+# The image sets GF_PATHS_PROVISIONING, which beats the cfg: override below.
+export GF_PATHS_PROVISIONING="${O11Y_PROVISIONING_DEST:-/tmp/grafana-provisioning}"
+
 log "starting grafana"
 grafana server \
   --homepath="${GF_PATHS_HOME:-/usr/share/grafana}" \
@@ -50,7 +54,7 @@ grafana server \
   cfg:default.paths.data="${GF_PATHS_DATA:-/var/lib/grafana}" \
   cfg:default.paths.logs="${GF_PATHS_LOGS:-/var/log/grafana}" \
   cfg:default.paths.plugins="${GF_PATHS_PLUGINS:-/var/lib/grafana/plugins}" \
-  cfg:default.paths.provisioning="${GF_PATHS_PROVISIONING:-/etc/grafana/provisioning}" &
+  cfg:default.paths.provisioning="$GF_PATHS_PROVISIONING" &
 GRAFANA_PID=$!
 
 log "loki pid=${LOKI_PID} grafana pid=${GRAFANA_PID}"

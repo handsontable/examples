@@ -10,6 +10,23 @@ log() {
   printf '%s supervisor: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" "$*"
 }
 
+# prepare_grafana_provisioning — copies the read-only provisioning tree to a
+# writable one and adds the ClickHouse datasource variant matching the env:
+# header names set (local) -> headers variant, empty (production) -> bare.
+# The plugin's Go backend fails every call on an empty header name, and
+# provisioning cannot omit a key via ${VAR}, hence two files.
+prepare_grafana_provisioning() {
+  local src="${O11Y_PROVISIONING_SRC:-/etc/grafana/provisioning}"
+  local variants="${O11Y_CLICKHOUSE_VARIANTS_DIR:-/etc/grafana/clickhouse}"
+  local dest="${O11Y_PROVISIONING_DEST:-/tmp/grafana-provisioning}"
+  local variant="clickhouse-bare.yaml"
+  if [ -n "${O11Y_CLICKHOUSE_HEADER1_NAME:-}" ] || [ -n "${O11Y_CLICKHOUSE_HEADER2_NAME:-}" ]; then
+    variant="clickhouse-headers.yaml"
+  fi
+  rm -rf "$dest" && mkdir -p "$dest" && cp -r "$src"/. "$dest"/ \
+    && cp "$variants/$variant" "$dest/datasources/clickhouse.yaml"
+}
+
 # Build the base curl args for a signed request against the Loki bucket.
 # The credentials reach the box as LOKI_S3_* envVars, scoped to that bucket
 # only (ADR-0041 §A) — the shutdown script never touches any other bucket.
