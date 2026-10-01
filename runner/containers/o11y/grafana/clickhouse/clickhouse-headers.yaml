@@ -3,16 +3,10 @@
 apiVersion: 1
 
 datasources:
-  # vertamedia-clickhouse-datasource ("the Altinity plugin", ADR-0041 §A) —
-  # NOT grafana-clickhouse-datasource. Cloudflare's own Analytics Engine +
-  # Grafana docs point at this exact plugin id and this exact auth shape: a
-  # full URL plus ONE custom HTTP header, never host/port/user/password
-  # fields (the AE SQL API rejects Basic auth outright — verified against a
-  # real ClickHouse HTTP endpoint too, which 403s a bare `Bearer` scheme).
-  # Local ClickHouse and production Analytics Engine need genuinely
-  # different header shapes (ClickHouse HTTP: X-ClickHouse-User/-Key), so
-  # the header NAMES are env-driven too — compose.yml supplies the local
-  # pair. Production uses clickhouse-bare.yaml instead.
+  # vertamedia-clickhouse-datasource (ADR-0041 §A), not grafana-clickhouse-datasource:
+  # a full URL plus custom HTTP headers, never host/port/user/password. The
+  # header NAMES are env-driven (compose.yml supplies X-ClickHouse-User/-Key
+  # locally); production uses clickhouse-bare.yaml.
   - name: ClickHouse (runner_events)
     uid: clickhouse-runner-events
     type: vertamedia-clickhouse-datasource

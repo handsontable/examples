@@ -12,7 +12,7 @@ log() {
 
 # prepare_grafana_provisioning — copies the read-only provisioning tree to a
 # writable one and adds the ClickHouse datasource variant matching the env:
-# header names set (local) -> headers variant, empty (production) -> bare.
+# both header names set (local) -> headers variant, otherwise (production) -> bare.
 # The plugin's Go backend fails every call on an empty header name, and
 # provisioning cannot omit a key via ${VAR}, hence two files.
 prepare_grafana_provisioning() {
@@ -20,7 +20,7 @@ prepare_grafana_provisioning() {
   local variants="${O11Y_CLICKHOUSE_VARIANTS_DIR:-/etc/grafana/clickhouse}"
   local dest="${O11Y_PROVISIONING_DEST:-/tmp/grafana-provisioning}"
   local variant="clickhouse-bare.yaml"
-  if [ -n "${O11Y_CLICKHOUSE_HEADER1_NAME:-}" ] || [ -n "${O11Y_CLICKHOUSE_HEADER2_NAME:-}" ]; then
+  if [ -n "${O11Y_CLICKHOUSE_HEADER1_NAME:-}" ] && [ -n "${O11Y_CLICKHOUSE_HEADER2_NAME:-}" ]; then
     variant="clickhouse-headers.yaml"
   fi
   rm -rf "$dest" && mkdir -p "$dest" && cp -r "$src"/. "$dest"/ \

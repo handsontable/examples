@@ -474,7 +474,7 @@ test("containerFetch(): a ClickHouse query issued through the numeric-id form is
   const { box } = makeBox();
   hooks.containerFetch = async () => new Response("should not be reached", { status: 200 });
 
-  // ClickHouse happens to be provisioned 3rd (datasources.yaml), so a real
+  // ClickHouse happens to be provisioned 3rd (clickhouse.yaml), so a real
   // numeric id COULD front it — but every dashboard here references it by
   // uid only (`o11y-box-config.test.mjs` pins that), so refusing the
   // numeric-id form entirely, for every datasource, is the safe default
