@@ -164,6 +164,24 @@ for (const configFile of ["loki/loki-config.yaml", "loki/loki-config.filesystem.
     );
   });
 
+  test(`${configFile}: schema_config keeps the original index period and adds a later one whose prefix has no slash`, () => {
+    const config = parseJsonWithEnvPlaceholders(readText(configFile));
+    const periods = config.schema_config.configs;
+    assert.equal(periods.length, 2, "exactly two schema periods");
+    const [oldPeriod, newPeriod] = periods;
+    assert.equal(oldPeriod.index.prefix, "index/", "the original period is kept so existing data stays readable");
+    assert.equal(newPeriod.index.prefix, "index_", "the new period's prefix");
+    assert.ok(!newPeriod.index.prefix.includes("/"), "a slash in index.prefix makes the compactor skip the table");
+    assert.ok(
+      Date.parse(newPeriod.from) > Date.parse(oldPeriod.from),
+      `the new period starts strictly after the old one (${newPeriod.from} > ${oldPeriod.from})`,
+    );
+    for (const key of ["store", "object_store", "schema"]) {
+      assert.equal(newPeriod[key], oldPeriod[key], `the new period keeps ${key}`);
+    }
+    assert.equal(newPeriod.index.period, oldPeriod.index.period, "the new period keeps index.period");
+  });
+
   test(`${configFile}: otlp_config promotes EXACTLY the contract §3 resource attributes`, () => {
     const raw = readText(configFile);
     const config = parseJsonWithEnvPlaceholders(raw);

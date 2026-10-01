@@ -450,10 +450,18 @@ async function main() {
   // the restricted user could not have written this itself, standing in
   // for an upload before the pre-SIGTERM snapshot.
   const dayNow = Math.floor(Date.now() / 1000 / 86400);
-  const seededKey = `index/index/${dayNow}/9999999999-${uploaderName}-seeded.tsdb.gz`;
-  const seedRes = curlS3(["-o", "/dev/null", "-w", "%{http_code}", "-X", "PUT", "--data", "seed",
-    `http://localhost:${MINIO_PORT}/loki/${seededKey}`]);
-  record("C1: seeded a pre-existing uploader-named index object (admin credential)", seedRes.stdout.trim() === "200", `HTTP ${seedRes.stdout.trim()} key=${seededKey}`);
+  // Both index tables: `index/index/` (the original schema period) and
+  // `index/index_` (the period that takes over; local runs write the old one
+  // until its `from` date, so this seed is what covers the new prefix).
+  const seededKeys = [
+    `index/index/${dayNow}/9999999999-${uploaderName}-seeded.tsdb.gz`,
+    `index/index_${dayNow}/9999999999-${uploaderName}-seeded.tsdb.gz`,
+  ];
+  for (const seededKey of seededKeys) {
+    const seedRes = curlS3(["-o", "/dev/null", "-w", "%{http_code}", "-X", "PUT", "--data", "seed",
+      `http://localhost:${MINIO_PORT}/loki/${seededKey}`]);
+    record(`C1: seeded a pre-existing uploader-named index object under ${seededKey.split("/").slice(0, 2).join("/")}/ (admin credential)`, seedRes.stdout.trim() === "200", `HTTP ${seedRes.stdout.trim()} key=${seededKey}`);
+  }
 
   await pushLines("browser", [`roundtrip-c1-line-${RUN_ID}`], { "hot.demo_id": "r-roundtrip" });
   await sleep(300);
