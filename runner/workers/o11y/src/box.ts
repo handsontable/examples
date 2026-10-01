@@ -265,7 +265,7 @@ export class GrafanaBox extends Container<Env> {
   // `sleepAfter` after this constructor returns, so the first timer uses it.
   constructor(ctx: ConstructorParameters<typeof Container<Env>>[0], env: Env) {
     super(ctx, env);
-    if (env.O11Y_ENV === "local" && /^\d+[smh]$/.test(env.O11Y_SLEEP_AFTER ?? "")) {
+    if (env.O11Y_ENV === "local" && /^[1-9]\d*[smh]$/.test(env.O11Y_SLEEP_AFTER ?? "")) {
       this.sleepAfter = env.O11Y_SLEEP_AFTER as string;
     }
   }

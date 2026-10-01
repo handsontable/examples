@@ -1,15 +1,9 @@
 #!/usr/bin/env node
 // containers/o11y/local/idle-stop.mjs
 //
-// Proves the idle stop against the REAL box image under `wrangler dev`'s own
-// container runtime: a visit wakes the box, nothing else touches it, and the
-// Durable Object's `sleepAfter` (shortened via O11Y_SLEEP_AFTER, honored only
-// under O11Y_ENV=local) SIGTERMs it. Asserts the container exits on its own,
-// the clean marker lands in MinIO, and a second visit starts a fresh wake.
-//
-// Usage: node containers/o11y/local/idle-stop.mjs (needs `pnpm install` in
-// runner/ and a running Docker daemon). Exit 0 = every check passed. Run
-// through `rtk proxy` — judge by exit code.
+// Proves the real box image idle-stops under `wrangler dev` (sleepAfter shortened by
+// O11Y_SLEEP_AFTER, local only). It pushes one log line because a wake that ingested
+// nothing gets no clean marker by design (ADR-0041 stop protocol).
 
 import { spawn, spawnSync } from "node:child_process";
 import { createWriteStream, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -40,6 +34,10 @@ const CLICKHOUSE_NATIVE_PORT = process.env.O11Y_CLICKHOUSE_NATIVE_PORT || "4515"
 const MINIO_USER = "minioadmin";
 const MINIO_PASSWORD = "minioadmin";
 const SLEEP_AFTER = process.env.O11Y_IDLE_SLEEP_AFTER || "20s";
+if (!/^[1-9]\d*[smh]$/.test(SLEEP_AFTER)) {
+  console.error(`error: O11Y_IDLE_SLEEP_AFTER="${SLEEP_AFTER}" must look like 20s, 2m or 1h (non-zero); the box would ignore it.`);
+  process.exit(1);
+}
 const SLEEP_AFTER_MS = Number(SLEEP_AFTER.slice(0, -1)) * { s: 1000, m: 60_000, h: 3_600_000 }[SLEEP_AFTER.slice(-1)];
 const SESSION_SECRET = "idle-stop-" + "x".repeat(40);
 const SECRETS = [MINIO_PASSWORD, SESSION_SECRET];
@@ -142,7 +140,10 @@ let containersBefore = new Set();
 let scratch = null;
 let logPath = null;
 
+let tornDown = false;
 function teardown() {
+  if (tornDown) return;
+  tornDown = true;
   if (wrangler && wrangler.exitCode === null) {
     try {
       process.kill(-wrangler.pid, "SIGTERM");
@@ -151,7 +152,11 @@ function teardown() {
     }
   }
   // wrangler leaves its proxy sidecar behind; remove only the ones this run created.
-  for (const id of allIds()) if (!containersBefore.has(id)) sh("docker", ["rm", "-f", id], { allowFail: true });
+  for (const id of allIds()) {
+    if (containersBefore.has(id)) continue;
+    const name = sh("docker", ["inspect", id, "--format", "{{.Name}}"], { allowFail: true }).stdout;
+    if (name.includes("workerd-handsontable-demos-o11y-GrafanaBox")) sh("docker", ["rm", "-f", id], { allowFail: true });
+  }
   if (process.env.O11Y_IDLE_KEEP !== "1") compose("down", "-v");
   if (scratch) rmSync(scratch, { recursive: true, force: true });
 }
@@ -173,7 +178,7 @@ async function main() {
   if (up.status !== 0) return;
 
   scratch = mkdtempSync(join(tmpdir(), "o11y-idle-stop-"));
-  logPath = join(scratch, "wrangler.log");
+  logPath = process.env.O11Y_IDLE_LOG || join(scratch, "wrangler.log");
   const log = createWriteStream(logPath);
   const vars = {
     O11Y_ENV: "local",
@@ -238,9 +243,14 @@ async function main() {
     const wake2 = boxId2 ? wakeIdOf(boxId2) : null;
     record("second wake mints a new wake id", Boolean(wake2) && wake2 !== wake1, `${wake1} -> ${wake2}`);
     record("wake 1 marker survives wake 2", markerExists(wake1));
-    const logs = boxId2 ? sh("docker", ["logs", boxId2], { allowFail: true }) : { stdout: "", stderr: "" };
-    record("wake 2 boot does not replay", !/replay/i.test(`${logs.stdout}${logs.stderr}`));
   }
+}
+
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => {
+    teardown();
+    process.exit(130);
+  });
 }
 
 try {

@@ -811,5 +811,7 @@ test("sleepAfter: O11Y_SLEEP_AFTER is ignored in production", () => {
 
 test("sleepAfter: stays 15m locally when unset or not a time expression", () => {
   assert.equal(makeBox({ env: { O11Y_ENV: "local" } }).box.sleepAfter, "15m");
-  assert.equal(makeBox({ env: { O11Y_ENV: "local", O11Y_SLEEP_AFTER: "soon" } }).box.sleepAfter, "15m");
+  for (const bad of ["soon", "20", "1d", "0s", "0m", "0h"]) {
+    assert.equal(makeBox({ env: { O11Y_ENV: "local", O11Y_SLEEP_AFTER: bad } }).box.sleepAfter, "15m", bad);
+  }
 });
