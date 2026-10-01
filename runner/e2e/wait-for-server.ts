@@ -1,3 +1,9 @@
+/** True once a spawned child is gone, whether it exited (`exitCode`) or was
+ *  killed by a signal (`exitCode` stays null and `signalCode` is set). */
+export function hasProcessExited(child: { exitCode: number | null; signalCode: NodeJS.Signals | null }): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
 /** Polls `url` until it answers (any status). Rejects at `timeoutMs` with the
  *  last fetch error, or immediately once `hasExited()` reports the process
  *  that should be serving it is already gone. */

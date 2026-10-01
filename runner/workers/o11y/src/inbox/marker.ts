@@ -7,6 +7,8 @@ import type { Env } from "../env.js";
 
 const CLEAN_MARKER_PREFIX = "state/wakes/";
 const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+/** A MinIO that accepts the connection and never answers must not hang the wake resolve. */
+const LOCAL_HEAD_TIMEOUT_MS = 5000;
 const encoder = new TextEncoder();
 
 const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -67,7 +69,11 @@ async function localMarkerExists(env: Env, objectKey: string): Promise<boolean> 
     service: "s3",
     amzDate,
   });
-  const res = await fetch(url, { method: "HEAD", headers: { ...headers, authorization } });
+  const res = await fetch(url, {
+    method: "HEAD",
+    headers: { ...headers, authorization },
+    signal: AbortSignal.timeout(LOCAL_HEAD_TIMEOUT_MS),
+  });
   if (res.status === 200) return true;
   if (res.status === 404) return false;
   // Unknown is neither clean nor absent: a throw leaves the wake over and retried on the next resolve.
