@@ -51,6 +51,11 @@ jobs:
           O11Y_ROUNDTRIP_KEEP: "1"
         run: node runner/containers/o11y/local/stop-roundtrip.mjs
 
+      # The production ClickHouse datasource variant (empty header env) is the
+      # one no other boot exercises.
+      - name: Production datasource variant boots
+        run: node runner/containers/o11y/local/prod-datasource-check.mjs
+
       - name: Collect compose logs
         if: failure()
         run: |
