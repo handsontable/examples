@@ -89,6 +89,33 @@ test("local mode: any other status rejects instead of reading as clean or absent
   }
 });
 
+test("local mode: a MinIO that never answers is aborted after the timeout and rejects", async () => {
+  const realTimeout = AbortSignal.timeout;
+  const controller = new AbortController();
+  const requested = [];
+  AbortSignal.timeout = (ms) => {
+    requested.push(ms);
+    return controller.signal;
+  };
+  try {
+    await withFetch(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+      async (calls) => {
+        const rejected = assert.rejects(markerExists(localEnv(), "w1"), /aborted/);
+        while (calls.length === 0) await new Promise((resolve) => setImmediate(resolve));
+        controller.abort();
+        await rejected;
+      },
+    );
+  } finally {
+    AbortSignal.timeout = realTimeout;
+  }
+  assert.deepEqual(requested, [5000]);
+});
+
 test("production mode: reads O11Y_LOKI_STATE.head and never calls fetch", async () => {
   const heads = [];
   const env = { O11Y_ENV: "production", O11Y_LOKI_STATE: { head: async (key) => (heads.push(key), key.includes("present") ? {} : null) } };
