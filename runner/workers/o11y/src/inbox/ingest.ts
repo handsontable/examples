@@ -1,8 +1,8 @@
-// The deadline-and-backstop wrapper around `InboxWriter.ingest` for the
-// ingest routes that have no other catch (`v1/logs`, `deploy`,
-// `hooks/sentry`): a stuck or throwing Durable Object call becomes an
-// accounted 503 with `Retry-After` instead of a hung request or an
-// unhandled exception that writes no `o11y.ingest` point.
+// The deadline-and-backstop wrapper around `InboxWriter.ingest` for every
+// ingest route (`collect`, `v1/logs`, `deploy`, `hooks/sentry`): a stuck or
+// throwing Durable Object call becomes an accounted 503 with `Retry-After`
+// instead of a hung request or an unhandled exception that writes no
+// `o11y.ingest` point.
 
 import type { Env, IngestItem, IngestResult } from "../env.js";
 import type { GateDrop } from "../gates/types.js";

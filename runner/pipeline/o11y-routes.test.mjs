@@ -151,9 +151,7 @@ test("POST /telemetry/collect: a batch of 65 unique log records (over the DO sto
   await ctx.drain();
   assert.ok(res.status >= 200 && res.status < 300, `expected 2xx, got ${res.status}`);
 
-  // Assert the records actually reached storage — not just a 2xx, which
-  // `handleCollect`'s own catch can answer even when `ingest` threw
-  // and stored nothing.
+  // Assert the records actually reached storage, not just a 2xx.
   const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
   assert.ok(rowKeys.length > 0, "at least one row: entry must exist after a 65-unique-item batch");
   let totalRecords = 0;
@@ -537,7 +535,7 @@ test("POST /telemetry/collect: a batch mixing an AE-only accept, a stored accept
 });
 
 // `handleCollect` must not answer 2xx when `InboxWriter.ingest` threw and
-// nothing was committed — a batch that gets dropped on the floor must not
+// nothing was committed (it answers the deadline helper's 503 + Retry-After) — a batch that gets dropped on the floor must not
 // tell the client it succeeded (ADR §B.2: 2xx only after commit), and
 // Faro's own client only retries a non-2xx, so a 2xx here also means the
 // batch is gone for good, not just mis-reported.
@@ -559,7 +557,8 @@ test("POST /telemetry/collect: answers 5xx (not 2xx) when InboxWriter.ingest thr
       ctx,
     );
     await ctx.drain();
-    assert.ok(res.status >= 500, `expected a 5xx so the client retries, got ${res.status}`);
+    assert.equal(res.status, 503, "a rejected ingest is a retryable 503");
+    assert.ok(Number(res.headers.get("retry-after")) > 0);
 
     const rowKeys = [...doStorage._data.keys()].filter((k) => k.startsWith("row:"));
     assert.equal(rowKeys.length, 0, "nothing was committed — there must be no row: entry");
