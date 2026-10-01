@@ -15,6 +15,9 @@
 # duplicate, ADR-0041 §B.3).
 
 STOP_GRACE_SECONDS="${O11Y_STOP_GRACE_SECONDS:-30}"
+# Bounds the final Grafana wait so a Grafana that ignores SIGTERM cannot hold the
+# stop until the platform's SIGKILL (ADR-0041 §A, stop grace bound).
+GRAFANA_STOP_GRACE_SECONDS="${O11Y_GRAFANA_STOP_GRACE_SECONDS:-30}"
 
 # Loki's own `reject_old_samples_max_age: 7d` means a backlogged/reopened
 # record can write a NEW index table up to 7 days in the past; this bounds
@@ -158,8 +161,17 @@ run_stop_protocol() {
   if [ -n "${GRAFANA_PID:-}" ] && kill -0 "$GRAFANA_PID" 2>/dev/null; then
     log "sending SIGTERM to grafana (pid $GRAFANA_PID)"
     kill -TERM "$GRAFANA_PID" 2>/dev/null
-    wait "$GRAFANA_PID" 2>/dev/null
-    log "grafana exited with code $?"
+    local grafana_waited=0
+    while kill -0 "$GRAFANA_PID" 2>/dev/null && [ "$grafana_waited" -lt "$GRAFANA_STOP_GRACE_SECONDS" ]; do
+      sleep 1
+      grafana_waited=$((grafana_waited + 1))
+    done
+    if kill -0 "$GRAFANA_PID" 2>/dev/null; then
+      log "grafana did not exit within ${GRAFANA_STOP_GRACE_SECONDS}s of SIGTERM; exiting without it"
+    else
+      wait "$GRAFANA_PID" 2>/dev/null
+      log "grafana exited with code $?"
+    fi
   fi
 
   return "$marker_ok"
