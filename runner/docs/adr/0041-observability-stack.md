@@ -187,9 +187,11 @@ runs the same stop decision, unless a stop for that wake is already in flight.
 Grafana wait is limited to 30 s (`O11Y_GRAFANA_STOP_GRACE_SECONDS`), after which the script logs
 and exits with the marker decision it already made. The worst case is 240 s (pre-SIGTERM
 snapshot) + 120 s + 240 s (post-exit snapshot) + 30 s (marker PUT and HEAD) + 30 s ≈ 660 s.
-The Worker schedules a one-shot `destroy()` 780 s after `stop()`: 120 s above that worst case and
-120 s inside the platform's 15-minute SIGTERM-to-SIGKILL window (Cloudflare Containers
-architecture docs: SIGTERM, wait up to 15 minutes, then SIGKILL). It fires only if that wake's
+The Worker schedules a one-shot `destroy()` 780 s after `stop()`, 120 s above that worst case.
+Cloudflare documents a 15-minute (900 s) SIGTERM-to-SIGKILL window, but that is unverified for a
+Worker-initiated `signal()`/`stop()` and may apply only to platform-initiated shutdowns. The
+backstop is correct either way: it is a Worker-side `destroy()` that does not depend on that
+window, so the container is gone by 780 s whatever the platform does. It fires only if that wake's
 container is still running and no newer wake has started. A destroy before the marker leaves
 the wake unclean, so the ledger replays it, which is the safe direction.
 

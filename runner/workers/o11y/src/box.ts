@@ -56,7 +56,8 @@ const STOP_BACKSTOP_SCHEDULE = "stopBackstop";
 const STOP_BACKSTOP_FOR_STORAGE_KEY = "stopBackstopFor";
 const DRAIN_STEP_SCHEDULE = "drainStep";
 /** ADR-0041 §A stop grace bound: the shutdown script's worst case is ~660 s and the
- *  platform sends SIGKILL 900 s after SIGTERM; `destroy()` fires between the two. */
+ *  documented platform window is 900 s (unverified for Worker-initiated stops); this
+ *  Worker-side `destroy()` does not depend on it. */
 const STOP_BACKSTOP_MS = 780 * 1000;
 /** ADR §A: "after 4 hours awake regardless." */
 const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
