@@ -259,7 +259,7 @@ export async function drainKey(
     records = await deps.symbolicate(records, { deferTransient });
   } catch (err) {
     if (err instanceof TransientSymbolicateError) {
-      return { key, tenant, outcome: "deferred", deferral: "map_fetch_error", reason: `map_fetch_error: ${err.message}`, bytesPushed: 0, droppedOld };
+      return { key, tenant, outcome: "deferred", deferral: "map_fetch_error", reason: `map_fetch_error: ${err.message}`, bytesPushed: 0, droppedOld: 0 };
     }
     return {
       key,

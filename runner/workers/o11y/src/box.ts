@@ -51,7 +51,7 @@ const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
  *  minutes the Worker calls `stop()`." */
 const GRAFANA_QUIET_STOP_MS = 10 * 60 * 1000;
 /** Objects drained per `drainStep` invocation (one `alarm()`): bounds its CPU,
- *  and its subrequests at 10 inbox GETs + 10 × `MAX_MAP_KEYS_PER_CALL` map GETs
+ *  and its subrequests at 10 inbox GETs + 10 × `MAX_MAP_KEYS_PER_CALL` × 3 attempts of map GETs
  *  + 10 × `MAX_LISTED_VERSIONS_PER_CALL` × `MAP_LIST_MAX_PAGES` map lists
  *  + ~200 push attempts, far under the Workers limit of 10,000. */
 const DRAIN_BATCH_SIZE = 10;

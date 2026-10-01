@@ -629,7 +629,7 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   logged as `o11y.drain.error`): the key stays `written` and nothing is pushed for it, so
   a replay never sends an unsymbolicated copy first. The ledger counts no attempts, so the
   deferral lasts only while the key's inbox hour is under 6 hours old
-  (`MAP_RETRY_MAX_AGE_MS`); after that the key pushes with its frames as they are. A batch
+  (`MAP_RETRY_MAX_AGE_MS`); after that the key pushes with its frames as they are, so a replay is byte-stable only once the maps are final. A batch
   of only deferred keys ends the wake's drain once no un-excluded tenant has keys left.
 - **Symbolication read caps.** One inbox object reads at most 32 distinct maps
   (`MAX_MAP_KEYS_PER_CALL`, first-seen order), one body adds at most 8 of them
