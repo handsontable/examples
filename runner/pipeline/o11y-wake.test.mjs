@@ -286,6 +286,35 @@ test("drainStep past the threshold leaves a box with a visitor running and repor
   assert.equal(drainErrorPoints(ae).length, 1, "one point per wake, not one per step");
 });
 
+test("drainStep: a throw inside the not-ready path records an error point and runs the post-drain stop decision", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const { box, wake, ae, scheduled, stops } = await notReadyBox({ since: 2 * MIN });
+  const put = box.ctx.storage.put.bind(box.ctx.storage);
+  box.ctx.storage.put = async (key, value) => {
+    if (key === "notReadySince") throw new Error("storage unavailable");
+    return put(key, value);
+  };
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(drainErrorPoints(ae).length, 1, "the throw is reported like any other drainStep error");
+  assert.equal(stops(), 1, "a quiet box is stopped by the same fallback");
+  assert.equal(scheduled.length, 0);
+});
+
+test("drainStep: when the not-ready path and its fallback both throw, it still reschedules", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const { box, wake, scheduled } = await notReadyBox({ since: 2 * MIN });
+  const put = box.ctx.storage.put.bind(box.ctx.storage);
+  box.ctx.storage.put = async (key, value) => {
+    if (key === "notReadySince") throw new Error("storage unavailable");
+    return put(key, value);
+  };
+  hooks.stop = async () => {
+    throw new Error("stop failed");
+  };
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.deepEqual(scheduled.map((s) => s.callback), ["drainStep"]);
+});
+
 test("drainStep ends its chain when the container is no longer running", async () => {
   const { box, wake, scheduled } = await notReadyBox();
   box._state = { status: "stopped", lastChange: Date.now() };

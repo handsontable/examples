@@ -653,12 +653,6 @@ export class GrafanaBox extends Container<Env> {
     const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
     if (current?.wakeId !== payload.wakeId) return;
 
-    if (!(await this.isReady())) {
-      await this.#notReadyStep(payload.wakeId, current);
-      return;
-    }
-    if (await this.ctx.storage.get(NOT_READY_STORAGE_KEY)) await this.ctx.storage.delete(NOT_READY_STORAGE_KEY);
-
     const startedAt = Date.now();
     // Fills in whether this batch replayed a reopened key, read back in the
     // catch below so an error point reports `reason: "reopen"` too (not
@@ -666,6 +660,11 @@ export class GrafanaBox extends Container<Env> {
     // so this is the only chance to observe it once anything below throws.
     const reopenState: { replayed: boolean } = { replayed: false };
     try {
+      if (!(await this.isReady())) {
+        await this.#notReadyStep(payload.wakeId, current);
+        return;
+      }
+      if (await this.ctx.storage.get(NOT_READY_STORAGE_KEY)) await this.ctx.storage.delete(NOT_READY_STORAGE_KEY);
       await this.#drainStepBody(payload, current, startedAt, reopenState);
     } catch (err) {
       // Any throw here (an R2 get, an InboxWriter RPC, or a symbolication
