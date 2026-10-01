@@ -117,7 +117,7 @@ test.describe("o11y local end-to-end", () => {
   let apiServer: ChildProcess;
 
   test.beforeAll(async () => {
-    test.setTimeout(360_000);
+    test.setTimeout(API_BOOT_TIMEOUT_MS + 120_000);
 
     const o11yUp = await fetch(O11Y_BASE_URL).then(() => true).catch(() => false);
     if (!o11yUp) {

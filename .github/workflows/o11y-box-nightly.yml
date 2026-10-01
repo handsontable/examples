@@ -38,7 +38,7 @@ jobs:
           node-version: 22
 
       - name: Build the box image
-        run: docker compose -f runner/containers/o11y/compose.yml build box
+        run: docker compose -p o11y-stop-roundtrip -f runner/containers/o11y/compose.yml build box
 
       - name: Stop round-trip against the compose stack
         run: node runner/containers/o11y/local/stop-roundtrip.mjs
