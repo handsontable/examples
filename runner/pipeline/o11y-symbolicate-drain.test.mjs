@@ -489,7 +489,23 @@ test("more than MAX_LISTED_VERSIONS_PER_CALL distinct versions list only that ma
   assert.deepEqual(over.map((s) => [s.key, s.frames]), versions.slice(MAX_LISTED_VERSIONS_PER_CALL).map((v) => [`sourcemaps/${v}/`, 1]));
 });
 
-test("a listing that throws falls back to admitting by the caps, and is reported as list_error", async () => {
+test("deferTransient: a listing that throws defers the object instead of admitting by the caps", async () => {
+  const reads = [];
+  await assert.rejects(
+    symbolicateResourceLogs([exceptionRecord([frame("app.js", 1, 1)])], {
+      listMaps: async () => {
+        throw new Error("R2 list timed out");
+      },
+      getMap: async (key) => (reads.push(key), ONE_MAPPING_MAP),
+      deferTransient: true,
+      onSkip() {},
+    }),
+    (err) => err instanceof TransientSymbolicateError && err.keys.join() === "sourcemaps/cafe1234/" && /list timed out/.test(err.message),
+  );
+  assert.deepEqual(reads, [], "nothing is read once the listing is known to be unreliable");
+});
+
+test("without deferTransient a listing that throws falls back to admitting by the caps, and is reported as list_error", async () => {
   const reads = [];
   const { out, calls } = await collectSkips([exceptionRecord([frame("app.js", 1, 1)])], null, {
     listMaps: async () => {

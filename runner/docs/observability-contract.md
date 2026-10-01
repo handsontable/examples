@@ -652,7 +652,12 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   `service.version` is client-supplied, so a call lists at most 8 versions
   (`MAX_LISTED_VERSIONS_PER_CALL`); frames of the rest stay as they were and are
   reported per version prefix as `over_version_cap`. A list that throws (or runs past
-  5 pages) is reported as `list_error` and that version falls back to the caps above.
+  5 pages) is reported as `list_error`; while the key is under 6 hours old
+  (`MAP_RETRY_MAX_AGE_MS`) the object is deferred like a failing map read, so a replay
+  never admits by the caps what the first pass admitted by the listing, and past that age
+  the version falls back to the caps above. The per-call version cap is a stated residual
+  risk, not closed: at least 8 forged requests with distinct `service.version` packed ahead
+  of a real one can still push that real version to `over_version_cap`.
 
 ## 9. Lite beacon payload
 

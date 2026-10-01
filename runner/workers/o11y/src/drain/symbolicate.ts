@@ -143,7 +143,7 @@ export const MAX_LISTED_VERSIONS_PER_CALL = 8;
 export class TransientSymbolicateError extends Error {
   readonly keys: readonly string[];
   constructor(keys: readonly string[], detail: string) {
-    super(`${keys.length} map read(s) failed: ${keys.slice(0, 3).join(", ")}: ${detail}`);
+    super(`${keys.length} map read(s) or listing(s) failed: ${keys.slice(0, 3).join(", ")}: ${detail}`);
     this.name = "TransientSymbolicateError";
     this.keys = keys;
   }
@@ -170,7 +170,8 @@ export interface SymbolicateDeps {
   /** The keys that exist under `prefix` (`sourcemaps/<service.version>/`),
    *  called once per distinct version before any read: a forged frame path
    *  then costs no `getMap`. Absent, or throwing, falls back to admitting
-   *  keys by the caps alone (a throw is reported as `list_error`). */
+   *  keys by the caps alone (a throw is reported as `list_error`, or defers
+   *  the object when `deferTransient` is set). */
   listMaps?(prefix: string): Promise<Set<string>>;
   /** Throw {@link TransientSymbolicateError} when a map read still fails after
    *  its retries, instead of leaving the frames unresolved. */
@@ -458,10 +459,16 @@ function serviceVersionOf(record: OtlpResourceLogs): string | null {
 
 /** Lists each distinct `service.version` that has a resolvable frame, in
  *  first-seen order, up to {@link MAX_LISTED_VERSIONS_PER_CALL}; the rest are
- *  marked `over_cap`. A list that throws leaves its version `unlisted`. */
-async function listVersions(records: readonly OtlpResourceLogs[], deps: SymbolicateDeps, state: PlanState): Promise<void> {
+ *  marked `over_cap`. A list that throws leaves its version `unlisted` and is
+ *  returned, so the caller can defer the object. */
+async function listVersions(
+  records: readonly OtlpResourceLogs[],
+  deps: SymbolicateDeps,
+  state: PlanState,
+): Promise<{ prefix: string; detail: string }[]> {
+  const failures: { prefix: string; detail: string }[] = [];
   const { listMaps } = deps;
-  if (!listMaps) return;
+  if (!listMaps) return failures;
   const versions: string[] = [];
   for (const record of records) {
     if (!isExceptionRecord(record)) continue;
@@ -489,8 +496,10 @@ async function listVersions(records: readonly OtlpResourceLogs[], deps: Symbolic
     } catch (err) {
       state.listings.set(serviceVersion, { kind: "unlisted" });
       state.versionSkips.set(prefix, { key: prefix, reason: "list_error", frames: 0, detail: errorDetail(err) });
+      failures.push({ prefix, detail: errorDetail(err) });
     }
   }
+  return failures;
 }
 
 /**
@@ -510,7 +519,13 @@ export async function symbolicateResourceLogs(
   const { admitted, stats } = state;
   const plans = new Map<object, PlannedBody>();
 
-  await listVersions(records, deps, state);
+  const listFailures = await listVersions(records, deps, state);
+  // Admitting by the caps alone could resolve different frames on a replay, so a
+  // failed listing defers the object like a failed read.
+  const [firstListFailure] = listFailures;
+  if (firstListFailure && deps.deferTransient) {
+    throw new TransientSymbolicateError(listFailures.map((f) => f.prefix), firstListFailure.detail);
+  }
 
   for (const record of records) {
     if (!isExceptionRecord(record)) continue;
