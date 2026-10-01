@@ -55,10 +55,9 @@ const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
 /** ADR §A stop protocol: "if no Grafana request arrived in the last 10
  *  minutes the Worker calls `stop()`." */
 const GRAFANA_QUIET_STOP_MS = 10 * 60 * 1000;
-/** Objects drained per `drainStep` invocation (one `alarm()`): bounds its CPU,
- *  and its subrequests at 10 inbox GETs + 10 × `MAX_MAP_KEYS_PER_CALL` × 3 attempts of map GETs
- *  + 10 × `MAX_LISTED_VERSIONS_PER_CALL` × `MAP_LIST_MAX_PAGES` map lists
- *  + ~200 push attempts, far under the Workers limit of 10,000. */
+/** Objects per `drainStep` (one `alarm()`), bounding CPU and subrequests: 10 inbox GETs,
+ *  10 × `MAX_MAP_KEYS_PER_CALL` × 3 map GETs, 10 × `MAX_LISTED_VERSIONS_PER_CALL` ×
+ *  `MAP_LIST_MAX_PAGES` lists and ~200 pushes stay far under the Workers limit of 10,000. */
 const DRAIN_BATCH_SIZE = 10;
 /** List pages of `limit: 1000` one `service.version` prefix may take. */
 const MAP_LIST_MAX_PAGES = 5;
