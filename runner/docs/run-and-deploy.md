@@ -181,7 +181,9 @@ claim to; `dev.mjs` always sets it to `http://localhost:<O11Y_DEV_PORT>`
 (Grafana is served from the o11y worker's own origin, not proxied through
 the authoring app), which matters once you override `O11Y_DEV_PORT` away
 from its default — `publicOrigin`'s own built-in fallback assumes the
-default port.
+default port. `O11Y_SLEEP_AFTER` (e.g. `20s`) is the one local-only
+`--var` that shortens `GrafanaBox`'s 15-minute idle window; only
+`containers/o11y/local/idle-stop.mjs` sets it, and production ignores it.
 
 **Migrations.** `dev.mjs` applies every `workers/api/migrations/NNNN_*.sql`
 file (currently `0001` through `0008`) one `wrangler d1 execute --local
