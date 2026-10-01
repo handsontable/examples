@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 // containers/o11y/local/prod-datasource-check.mjs
-//
 // Boots the real box image with PRODUCTION-shaped ClickHouse env (header names
 // and values empty, as GrafanaBox sets them) and checks the bare datasource
 // variant was provisioned: every other automated boot sets both header names
