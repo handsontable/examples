@@ -356,10 +356,17 @@ unchanged.
 
 `example.saved` is written by the API worker when an editor Save (`PATCH /api/demos/:id`
 with `files`) finishes its rebuild, because the rebuild can outlast the visitor's stay on
-the page. It carries the same values the browser's other `example.*` events do for a saved
-demo: `kind=saved`, `ref` = the demo id, `framework` = the demo row's, and `ht_major` = the
-body's `exampleHtMajor`, which is the major the editor opened the demo at. `area` and
-`bucket` stay empty. `blob1`/`blob2` name `demos-api`.
+the page. It is attributed to the example the demo came from, resolved from the row's
+`forked_from` (a bare demo id is followed up to 5 saved-demo hops, with a cycle guard): a
+docs fork gives `kind=docs`, `ref` = the guide, `area` = its first breadcrumb element and
+`bucket` from the lineage (the same values the example's `example.open` carried, from the
+taxonomy `workers/api/src/docs-taxonomy.generated.ts` bundles); a starter fork gives
+`kind=starter`, `ref` = the framework key; import and payload forks give their own kind and
+source. Where nothing resolves (an MCP demo, a docs path missing from the bundled taxonomy,
+a broken or looping lineage, a failed lineage read) it falls back to `kind=saved`, `ref` =
+the demo id, and empty `area`/`bucket`. `framework` is the demo row's and `ht_major` is the
+body's `exampleHtMajor`, the major the editor opened the demo at. `blob1`/`blob2` name
+`demos-api`.
 
 What gates the count is a successful rebuild whose request carries a valid
 `exampleHtMajor` (one of §3's `ht_major` values), whoever sends it. The editor sends the

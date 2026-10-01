@@ -85,6 +85,7 @@ import {
   emitPoint,
   emitPoolGauge,
   exampleSavedAttrs,
+  resolveExampleSource,
   logCronTickLine,
   logErrorLine,
   logRequestLine,
@@ -1865,7 +1866,14 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           const rebuildDenied = await budgetGate(env, { isAuthenticated: async () => true, what: `rebuild ${row.framework}` });
           if (rebuildDenied) return rebuildDenied;
           await recordUsageEvent(env, "build", row.framework);
-          const savedAttrs = exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor);
+          // Attributed to the example this demo came from (ADR-0042 §2), so the funnel's
+          // "saved" lands on its guide's row. The lineage read is skipped when the point
+          // will not be written, and a failed read only costs the attribution.
+          let savedAttrs = exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor);
+          if (savedAttrs) {
+            const source = await resolveExampleSource(row.forked_from, async (parentId) => (await getDemo(env, parentId))?.forked_from).catch(() => null);
+            savedAttrs = exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor, source);
+          }
           // Registered with `waitUntil` so a visitor leaving mid-rebuild (8–9 s) does not
           // cancel the save or its point; still awaited, so a failure reaches the 5xx path.
           const saved = updateDemo(env, {
