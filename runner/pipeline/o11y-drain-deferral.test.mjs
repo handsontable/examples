@@ -58,7 +58,7 @@ function mapStorage() {
 }
 
 /** `deferredCount` browser keys whose map read throws, then `plainCount` worker keys. */
-async function setup({ deferredCount, plainCount = 1, visitor = false, failMode = "map" }) {
+async function setup({ deferredCount, plainCount = 1, visitor = false, failMode = "map", deferredKeysMax }) {
   Object.assign(hooks, defaultHooks());
   hooks.start = async (self) => {
     self._state = { status: "running", lastChange: Date.now() };
@@ -125,6 +125,7 @@ async function setup({ deferredCount, plainCount = 1, visitor = false, failMode 
   };
   const ctx = { storage: mapStorage(), waitUntil: (p) => Promise.resolve(p).catch(() => {}) };
   const box = new GrafanaBox(ctx, boxEnv);
+  if (deferredKeysMax !== undefined) box.deferredKeysMax = deferredKeysMax;
   // The writer's wake resolution asks the box whether it is awake.
   env.GRAFANA_BOX = { jurisdiction() { return this; }, getByName: () => ({ isAwake: () => box.isAwake() }) };
   const scheduled = [];
@@ -194,4 +195,14 @@ test("everything left deferred with no visitor ends the chain and stops the box"
 
   assert.equal(s.scheduled.filter((c) => c.callback === "drainStep").length, 0);
   assert.equal(s.stops(), 1);
+});
+
+test("a visitor-held box still rechecks when the deferred set is full and a whole batch defers", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const s = await setup({ deferredCount: 10, visitor: true, deferredKeysMax: 3 });
+  await s.runSteps();
+
+  const recheck = s.scheduled.find((c) => c.callback === "drainStep");
+  assert.ok(recheck, "the chain continues while a visitor holds the box");
+  assert.ok(recheck.when.getTime() - Date.now() >= PAUSED_RECHECK_MS - 5000, "as a slow recheck");
 });
