@@ -37,6 +37,11 @@ const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
 /** `{ wakeId, tenants }`: tenants that hit Loki's stream limit in this wake,
  *  whose keys later steps skip, because the ingester keeps its streams until it stops. */
 const STREAM_LIMITED_STORAGE_KEY = "streamLimitedTenants";
+/** `{ wakeId, keys }`: keys the drain deferred in this wake (a failing map or
+ *  inbox read), skipped by later steps so they cannot starve the batch. */
+const DEFERRED_KEYS_STORAGE_KEY = "deferredKeys";
+/** Bounds the persisted deferred set; keys past it are simply retried each step. */
+const DEFERRED_KEYS_MAX = 1000;
 /** The wakeId whose wake-to-ready time was already reported to InboxWriter,
  *  so only a wake's first successful `isReady()` reports it. */
 const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
@@ -50,10 +55,9 @@ const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
 /** ADR §A stop protocol: "if no Grafana request arrived in the last 10
  *  minutes the Worker calls `stop()`." */
 const GRAFANA_QUIET_STOP_MS = 10 * 60 * 1000;
-/** Objects drained per `drainStep` invocation (one `alarm()`): bounds its CPU,
- *  and its subrequests at 10 inbox GETs + 10 × `MAX_MAP_KEYS_PER_CALL` × 3 attempts of map GETs
- *  + 10 × `MAX_LISTED_VERSIONS_PER_CALL` × `MAP_LIST_MAX_PAGES` map lists
- *  + ~200 push attempts, far under the Workers limit of 10,000. */
+/** Objects per `drainStep` (one `alarm()`), bounding CPU and subrequests: 10 inbox GETs,
+ *  10 × `MAX_MAP_KEYS_PER_CALL` × 3 map GETs, 10 × `MAX_LISTED_VERSIONS_PER_CALL` ×
+ *  `MAP_LIST_MAX_PAGES` lists and ~200 pushes stay far under the Workers limit of 10,000. */
 const DRAIN_BATCH_SIZE = 10;
 /** List pages of `limit: 1000` one `service.version` prefix may take. */
 const MAP_LIST_MAX_PAGES = 5;
@@ -648,12 +652,6 @@ export class GrafanaBox extends Container<Env> {
     const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
     if (current?.wakeId !== payload.wakeId) return;
 
-    if (!(await this.isReady())) {
-      await this.#notReadyStep(payload.wakeId, current);
-      return;
-    }
-    if (await this.ctx.storage.get(NOT_READY_STORAGE_KEY)) await this.ctx.storage.delete(NOT_READY_STORAGE_KEY);
-
     const startedAt = Date.now();
     // Fills in whether this batch replayed a reopened key, read back in the
     // catch below so an error point reports `reason: "reopen"` too (not
@@ -661,6 +659,11 @@ export class GrafanaBox extends Container<Env> {
     // so this is the only chance to observe it once anything below throws.
     const reopenState: { replayed: boolean } = { replayed: false };
     try {
+      if (!(await this.isReady())) {
+        await this.#notReadyStep(payload.wakeId, current);
+        return;
+      }
+      if (await this.ctx.storage.get(NOT_READY_STORAGE_KEY)) await this.ctx.storage.delete(NOT_READY_STORAGE_KEY);
       await this.#drainStepBody(payload, current, startedAt, reopenState);
     } catch (err) {
       // Any throw here (an R2 get, an InboxWriter RPC, or a symbolication
@@ -712,7 +715,9 @@ export class GrafanaBox extends Container<Env> {
     let record = await this.ctx.storage.get<{ wakeId: string; since: number; gaveUp?: boolean }>(NOT_READY_STORAGE_KEY);
     if (record?.wakeId !== wakeId) record = { wakeId, since: now };
     const notReadyForMs = now - record.since;
-    if (notReadyForMs >= NOT_READY_GIVE_UP_MS && !record.gaveUp) {
+    // A stop already in flight also reads as not ready; the box is going down.
+    const giveUp = notReadyForMs >= NOT_READY_GIVE_UP_MS && (await this.ctx.storage.get<string>(STOPPING_FOR_STORAGE_KEY)) !== wakeId;
+    if (giveUp && !record.gaveUp) {
       record.gaveUp = true;
       writeBoxPoint(
         this.env,
@@ -726,7 +731,7 @@ export class GrafanaBox extends Container<Env> {
       );
     }
     await this.ctx.storage.put(NOT_READY_STORAGE_KEY, record);
-    if (notReadyForMs >= NOT_READY_GIVE_UP_MS && !(await this.#finishDrain(wakeId))) return;
+    if (giveUp && !(await this.#finishDrain(wakeId))) return;
     await this.schedule(new Date(now + notReadyGapMs(notReadyForMs)), DRAIN_STEP_SCHEDULE, { wakeId });
   }
 
@@ -760,10 +765,17 @@ export class GrafanaBox extends Container<Env> {
     }
     const limitedRecord = await this.ctx.storage.get<{ wakeId: string; tenants: Tenant[] }>(STREAM_LIMITED_STORAGE_KEY);
     const streamLimited = new Set<Tenant>(limitedRecord?.wakeId === payload.wakeId ? limitedRecord.tenants : []);
-    const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE, [...streamLimited]);
+    const deferredRecord = await this.ctx.storage.get<{ wakeId: string; keys: string[] }>(DEFERRED_KEYS_STORAGE_KEY);
+    const deferredKeys = new Set<string>(deferredRecord?.wakeId === payload.wakeId ? deferredRecord.keys : []);
+    const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE, [...streamLimited], [...deferredKeys]);
 
     if (keys.length === 0) {
-      await this.#finishDrain(payload.wakeId);
+      // Only deferred keys are left. A visitor keeps the box up past this
+      // step, so poll slowly with a clean slate; otherwise the wake is done.
+      if ((await this.#finishDrain(payload.wakeId)) && deferredKeys.size > 0) {
+        await this.ctx.storage.delete(DEFERRED_KEYS_STORAGE_KEY);
+        await this.schedule(new Date(Date.now() + PAUSED_DRAIN_RECHECK_MS), DRAIN_STEP_SCHEDULE, payload);
+      }
       return;
     }
 
@@ -850,9 +862,15 @@ export class GrafanaBox extends Container<Env> {
     const droppedOld = result.outcomes.reduce((sum, o) => sum + o.droppedOld, 0);
     // Deferred keys stay `written`; the rest of the batch still commits.
     const deferred = result.outcomes.filter((o) => o.outcome === "deferred");
+    const sizeBefore = deferredKeys.size;
     for (const d of deferred) {
       if (d.deferral !== "fetch_error" && d.deferral !== "map_fetch_error") continue;
       console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, key: d.key, message: d.reason }));
+      if (deferredKeys.size < DEFERRED_KEYS_MAX) deferredKeys.add(d.key);
+    }
+    const newlyDeferred = deferredKeys.size > sizeBefore;
+    if (newlyDeferred) {
+      await this.ctx.storage.put(DEFERRED_KEYS_STORAGE_KEY, { wakeId: payload.wakeId, keys: [...deferredKeys] });
     }
 
     if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
@@ -890,8 +908,9 @@ export class GrafanaBox extends Container<Env> {
 
     // A batch of only deferred keys would come back unchanged on every step,
     // so it ends this wake's drain like a Loki outage does — unless a tenant
-    // was just limited, whose exclusion lets the next step reach the other one.
-    if (result.stoppedEarly || (deferred.length === result.outcomes.length && newlyLimited.length === 0)) {
+    // was just limited or a key just deferred, whose exclusion lets the next
+    // step reach the rest.
+    if (result.stoppedEarly || (deferred.length === result.outcomes.length && newlyLimited.length === 0 && !newlyDeferred)) {
       // Everything from here on stays `written` for the next wake to
       // retry (a possibly-recovered Loki by then) — but this wake itself
       // is done trying, so run the same post-drain stop decision.

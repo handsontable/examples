@@ -302,20 +302,24 @@ export async function computeBacklog(
  * within a tenant by construction, so this satisfies "re-opened keys
  * first" without a separate flag — a re-opened key is always older than
  * any key from the current wake. `excludeTenants` (tenants the drain found
- * stream-limited this wake) are skipped before the limit applies, so the
- * batch fills with the other tenant's keys.
+ * stream-limited this wake) and `excludeKeys` (keys the drain deferred this
+ * wake) are skipped before the limit applies, so the batch fills with the
+ * keys that can still make progress.
  */
 export async function nextWrittenKeys(
   storage: StorageLike,
   limit: number,
   excludeTenants: readonly string[] = [],
+  excludeKeys: readonly string[] = [],
 ): Promise<string[]> {
   const keys = await storage.list<InboxKeyState>({ prefix: KEY_PREFIX });
   const excludedPrefixes = excludeTenants.map((t) => `inbox/${t}/`);
+  const excludedKeys = new Set(excludeKeys);
   const written: string[] = [];
   for (const [storageKey, state] of keys) {
     if (state !== "written") continue;
     const inboxKey = inboxKeyOf(storageKey);
+    if (excludedKeys.has(inboxKey)) continue;
     if (excludedPrefixes.some((prefix) => inboxKey.startsWith(prefix))) continue;
     written.push(inboxKey);
   }

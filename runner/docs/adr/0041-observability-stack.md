@@ -178,7 +178,9 @@ wake that ends without ever having a `provisional` key (an empty backlog, or a
 Grafana-visit-only wake with nothing to drain) never gets an index upload and so never
 gets a marker — that is expected, not an unclean stop, and the ledger now resolves such a
 wake as clean without requiring one. A wake that *did* push data still requires the real
-marker.
+marker. A box that stays not ready for 10 minutes after its wake began (Loki never
+answers its readiness probe) is a further stop trigger: the drain reports one error and
+runs the same stop decision, unless a stop for that wake is already in flight.
 
 **Waking page**: the Handsontable logo, one line of text, `<meta http-equiv="refresh"
 content="3">`, no script, served by the Worker while the box is not ready.
@@ -302,8 +304,9 @@ describes, so backlog and state are readable without starting the container. Eac
   `400` (for example `too_far_behind`) is logged with Loki's message. Two cases defer a
   key instead (it stays `written`, nothing is rejected, the batch goes on): a `429` whose
   body names Loki's stream limit, which is never retried, and an inbox object that
-  cannot be read. A stream-limited tenant's keys are skipped for the rest of the wake so
-  the other tenant keeps draining (contract §8, "Drain refusals"). A single too-old
+  cannot be read (a failing source-map read defers the same way). A stream-limited
+  tenant's keys, and every deferred key, are skipped for the rest of the wake so the keys
+  behind them keep draining (contract §8, "Drain refusals"). A single too-old
   record inside an otherwise-good packed object does not 400 (and so reject) the whole
   key — `drainKey` drops individual log records older than `reject_old_samples_max_age`
   minus a margin *before* pushing, counts

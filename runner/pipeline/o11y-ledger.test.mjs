@@ -332,6 +332,14 @@ test("nextWrittenKeys pages past an excluded tenant before the limit, so the bat
   assert.deepEqual(await nextWrittenKeys(storage, 10, ["browser", "worker"]), []);
 });
 
+test("nextWrittenKeys skips excluded keys before the limit, so the batch fills with the keys behind them", async () => {
+  const storage = memoryStorage();
+  const keys = Array.from({ length: 14 }, (_, i) => `inbox/worker/2026-01-01/00/${String(i).padStart(12, "0")}.ndjson.gz`);
+  await storage.put(Object.fromEntries(keys.map((k) => [inboxKeyStorageKey(k), "written"])));
+
+  assert.deepEqual(await nextWrittenKeys(storage, 10, [], keys.slice(0, 4)), keys.slice(4, 14));
+});
+
 test("markKeysProvisional / rejectKey write the exact ledger states ADR §B.3 defines", async () => {
   const storage = memoryStorage();
   const key = "inbox/worker/2026-01-01/00/000000000000.ndjson.gz";
