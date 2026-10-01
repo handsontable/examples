@@ -50,7 +50,14 @@ const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
  *  not ready, and whether the give-up was already reported. Per wake. */
 const NOT_READY_STORAGE_KEY = "notReadySince";
 const HARD_CAP_SCHEDULE = "hardCapStop";
+const STOP_BACKSTOP_SCHEDULE = "stopBackstop";
+/** The wakeId whose stop already has a backstop scheduled, so repeated `stop()` calls
+ *  (idle timer, drain end, hard cap) schedule it once. */
+const STOP_BACKSTOP_FOR_STORAGE_KEY = "stopBackstopFor";
 const DRAIN_STEP_SCHEDULE = "drainStep";
+/** ADR-0041 §A stop grace bound: the shutdown script's worst case is ~660 s and the
+ *  platform sends SIGKILL 900 s after SIGTERM; `destroy()` fires between the two. */
+const STOP_BACKSTOP_MS = 780 * 1000;
 /** ADR §A: "after 4 hours awake regardless." */
 const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
 /** ADR §A stop protocol: "if no Grafana request arrived in the last 10
@@ -268,6 +275,7 @@ export class GrafanaBox extends Container<Env> {
   wakeWaitMs = WAKE_WAIT_MS;
   startDeadlineMs = START_DEADLINE_MS;
   lokiPushTimeoutMs = LOKI_PUSH_TIMEOUT_MS;
+  stopBackstopMs = STOP_BACKSTOP_MS;
   deferredKeysMax = DEFERRED_KEYS_MAX;
   /** When an `isReady()` probe first ran out of time with no probe settling
    *  since. In memory only: a fresh instance starts clean. */
@@ -473,6 +481,28 @@ export class GrafanaBox extends Container<Env> {
       await this.ctx.storage.delete(STOPPING_FOR_STORAGE_KEY);
       throw err;
     }
+    if (wake) await this.#scheduleStopBackstop(wake.wakeId);
+  }
+
+  /** One `destroy()` per wake, `stopBackstopMs` after its first `stop()`. A failure to
+   *  schedule is logged, never thrown: the SIGTERM was already sent. */
+  async #scheduleStopBackstop(wakeId: string): Promise<void> {
+    try {
+      if ((await this.ctx.storage.get<string>(STOP_BACKSTOP_FOR_STORAGE_KEY)) === wakeId) return;
+      await this.schedule(new Date(Date.now() + this.stopBackstopMs), STOP_BACKSTOP_SCHEDULE, { wakeId });
+      await this.ctx.storage.put(STOP_BACKSTOP_FOR_STORAGE_KEY, wakeId);
+    } catch (err) {
+      console.error("GrafanaBox: could not schedule the stop backstop", err);
+    }
+  }
+
+  /** {@link STOP_BACKSTOP_SCHEDULE}'s callback. Destroys the container only if it still
+   *  runs under the wake that asked to stop; a newer wake or a finished stop is left alone. */
+  async stopBackstop(payload: { wakeId: string }): Promise<void> {
+    const current = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY);
+    if (current?.wakeId !== payload.wakeId) return;
+    const state = await this.getState();
+    if (state.status === "running" || state.status === "healthy") await this.destroy();
   }
 
   /** {@link HARD_CAP_SCHEDULE}'s callback. A no-op if a newer wake has
