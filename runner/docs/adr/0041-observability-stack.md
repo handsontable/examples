@@ -265,7 +265,9 @@ counted as `duplicate`, so a committed batch can go uncounted as `accepted`. Clo
 exporter is undocumented on its timeout, retry count and backoff, whether it back-pressures the
 source Worker, and what it treats as a failure; that stays a known unknown, watched passively
 through the "Observability self" dashboard's `o11y.ingest` outcome panel. `/telemetry/collect`
-keeps its own catch (`500`, `invalid_item`) and has no deadline yet.
+uses the same deadline; its own catch (`500`, `invalid_item`) remains only as a backstop for
+Faro body processing. Invalid and oversize records and Analytics Engine points for items without
+an inbox item are written before ingest, so a Faro retry after a timeout can double-count them.
 
 Analytics Engine points for browser metrics are written by the route handler after step 3
 (§F.1), so they exist while the box sleeps. `example.*` events (ADR-0042) produce Analytics Engine points only

@@ -1,5 +1,5 @@
-// The ingest routes that await `InboxWriter.ingest` with no other catch
-// (`v1/logs`, `deploy`, `hooks/sentry`) must fail visibly: a Durable Object
+// Every ingest route (`collect`, `v1/logs`, `deploy`, `hooks/sentry`) must
+// fail visibly: a Durable Object
 // call that never resolves answers 503 + Retry-After after the deadline, one
 // that rejects answers 503 at once, and both write an `o11y.ingest` dropped
 // point. Driven through the real default export, with only the DO stub faked.
@@ -21,8 +21,27 @@ const { hmacSha256Hex } = await import("../workers/o11y/src/gates/util.ts");
 
 const FIXTURES = fileURLToPath(new URL("./fixtures/otlp/", import.meta.url));
 const fixture = (name) => readFileSync(`${FIXTURES}${name}`, "utf8");
+const FARO = fileURLToPath(new URL("./fixtures/faro/", import.meta.url));
+
+/** A Faro log stamped once at load: current enough to pass the timestamp gate,
+ *  fixed so a redelivery hashes to the same record. */
+const FARO_LOG_BODY = (() => {
+  const body = JSON.parse(readFileSync(`${FARO}log.json`, "utf8"));
+  for (const item of body.logs ?? []) item.timestamp = new Date().toISOString();
+  return JSON.stringify(body);
+})();
 
 const ROUTES = {
+  collect: {
+    path: "/telemetry/collect",
+    async request() {
+      return new Request("https://demos.handsontable.com/telemetry/collect", {
+        method: "POST",
+        headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+        body: FARO_LOG_BODY,
+      });
+    },
+  },
   "v1/logs": {
     path: "/telemetry/v1/logs",
     async request(env) {
