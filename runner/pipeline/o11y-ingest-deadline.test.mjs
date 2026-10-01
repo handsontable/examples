@@ -103,13 +103,16 @@ async function until(cond) {
 for (const [name, route] of Object.entries(ROUTES)) {
   test(`${name}: a writer that never resolves answers 503 + Retry-After after the deadline and writes a dropped ingest_timeout point`, async () => {
     const { env, ae, inboxWriterInstance } = makeEnv(InboxWriter);
-    const calls = withStub(env, inboxWriterInstance, () => new Promise(() => {}));
+    let abandon;
+    const calls = withStub(env, inboxWriterInstance, () => new Promise((_, reject) => (abandon = reject)));
     mock.timers.enable({ apis: ["setTimeout"] });
     try {
       const pending = worker.fetch(await route.request(env), env, ctx);
       await until(() => calls.length === 1);
       mock.timers.tick(INGEST_DEADLINE_MS);
       const res = await pending;
+      // The abandoned call is kept alive by `waitUntil`; settle it so the drain can finish.
+      abandon(new Error("abandoned"));
       await ctx.drain();
       assert.equal(res.status, 503);
       assert.ok(Number(res.headers.get("retry-after")) > 0, "Retry-After must be a positive number of seconds");
@@ -211,4 +214,85 @@ test("v1/logs: a commit whose reply is lost counts as ingest_timeout, then only 
     { outcome: "dropped", reason: "ingest_timeout" },
     { outcome: "duplicate", reason: "v1/logs" },
   ]);
+});
+
+// Browser metrics and `example.*` events reach Analytics Engine only through
+// the inbox outcome, so a commit that lands after the deadline must still
+// write their points, once, even though the client was answered 503.
+const METRIC_BODY = (() => {
+  const measurement = JSON.parse(readFileSync(`${FARO}measurement.json`, "utf8"));
+  const example = JSON.parse(readFileSync(`${FARO}example-open.json`, "utf8"));
+  const body = { meta: measurement.meta, measurements: measurement.measurements, events: example.events };
+  for (const item of [...body.measurements, ...body.events]) item.timestamp = new Date().toISOString();
+  return JSON.stringify(body);
+})();
+
+const metricRequest = () =>
+  new Request("https://demos.handsontable.com/telemetry/collect", {
+    method: "POST",
+    headers: { Origin: "https://demos.handsontable.com", "content-type": "application/json" },
+    body: METRIC_BODY,
+  });
+
+const metricPoints = (ae) => ae.points.filter((p) => p.indexes[0] !== "o11y.ingest");
+
+async function timeOut(env, calls) {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    const pending = worker.fetch(metricRequest(), env, ctx);
+    await until(() => calls.length === 1);
+    mock.timers.tick(INGEST_DEADLINE_MS);
+    return await pending;
+  } finally {
+    mock.timers.reset();
+  }
+}
+
+async function inTimeMetricPoints() {
+  const { env, ae, inboxWriterInstance } = makeEnv(InboxWriter);
+  withStub(env, inboxWriterInstance, (real, ...args) => real.ingest(...args));
+  assert.equal((await worker.fetch(metricRequest(), env, ctx)).status, 204);
+  await ctx.drain();
+  return metricPoints(ae);
+}
+
+test("collect: an ingest that resolves in time writes each metric point exactly once", async () => {
+  const points = await inTimeMetricPoints();
+  assert.ok(points.length >= 2, "the body must produce points for both a measurement and an example event");
+  assert.equal(new Set(points.map((p) => JSON.stringify(p))).size, points.length);
+});
+
+test("collect: metric points of an ingest that commits after the deadline are written once, and the client still gets 503", async () => {
+  const expected = await inTimeMetricPoints();
+
+  const { env, ae, inboxWriterInstance } = makeEnv(InboxWriter);
+  let release;
+  const calls = withStub(env, inboxWriterInstance, (real, ...args) =>
+    new Promise((resolve) => (release = resolve)).then(() => real.ingest(...args)),
+  );
+  const res = await timeOut(env, calls);
+  assert.equal(res.status, 503);
+  assert.deepEqual(metricPoints(ae), [], "nothing is written before the late commit");
+
+  release();
+  await ctx.drain();
+  assert.deepEqual(metricPoints(ae), expected);
+
+  // The client's retry is deduplicated and must not add the points again.
+  env.INBOX_WRITER.get = () => inboxWriterInstance;
+  assert.equal((await worker.fetch(metricRequest(), env, ctx)).status, 204);
+  await ctx.drain();
+  assert.deepEqual(metricPoints(ae), expected);
+});
+
+test("collect: an ingest that rejects after the deadline writes no metric points", async () => {
+  const { env, ae, inboxWriterInstance } = makeEnv(InboxWriter);
+  let fail;
+  const calls = withStub(env, inboxWriterInstance, () => new Promise((_, reject) => (fail = reject)));
+  const res = await timeOut(env, calls);
+  assert.equal(res.status, 503);
+  fail(new Error("DO storage unavailable"));
+  await ctx.drain();
+  assert.deepEqual(metricPoints(ae), []);
+  assert.deepEqual(ingestPoints(ae), [{ outcome: "dropped", reason: "ingest_timeout" }]);
 });

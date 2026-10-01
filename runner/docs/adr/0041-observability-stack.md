@@ -268,6 +268,11 @@ through the "Observability self" dashboard's `o11y.ingest` outcome panel. `/tele
 uses the same deadline; its own catch (`500`, `invalid_item`) remains only as a backstop for
 Faro body processing. Invalid and oversize records and Analytics Engine points for items without
 an inbox item are written before ingest, so a Faro retry after a timeout can double-count them.
+Points for items with an inbox item (browser metrics, hash-only `example.*` events) are written
+only for items the ingest reports `accepted`. When the deadline fires, the abandoned call is kept
+alive with `ctx.waitUntil` and, if it commits, writes the points of exactly its accepted items; the
+client's retry then comes back `duplicate` and writes none, so they are counted once. A call that
+rejects later writes none.
 
 Analytics Engine points for browser metrics are written by the route handler after step 3
 (§F.1), so they exist while the box sleeps. `example.*` events (ADR-0042) produce Analytics Engine points only
