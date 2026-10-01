@@ -52,8 +52,11 @@ const WAKE_HARD_CAP_MS = 4 * 60 * 60 * 1000;
 const GRAFANA_QUIET_STOP_MS = 10 * 60 * 1000;
 /** Objects drained per `drainStep` invocation (one `alarm()`): bounds its CPU,
  *  and its subrequests at 10 inbox GETs + 10 × `MAX_MAP_KEYS_PER_CALL` map GETs
+ *  + 10 × `MAX_LISTED_VERSIONS_PER_CALL` × `MAP_LIST_MAX_PAGES` map lists
  *  + ~200 push attempts, far under the Workers limit of 10,000. */
 const DRAIN_BATCH_SIZE = 10;
+/** List pages of `limit: 1000` one `service.version` prefix may take. */
+const MAP_LIST_MAX_PAGES = 5;
 /** Minimum gap before `drainStep` reschedules itself: the base
  *  `Container.alarm()` loop reads every due `container_schedules` row ONCE
  *  at the top of its own invocation and compares each row's `time` (whole
@@ -801,7 +804,10 @@ export class GrafanaBox extends Container<Env> {
         await releaseBody(res); // no-op once `text()` consumed it; releases it if `text()` threw early
         return { status: res.status, message };
       },
-      symbolicate: (records) => symbolicateResourceLogs(records, { getMap: (key) => this.#getMap(key) }),
+      symbolicate: (records) => symbolicateResourceLogs(records, {
+          getMap: (key) => this.#getMap(key),
+          listMaps: (prefix) => this.#listMaps(prefix),
+        }),
     };
 
     const limitedBefore = new Set(streamLimited);
@@ -915,6 +921,21 @@ export class GrafanaBox extends Container<Env> {
   async #getMap(key: string): Promise<string | null> {
     const obj = await this.env.O11Y_MAPS.get(key);
     return obj ? obj.text() : null;
+  }
+
+  /** Every key under `prefix`. A version holds a handful of maps, so more than
+   *  {@link MAP_LIST_MAX_PAGES} pages of 1000 is not a build: it throws, and
+   *  the caller then admits keys by its caps instead. */
+  async #listMaps(prefix: string): Promise<Set<string>> {
+    const keys = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < MAP_LIST_MAX_PAGES; page++) {
+      const listing = await this.env.O11Y_MAPS.list({ prefix, limit: 1000, ...(cursor !== undefined ? { cursor } : {}) });
+      for (const object of listing.objects) keys.add(object.key);
+      if (!listing.truncated) return keys;
+      cursor = listing.cursor;
+    }
+    throw new Error(`more than ${MAP_LIST_MAX_PAGES} list pages under ${prefix}`);
   }
 
   /**

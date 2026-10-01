@@ -1402,3 +1402,82 @@ test("item 2 (revert-check shape): a stop() that itself throws clears the marker
   // of a wake that is, in fact, still very much up.
   assert.equal(await box.isReady(), true);
 });
+
+// ---- drainStep: source-map listing and read failures ----------------------
+
+const { inboxKey } = await import("@handsontable/demo-runtime/telemetry");
+
+const ONE_MAPPING_MAP = JSON.stringify({ version: 3, sources: ["../../src/a.ts"], names: [], mappings: "AAAA" });
+
+/** A gzipped inbox object holding one recent exception per `[version, filename]`. */
+async function exceptionObject(entries) {
+  const lines = entries.map(([version, filename]) =>
+    JSON.stringify({
+      resource: { attributes: [{ key: "service.version", value: { stringValue: version } }] },
+      scopeLogs: [
+        {
+          logRecords: [
+            {
+              timeUnixNano: String(BigInt(Date.now()) * 1_000_000n),
+              body: { stringValue: `TypeError: x\n    at f (${filename}:1:1)` },
+              attributes: [{ key: "hot.kind", value: { stringValue: "exception" } }],
+            },
+          ],
+        },
+      ],
+    }),
+  );
+  const stream = new Blob([lines.join("\n") + "\n"]).stream().pipeThrough(new CompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function pushedBodies(requests) {
+  const bodies = [];
+  for (const request of requests) {
+    const text = await new Response(request.body.pipeThrough(new DecompressionStream("gzip"))).text();
+    for (const rl of JSON.parse(text).resourceLogs) bodies.push(rl.scopeLogs[0].logRecords[0].body.stringValue);
+  }
+  return bodies;
+}
+
+test("drainStep lists the maps of each version through the R2 cursor, and a forged path is never read", async () => {
+  const key = inboxKey("worker", new Date(), 0);
+  const gz = await exceptionObject([
+    ["forged", "https://demos.handsontable.com/assets/nope.js"],
+    ["realsha", "https://demos.handsontable.com/assets/app.js"],
+  ]);
+  const gets = [];
+  const lists = [];
+  const stored = ["sourcemaps/realsha/assets/other.js.map", "sourcemaps/realsha/assets/app.js.map"];
+  const O11Y_MAPS = {
+    async get(k) {
+      gets.push(k);
+      return k === stored[1] ? { text: async () => ONE_MAPPING_MAP } : null;
+    },
+    // Two keys, one per page, so the cursor loop is what finds the second.
+    async list({ prefix, cursor }) {
+      lists.push({ prefix, cursor });
+      const page = prefix === "sourcemaps/realsha/" ? (cursor === undefined ? 0 : 1) : null;
+      if (page === null) return { objects: [], truncated: false };
+      return { objects: [{ key: stored[page] }], truncated: page === 0, cursor: page === 0 ? "c1" : undefined };
+    },
+  };
+  const { box, inboxWriterStub } = makeBox({ inboxWriter: { writtenKeys: [key] }, r2Objects: new Map([[key, gz]]), env: { O11Y_MAPS } });
+  await box.wake("backlog");
+  const requests = [];
+  installContainerFetchRouter({ otlp: (request) => (requests.push(request), new Response(null, { status: 204 })) });
+
+  const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+
+  assert.deepEqual(lists, [
+    { prefix: "sourcemaps/forged/", cursor: undefined },
+    { prefix: "sourcemaps/realsha/", cursor: undefined },
+    { prefix: "sourcemaps/realsha/", cursor: "c1" },
+  ]);
+  assert.deepEqual(gets, [stored[1]], "only the key the listing shows is read");
+  const [forged, real] = await pushedBodies(requests);
+  assert.match(forged, /assets\/nope\.js:1:1/);
+  assert.match(real, /\(src\/a\.ts:1:1\)/);
+  assert.equal(inboxWriterStub.calls.markKeysProvisional.length, 1);
+});

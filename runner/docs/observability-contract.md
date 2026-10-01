@@ -634,6 +634,13 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   reported as `o11y.symbolicate.skip` with reason `over_cap`, plus one aggregate
   `over_cap` line with the call's capped `frames` and `keys` that `MAX_SKIP_REPORTS`
   never suppresses.
+  Before any read, each distinct `service.version` that has a resolvable frame is listed
+  once (`sourcemaps/<version>/`, paged through the R2 cursor); only a key the listing
+  shows is admitted, so a forged frame path costs no read and is reported as `no_map`.
+  `service.version` is client-supplied, so a call lists at most 8 versions
+  (`MAX_LISTED_VERSIONS_PER_CALL`); frames of the rest stay as they were and are
+  reported per version prefix as `over_version_cap`. A list that throws (or runs past
+  5 pages) is reported as `list_error` and that version falls back to the caps above.
 
 ## 9. Lite beacon payload
 

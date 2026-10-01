@@ -31,7 +31,7 @@ import vm from "node:vm";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { symbolicateResourceLogs, normaliseSourcePath, MAX_SKIP_REPORTS, MAX_MAP_KEYS_PER_CALL, MAX_FRAMES_PER_BODY, MAX_NEW_MAP_KEYS_PER_BODY } =
+const { symbolicateResourceLogs, normaliseSourcePath, MAX_SKIP_REPORTS, MAX_MAP_KEYS_PER_CALL, MAX_FRAMES_PER_BODY, MAX_NEW_MAP_KEYS_PER_BODY, MAX_LISTED_VERSIONS_PER_CALL } =
   await import(
   "../workers/o11y/src/drain/symbolicate.ts"
 );
@@ -241,9 +241,9 @@ function frame(file, lineno = 1, colno = 1) {
   return formatStackFrame({ filename: `https://demos.handsontable.com/assets/${file}`, function: "f", lineno, colno });
 }
 
-async function collectSkips(records, getMap) {
+async function collectSkips(records, getMap, extraDeps = {}) {
   const calls = [];
-  const out = await symbolicateResourceLogs(records, { getMap, onSkip: (skips, suppressed) => calls.push({ skips, suppressed }) });
+  const out = await symbolicateResourceLogs(records, { getMap, ...extraDeps, onSkip: (skips, suppressed) => calls.push({ skips, suppressed }) });
   return { out, calls };
 }
 
@@ -419,6 +419,108 @@ test("a forged item packed before a real exception cannot use up the object's ma
   const capped = MAX_MAP_KEYS_PER_CALL - MAX_NEW_MAP_KEYS_PER_BODY;
   assert.ok(lines.some((l) => l.reason === "suppressed"), "the per-key lines overflow MAX_SKIP_REPORTS");
   assert.deepEqual(lines.at(-1), { event: "o11y.symbolicate.skip", reason: "over_cap", frames: capped, keys: capped });
+});
+
+// ---- listing the version's maps before reading -----------------------------------
+
+const forgedFrames = (n, offset = 0) =>
+  Array.from({ length: n }, (_, i) => formatStackFrame({ filename: `http://a/${offset + i}.js`, function: "f", lineno: 1, colno: 1 }));
+
+/** A `listMaps` over a fixed set of keys, recording the prefixes it was asked. */
+function fakeBucket(keys) {
+  const prefixes = [];
+  return { prefixes, listMaps: async (prefix) => (prefixes.push(prefix), new Set(keys.filter((k) => k.startsWith(prefix)))) };
+}
+
+test("four forged bodies of forged paths cannot push a real exception later in the object over the map budget", async () => {
+  const forged = Array.from({ length: 4 }, (_, i) => exceptionRecord(forgedFrames(MAX_NEW_MAP_KEYS_PER_BODY, i * 100), `forged${i}`));
+  const real = exceptionRecord([frame("app.js", 1, 1)], "realsha");
+  const realKey = "sourcemaps/realsha/assets/app.js.map";
+  const reads = [];
+  const { out, calls } = await collectSkips([...forged, real], null, {
+    ...fakeBucket([realKey]),
+    getMap: async (key) => (reads.push(key), key === realKey ? ONE_MAPPING_MAP : null),
+  });
+
+  assert.equal(bodyOf(out[4]).split("\n")[1], "    at f (src/a.ts:1:1)", "the real exception resolves");
+  assert.deepEqual(reads, [realKey], "a forged path costs no read");
+  assert.ok(calls[0].skips.every((s) => s.reason !== "over_cap"), JSON.stringify(calls[0].skips));
+  assert.ok(calls[0].skips.some((s) => s.reason === "no_map" && s.key === "sourcemaps/forged0/0.js.map"));
+});
+
+test("a frame whose map the listing lacks is reported as no_map without a read", async () => {
+  const reads = [];
+  const { calls } = await collectSkips([exceptionRecord([frame("gone.js")])], null, {
+    ...fakeBucket([]),
+    getMap: async (key) => (reads.push(key), ONE_MAPPING_MAP),
+  });
+  assert.deepEqual(reads, []);
+  assert.deepEqual(calls[0].skips, [{ key: "sourcemaps/cafe1234/assets/gone.js.map", reason: "no_map", frames: 1 }]);
+});
+
+test("listing runs once per distinct version, with that version's prefix", async () => {
+  const bucket = fakeBucket(["sourcemaps/v1/assets/a.js.map"]);
+  await collectSkips([exceptionRecord([frame("a.js")], "v1"), exceptionRecord([frame("a.js")], "v1"), exceptionRecord([frame("b.js")], "v2")], null, {
+    ...bucket,
+    getMap: async () => ONE_MAPPING_MAP,
+  });
+  assert.deepEqual(bucket.prefixes, ["sourcemaps/v1/", "sourcemaps/v2/"]);
+});
+
+test("a version with no resolvable frame is not listed", async () => {
+  const bucket = fakeBucket([]);
+  await collectSkips([exceptionRecord([], "v1"), exceptionRecord([frame("babel-abc.js")], "v2")], null, { ...bucket, getMap: async () => null });
+  assert.deepEqual(bucket.prefixes, []);
+});
+
+test("more than MAX_LISTED_VERSIONS_PER_CALL distinct versions list only that many, and the rest are reported without a read", async () => {
+  const total = MAX_LISTED_VERSIONS_PER_CALL + 3;
+  const versions = Array.from({ length: total }, (_, i) => `v${i}`);
+  const bucket = fakeBucket(versions.map((v) => `sourcemaps/${v}/assets/a.js.map`));
+  const reads = [];
+  const { out, calls } = await collectSkips(versions.map((v) => exceptionRecord([frame("a.js")], v)), null, {
+    ...bucket,
+    getMap: async (key) => (reads.push(key), ONE_MAPPING_MAP),
+  });
+  assert.deepEqual(bucket.prefixes, versions.slice(0, MAX_LISTED_VERSIONS_PER_CALL).map((v) => `sourcemaps/${v}/`));
+  assert.equal(reads.length, MAX_LISTED_VERSIONS_PER_CALL);
+  assert.equal(bodyOf(out[total - 1]).split("\n")[1], "    at f (https://demos.handsontable.com/assets/a.js:1:1)", "an unlisted version's frames stay as they were");
+  const over = calls[0].skips.filter((s) => s.reason === "over_version_cap");
+  assert.deepEqual(over.map((s) => [s.key, s.frames]), versions.slice(MAX_LISTED_VERSIONS_PER_CALL).map((v) => [`sourcemaps/${v}/`, 1]));
+});
+
+test("a listing that throws falls back to admitting by the caps, and is reported as list_error", async () => {
+  const reads = [];
+  const { out, calls } = await collectSkips([exceptionRecord([frame("app.js", 1, 1)])], null, {
+    listMaps: async () => {
+      throw new Error("R2 list timed out");
+    },
+    getMap: async (key) => (reads.push(key), ONE_MAPPING_MAP),
+  });
+  assert.deepEqual(reads, ["sourcemaps/cafe1234/assets/app.js.map"]);
+  assert.equal(bodyOf(out[0]).split("\n")[1], "    at f (src/a.ts:1:1)");
+  assert.deepEqual(calls[0].skips, [
+    { key: "sourcemaps/cafe1234/", reason: "list_error", frames: 0, detail: "Error: R2 list timed out" },
+  ]);
+});
+
+test("with listing on, the same frames resolve on every replay whatever order the reads answer in", async () => {
+  const records = [recentExceptionRecord(Array.from({ length: 40 }, (_, i) => frame(`c${i}.js`)), "v"), recentExceptionRecord(forgedFrames(40), "v")];
+  const keys = Array.from({ length: 40 }, (_, i) => `sourcemaps/v/assets/c${i}.js.map`);
+  const outputs = [];
+  for (const delay of [(i) => i, (i) => 40 - i]) {
+    let i = 0;
+    const out = await symbolicateResourceLogs(records, {
+      ...fakeBucket(keys),
+      getMap: async () => {
+        await new Promise((r) => setTimeout(r, delay(i++ % 40)));
+        return ONE_MAPPING_MAP;
+      },
+      onSkip() {},
+    });
+    outputs.push(JSON.stringify(out));
+  }
+  assert.equal(outputs[0], outputs[1]);
 });
 
 test("frames past MAX_FRAMES_PER_BODY in one body are left as they were and reported as over_cap", async () => {
