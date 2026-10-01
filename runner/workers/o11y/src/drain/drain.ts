@@ -250,7 +250,7 @@ export async function drainKey(
   records = kept;
 
   // `symbolicate.ts` throws only `TransientSymbolicateError` (a failed map
-  // read, deferred below), but any other throw must isolate only THIS key, not the
+  // read or listing, deferred below), but any other throw must isolate only THIS key, not the
   // whole batch — otherwise a poisoned key would leave the whole batch
   // `written` forever, retried and re-thrown every wake. Gets the same
   // `rejected` shape as `undecodable_object` above.

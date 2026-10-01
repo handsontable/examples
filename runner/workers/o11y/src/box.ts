@@ -946,7 +946,7 @@ export class GrafanaBox extends Container<Env> {
 
   /** Every key under `prefix`. A version holds a handful of maps, so more than
    *  {@link MAP_LIST_MAX_PAGES} pages of 1000 is not a build: it throws, and
-   *  the caller then admits keys by its caps instead. */
+   *  a young object is then deferred, an older one admits keys by its caps. */
   async #listMaps(prefix: string): Promise<Set<string>> {
     const keys = new Set<string>();
     let cursor: string | undefined;
