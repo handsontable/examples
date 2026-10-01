@@ -222,6 +222,7 @@ export function getGrafanaBoxStub(env: Env) {
   return ns.getByName("box");
 }
 
+// @ts-expect-error `applyOutboundInterception` is private in the SDK typings and overridden below on purpose
 export class GrafanaBox extends Container<Env> {
   // Grafana is the box's own default target; Loki (3100) is reached
   // explicitly (readiness probe) — see docs/observability-contract.md §1's
@@ -337,20 +338,52 @@ export class GrafanaBox extends Container<Env> {
    */
   async #startFailOpen(wakeId: string, envVars: Record<string, string>): Promise<void> {
     const interception = this.usingInterception;
+    this.#inStartFailOpen = true;
     try {
       await this.start({ envVars });
     } catch (err) {
       // A running container means the failure came after the interception
       // setup, so it is not ours to swallow.
       if (!interception || this.ctx.container?.running) throw err;
-      console.error(JSON.stringify({ event: "o11y.ae_outbound.degraded", wakeId, message: String(err) }));
+      this.#reportAeDegraded(wakeId, err);
       this.usingInterception = false;
       try {
         await this.start({ envVars });
       } finally {
         this.usingInterception = interception;
       }
+    } finally {
+      this.#inStartFailOpen = false;
     }
+  }
+
+  /** True while `#startFailOpen` runs: it reports its own failure, so the
+   *  `applyOutboundInterception` override stays quiet then. */
+  #inStartFailOpen = false;
+
+  #reportAeDegraded(wakeId: string, err: unknown): void {
+    console.error(JSON.stringify({ event: "o11y.ae_outbound.degraded", wakeId, message: String(err) }));
+  }
+
+  /**
+   * The SDK's constructor re-applies the interception for an already-running
+   * container without awaiting or catching it, so a rejection there (after
+   * `ctx.abort()` or a deploy) would be an unhandled rejection this class
+   * cannot catch. Returns the SDK's own promise with a handler attached, so
+   * `start()` and `refreshOutboundInterception()` still see the throw.
+   * TS-private in the typings, a prototype method at runtime;
+   * `o11y-box-ae-fail-open.test.mjs` pins that against the package.
+   */
+  applyOutboundInterception(): Promise<void> {
+    // @ts-expect-error private in the SDK typings
+    const applied: Promise<void> = super.applyOutboundInterception();
+    if (!this.#inStartFailOpen) {
+      applied.catch(async (err: unknown) => {
+        const wake = await this.ctx.storage.get<WakeRecord>(WAKE_STORAGE_KEY).catch(() => undefined);
+        this.#reportAeDegraded(wake?.wakeId ?? "unknown", err);
+      });
+    }
+    return applied;
   }
 
   /**
