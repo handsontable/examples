@@ -5,7 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { waitForServer } from "../e2e/wait-for-server.ts";
+import { hasProcessExited, waitForServer } from "../e2e/wait-for-server.ts";
 
 const closedPort = () =>
   new Promise((resolve) => {
@@ -38,4 +38,10 @@ test("waitForServer: fails fast when the serving process has exited", async () =
   const t0 = Date.now();
   await assert.rejects(waitForServer(`http://127.0.0.1:${port}`, 30_000, () => true), /exited before it answered/);
   assert.ok(Date.now() - t0 < 1000, "must not wait out the timeout");
+});
+
+test("hasProcessExited: true for a normal exit and for death by signal, false while running", () => {
+  assert.equal(hasProcessExited({ exitCode: null, signalCode: null }), false);
+  assert.equal(hasProcessExited({ exitCode: 1, signalCode: null }), true);
+  assert.equal(hasProcessExited({ exitCode: null, signalCode: "SIGKILL" }), true);
 });
