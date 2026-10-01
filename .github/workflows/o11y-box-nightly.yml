@@ -44,6 +44,10 @@ jobs:
         run: docker compose -p o11y-stop-roundtrip -f runner/containers/o11y/compose.yml build box
 
       - name: Stop round-trip against the compose stack
+        # KEEP leaves the stack up so the log-collection step below can read it;
+        # the always() step at the end tears it down.
+        env:
+          O11Y_ROUNDTRIP_KEEP: "1"
         run: node runner/containers/o11y/local/stop-roundtrip.mjs
 
       - name: Collect compose logs
