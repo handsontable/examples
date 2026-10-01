@@ -40,6 +40,9 @@ const STREAM_LIMITED_STORAGE_KEY = "streamLimitedTenants";
 /** The wakeId whose wake-to-ready time was already reported to InboxWriter,
  *  so only a wake's first successful `isReady()` reports it. */
 const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
+/** `{ wakeId, since, gaveUp }`: when `drainStep` first found this wake's box
+ *  not ready, and whether the give-up was already reported. Per wake. */
+const NOT_READY_STORAGE_KEY = "notReadySince";
 const HARD_CAP_SCHEDULE = "hardCapStop";
 const DRAIN_STEP_SCHEDULE = "drainStep";
 /** ADR §A: "after 4 hours awake regardless." */
@@ -65,6 +68,16 @@ const DRAIN_STEP_GAP_MS = 1000;
  *  keeps the box up: the pause is cleared by the ten-minute cron, so a slow
  *  poll is enough and costs almost nothing. */
 const PAUSED_DRAIN_RECHECK_MS = 60_000;
+/** A box not ready this long after its wake began is stuck (a normal start is
+ *  well under `START_DEADLINE_MS`): `drainStep` reports it and, if nobody is
+ *  looking at Grafana, stops it. */
+const NOT_READY_GIVE_UP_MS = 10 * 60 * 1000;
+/** `drainStep` gap while not ready, by time spent not ready: 1 s, 5 s after
+ *  30 s, 30 s after 2 minutes. */
+function notReadyGapMs(notReadyForMs: number): number {
+  if (notReadyForMs < 30_000) return DRAIN_STEP_GAP_MS;
+  return notReadyForMs < 120_000 ? 5_000 : 30_000;
+}
 
 // Every await on the container is bounded: an accepted-but-silent port can
 // hang `start()`/`isReady()` forever, since the library's healthy-state
@@ -633,9 +646,10 @@ export class GrafanaBox extends Container<Env> {
     if (current?.wakeId !== payload.wakeId) return;
 
     if (!(await this.isReady())) {
-      await this.schedule(new Date(Date.now() + DRAIN_STEP_GAP_MS), DRAIN_STEP_SCHEDULE, payload);
+      await this.#notReadyStep(payload.wakeId, current);
       return;
     }
+    if (await this.ctx.storage.get(NOT_READY_STORAGE_KEY)) await this.ctx.storage.delete(NOT_READY_STORAGE_KEY);
 
     const startedAt = Date.now();
     // Fills in whether this batch replayed a reopened key, read back in the
@@ -676,6 +690,41 @@ export class GrafanaBox extends Container<Env> {
         await this.schedule(new Date(Date.now() + DRAIN_STEP_GAP_MS), DRAIN_STEP_SCHEDULE, payload);
       }
     }
+  }
+
+  /**
+   * The box is not answering `isReady()`. Backs off the retry gap, and past
+   * {@link NOT_READY_GIVE_UP_MS} reports once and runs the usual stop decision
+   * (a box with a visitor stays up and keeps polling at the slowest gap). The
+   * readiness probes renew the idle clock, so without this a box whose Loki
+   * keeps answering 503 would never idle-stop.
+   */
+  async #notReadyStep(wakeId: string, current: WakeRecord): Promise<void> {
+    // A stopped container has nothing to wait for: its next wake starts a new chain.
+    if (!(await this.isAwake())) {
+      await this.ctx.storage.delete(NOT_READY_STORAGE_KEY);
+      return;
+    }
+    const now = Date.now();
+    let record = await this.ctx.storage.get<{ wakeId: string; since: number; gaveUp?: boolean }>(NOT_READY_STORAGE_KEY);
+    if (record?.wakeId !== wakeId) record = { wakeId, since: now };
+    const notReadyForMs = now - record.since;
+    if (notReadyForMs >= NOT_READY_GIVE_UP_MS && !record.gaveUp) {
+      record.gaveUp = true;
+      writeBoxPoint(
+        this.env,
+        this.ctx,
+        "o11y.drain",
+        { count: 0, duration_ms: notReadyForMs, bytes: 0, value: 0 },
+        { reason: current.reason, outcome: "error" },
+      );
+      console.error(
+        JSON.stringify({ event: "o11y.drain.error", wakeId, stage: "not_ready", message: `box not ready for ${Math.round(notReadyForMs / 1000)} s` }),
+      );
+    }
+    await this.ctx.storage.put(NOT_READY_STORAGE_KEY, record);
+    if (notReadyForMs >= NOT_READY_GIVE_UP_MS && !(await this.#finishDrain(wakeId))) return;
+    await this.schedule(new Date(now + notReadyGapMs(notReadyForMs)), DRAIN_STEP_SCHEDULE, { wakeId });
   }
 
   /** The actual drain-batch work `drainStep` runs inside a try/catch guard
