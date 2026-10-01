@@ -1,7 +1,8 @@
 # ADR-0041 §A, §B.5. ClickHouse datasource for production: no header keys at
 # all, because the plugin's Go backend turns an empty `httpHeaderName*` into a
-# request header with an empty name and fails every backend call. GrafanaBox's
-# outbound handler adds the bearer token Worker-side.
+# request header with an empty name and fails its backend calls (health, resources,
+# alert queries; the legacy proxy path still works). GrafanaBox's outbound handler
+# adds the bearer token Worker-side.
 apiVersion: 1
 
 datasources:
