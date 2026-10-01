@@ -631,6 +631,13 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   deferral lasts only while the key's inbox hour is under 6 hours old
   (`MAP_RETRY_MAX_AGE_MS`); after that the key pushes with its frames as they are, so a replay is byte-stable only once the maps are final. A batch
   of only deferred keys ends the wake's drain once no un-excluded tenant has keys left.
+  Either deferral (inbox read or source-map read) also excludes that key for the rest
+  of the wake (`deferredKeys` in the box's storage, reset by a new wake;
+  `nextWrittenKeys` skips it), so a deferred key is not re-read on every step and
+  cannot starve the batch: the keys behind it still drain. When only deferred keys
+  remain and a Grafana visitor keeps the box up, the drain clears that set and
+  rechecks after 60 s, like the spend-cap pause; with no visitor the box stops as for
+  an empty backlog.
 - **Symbolication read caps.** One inbox object reads at most 32 distinct maps
   (`MAX_MAP_KEYS_PER_CALL`, first-seen order), one body adds at most 8 of them
   (`MAX_NEW_MAP_KEYS_PER_BODY`), and at most 128 frames are looked up per body

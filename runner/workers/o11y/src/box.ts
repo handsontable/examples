@@ -37,6 +37,11 @@ const DRAIN_SCHEDULED_FOR_STORAGE_KEY = "drainScheduledFor";
 /** `{ wakeId, tenants }`: tenants that hit Loki's stream limit in this wake,
  *  whose keys later steps skip, because the ingester keeps its streams until it stops. */
 const STREAM_LIMITED_STORAGE_KEY = "streamLimitedTenants";
+/** `{ wakeId, keys }`: keys the drain deferred in this wake (a failing map or
+ *  inbox read), skipped by later steps so they cannot starve the batch. */
+const DEFERRED_KEYS_STORAGE_KEY = "deferredKeys";
+/** Bounds the persisted deferred set; keys past it are simply retried each step. */
+const DEFERRED_KEYS_MAX = 1000;
 /** The wakeId whose wake-to-ready time was already reported to InboxWriter,
  *  so only a wake's first successful `isReady()` reports it. */
 const READY_RECORDED_FOR_STORAGE_KEY = "readyRecordedFor";
@@ -760,10 +765,17 @@ export class GrafanaBox extends Container<Env> {
     }
     const limitedRecord = await this.ctx.storage.get<{ wakeId: string; tenants: Tenant[] }>(STREAM_LIMITED_STORAGE_KEY);
     const streamLimited = new Set<Tenant>(limitedRecord?.wakeId === payload.wakeId ? limitedRecord.tenants : []);
-    const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE, [...streamLimited]);
+    const deferredRecord = await this.ctx.storage.get<{ wakeId: string; keys: string[] }>(DEFERRED_KEYS_STORAGE_KEY);
+    const deferredKeys = new Set<string>(deferredRecord?.wakeId === payload.wakeId ? deferredRecord.keys : []);
+    const keys = await writer.nextWrittenKeys(DRAIN_BATCH_SIZE, [...streamLimited], [...deferredKeys]);
 
     if (keys.length === 0) {
-      await this.#finishDrain(payload.wakeId);
+      // Only deferred keys are left. A visitor keeps the box up past this
+      // step, so poll slowly with a clean slate; otherwise the wake is done.
+      if ((await this.#finishDrain(payload.wakeId)) && deferredKeys.size > 0) {
+        await this.ctx.storage.delete(DEFERRED_KEYS_STORAGE_KEY);
+        await this.schedule(new Date(Date.now() + PAUSED_DRAIN_RECHECK_MS), DRAIN_STEP_SCHEDULE, payload);
+      }
       return;
     }
 
@@ -850,9 +862,15 @@ export class GrafanaBox extends Container<Env> {
     const droppedOld = result.outcomes.reduce((sum, o) => sum + o.droppedOld, 0);
     // Deferred keys stay `written`; the rest of the batch still commits.
     const deferred = result.outcomes.filter((o) => o.outcome === "deferred");
+    const sizeBefore = deferredKeys.size;
     for (const d of deferred) {
       if (d.deferral !== "fetch_error" && d.deferral !== "map_fetch_error") continue;
       console.error(JSON.stringify({ event: "o11y.drain.error", wakeId: payload.wakeId, key: d.key, message: d.reason }));
+      if (deferredKeys.size < DEFERRED_KEYS_MAX) deferredKeys.add(d.key);
+    }
+    const newlyDeferred = deferredKeys.size > sizeBefore;
+    if (newlyDeferred) {
+      await this.ctx.storage.put(DEFERRED_KEYS_STORAGE_KEY, { wakeId: payload.wakeId, keys: [...deferredKeys] });
     }
 
     if (provisionalKeys.length > 0) await writer.markKeysProvisional(payload.wakeId, provisionalKeys);
@@ -890,8 +908,9 @@ export class GrafanaBox extends Container<Env> {
 
     // A batch of only deferred keys would come back unchanged on every step,
     // so it ends this wake's drain like a Loki outage does — unless a tenant
-    // was just limited, whose exclusion lets the next step reach the other one.
-    if (result.stoppedEarly || (deferred.length === result.outcomes.length && newlyLimited.length === 0)) {
+    // was just limited or a key just deferred, whose exclusion lets the next
+    // step reach the rest.
+    if (result.stoppedEarly || (deferred.length === result.outcomes.length && newlyLimited.length === 0 && !newlyDeferred)) {
       // Everything from here on stays `written` for the next wake to
       // retry (a possibly-recovered Loki by then) — but this wake itself
       // is done trying, so run the same post-drain stop decision.

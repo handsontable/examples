@@ -74,9 +74,9 @@ function makeInboxWriterStub(overrides = {}) {
     async drainsPaused() {
       return overrides.drainsPaused ?? false;
     },
-    async nextWrittenKeys() {
+    async nextWrittenKeys(_limit, _excludeTenants, excludeKeys = []) {
       calls.nextWrittenKeys = (calls.nextWrittenKeys ?? 0) + 1;
-      return overrides.writtenKeys ?? [];
+      return (overrides.writtenKeys ?? []).filter((k) => !excludeKeys.includes(k));
     },
     // Defaults to "no reopened keys in this batch" — a test proving the
     // `reason: "reopen"` emission overrides this via `overrides.reopenedFlag`
@@ -593,7 +593,7 @@ test("drainStep: an inbox read that throws on key 2 of 3 leaves only that key wr
   assert.equal(outcomeOf(ae.points.find((p) => p.indexes?.[0] === "o11y.drain")), "error");
 });
 
-test("drainStep: a batch in which every inbox read throws ends the drain instead of repeating itself every step", async () => {
+test("drainStep: a batch in which every inbox read throws excludes those keys, then ends the drain instead of repeating itself every step", async () => {
   const keys = [0, 1].map((i) => `inbox/worker/2026-01-01/00/00000000000${i}.ndjson.gz`);
   const { box, scheduled } = makeBox({
     inboxWriter: { writtenKeys: keys },
@@ -609,6 +609,9 @@ test("drainStep: a batch in which every inbox read throws ends the drain instead
   scheduled.length = 0;
 
   const wake = await box.ctx.storage.get("wake");
+  await box.drainStep({ wakeId: wake.wakeId });
+  assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 1, "the deferred keys are excluded, then the next step finds nothing");
+  scheduled.length = 0;
   await box.drainStep({ wakeId: wake.wakeId });
 
   assert.equal(scheduled.filter((s) => s.callback === "drainStep").length, 0);
