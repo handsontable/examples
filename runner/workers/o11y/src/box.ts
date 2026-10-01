@@ -267,6 +267,16 @@ export class GrafanaBox extends Container<Env> {
   // protocol.
   sleepAfter = "15m";
 
+  // `O11Y_SLEEP_AFTER` shortens the idle window for the local idle-stop check;
+  // it is honored only under `O11Y_ENV === "local"`. The SDK reads
+  // `sleepAfter` after this constructor returns, so the first timer uses it.
+  constructor(ctx: ConstructorParameters<typeof Container<Env>>[0], env: Env) {
+    super(ctx, env);
+    if (env.O11Y_ENV === "local" && /^[1-9]\d*[smh]$/.test(env.O11Y_SLEEP_AFTER ?? "")) {
+      this.sleepAfter = env.O11Y_SLEEP_AFTER as string;
+    }
+  }
+
   #startingPromise: Promise<WakeRecord> | null = null;
 
   // Instance fields only so tests can shrink these bounds; production never
