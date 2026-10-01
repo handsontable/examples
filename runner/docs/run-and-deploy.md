@@ -1175,6 +1175,7 @@ walkthrough already showed.
    keep the box awake; a viewer who turns refresh back on (the time picker's refresh
    options are still there) accepts that their own tab now keeps the box awake, up to
    the 4-hour hard cap, for as long as it stays open.
+   **Done 2026-09-30:** the production box stopped 14.3–15.3 min after the last request (ADR §L row 9).
 4. **Exit criterion 13 (retention)** — check the sandbox account's 1-day retention-clock
    test (`t03-retention-clock-test/` prefix, `o11y-probe-t03-loki`): the two
    objects should be gone and the lifecycle rule should still be listed. If more than a few
@@ -1233,6 +1234,8 @@ walkthrough already showed.
    number exists. Flip exit-criterion-5's row from "not yet measured in a real
    isolate" to a dated pass/fail on that basis (13 flips separately, from its own
    calendar-time check in item 4 above) — this is what unblocks Proposed → Accepted.
+   **Done 2026-10-01:** pass on CPU (drain alarm peak 22.6 ms, `isAwake` first poll 580 ms is not on the
+   symbolicator path); memory measured on the Worker only (9.04 MB), per the paragraph above (ADR §L row 5).
 8. **Exit criterion 13 (retention) in production, and the AE SQL rollup, both against real
    data** — item 4 above only re-checks the sandbox probe's own 1-day retention-clock test;
    this is the equivalent check on the real Loki bucket and the real Grafana AE datasource.
