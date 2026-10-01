@@ -6,6 +6,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
+import { readFileSync } from "node:fs";
+import { parseDockerfileBaseImages } from "../scripts/dev-lib.mjs";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
@@ -522,9 +524,19 @@ test("drainBatch stops immediately on the first `error` outcome, leaving later k
 
 // ---- Loki's active-stream limit ---------------------------------------------
 
-// Loki 3.3.2's own wording for `max_global_streams_per_user` (default 5000).
+// `validation.StreamLimitErrorMsg` as Loki 3.3.2 sends it for `max_global_streams_per_user`
+// (default 5000). `drain.ts` matches this wording; a Loki bump must re-verify it.
+const STREAM_LIMIT_WORDING_LOKI_VERSION = "3.3.2";
 const STREAM_LIMIT_MESSAGE =
   "Maximum active stream limit exceeded when trying to create stream {hot_outcome=\"o5001\"}, reduce the number of active streams (reduce labels or reduce label values), or contact your Loki administrator to see if the limit can be increased, user: 'browser'";
+
+test("the stream-limit wording fixture was captured from the Loki version the box image ships", () => {
+  const dockerfile = readFileSync(new URL("../containers/o11y/Dockerfile", import.meta.url), "utf8");
+  const tags = parseDockerfileBaseImages(dockerfile)
+    .filter((image) => image.startsWith("grafana/loki:"))
+    .map((image) => image.slice("grafana/loki:".length));
+  assert.deepEqual(tags, [STREAM_LIMIT_WORDING_LOKI_VERSION], "a Loki bump needs the stream-limit wording re-verified, then this constant moved");
+});
 
 async function pushedText(gz) {
   const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
