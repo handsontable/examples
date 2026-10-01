@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { previewReady, expectGridRendered } from "./helpers.js";
+import { waitForServer } from "./wait-for-server.js";
 
 // The automatable slice of the local end-to-end walkthrough (ADR-0041 §L,
 // docs/run-and-deploy.md's local-dev section). Unlike `telemetry-faro.spec.ts`
@@ -66,21 +67,8 @@ const O11Y_BASE_URL = `http://localhost:${O11Y_PORT}`;
 const AUTHORING_DIR = fileURLToPath(new URL("../apps/authoring", import.meta.url));
 const API_DIR = fileURLToPath(new URL("../workers/api", import.meta.url));
 const OUT_DIR = "dist-o11y-local";
-
-function waitForServer(url: string, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve, reject) => {
-    const attempt = () => {
-      fetch(url)
-        .then(() => resolve())
-        .catch((err) => {
-          if (Date.now() > deadline) reject(err);
-          else setTimeout(attempt, 200);
-        });
-    };
-    attempt();
-  });
-}
+// Cold runners build the Tier-2 image before the API worker answers; must stay inside the 360s hook budget.
+const API_BOOT_TIMEOUT_MS = Number(process.env.E2E_API_BOOT_TIMEOUT_MS ?? 240_000);
 
 /** Queries the local ClickHouse stand-in for Analytics Engine directly —
  *  the same table/columns `clickhouseSink` writes (contract §10), the same
@@ -164,7 +152,7 @@ test.describe("o11y local end-to-end", () => {
     apiServer.stderr?.on("data", (chunk) => { apiStderr += String(chunk); });
     apiServer.stdout?.on("data", (chunk) => { apiStderr += String(chunk); });
     try {
-      await waitForServer(API_BASE_URL, 60_000);
+      await waitForServer(API_BASE_URL, API_BOOT_TIMEOUT_MS, () => apiServer.exitCode !== null);
     } catch (err) {
       throw new Error(`local API worker on :${API_PORT} never came up: ${apiStderr || String(err)}`);
     }

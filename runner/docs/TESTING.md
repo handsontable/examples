@@ -111,6 +111,7 @@ covers the dependency:
 | `E2E_STARTER_MATRIX=1` | Every starter × major through a live container session | `e2e-starter-matrix.yml` (manual + monthly) | Serialized against the global container cap; never fold matrix cases into the PR suite. |
 | `E2E_TELEMETRY=1` | A `VITE_TELEMETRY_LOCAL=1` build (contract §10) | `page.route`-mocked specs (`telemetry-faro.spec.ts`, `example-analytics.spec.ts`) run in `ci.yml`'s `e2e-telemetry` job, every PR. Combined with `E2E_LIVE=1`, `telemetry-metrics.spec.ts` needs a real local API worker + Docker instead, and runs in `e2e-o11y-local.yml` (manual + nightly + o11y-path PRs) | Same gate, two very different cost profiles — mocked network vs. a real `wrangler dev` — hence two different workflow homes. |
 | `E2E_O11Y_LOCAL=1` | The whole local o11y stack: Docker compose (ClickHouse/MinIO), a real o11y `wrangler dev`, a real API `wrangler dev`, applied D1 migrations | `e2e-o11y-local.yml` (manual + nightly + o11y-path PRs) | `o11y-local.spec.ts` proves telemetry reaches the real ingest pipeline end to end, never mocked — the standing check that T02–T08's wiring still holds. |
+| *(none, plain Node + Docker)* | The GrafanaBox image and its stop/restore ledger against a real compose stack | `o11y-box-nightly.yml` (manual + nightly + PRs touching `containers/o11y/**` or `workers/o11y/src/box.ts`) | Builds the box image and runs `containers/o11y/local/stop-roundtrip.mjs`; no pnpm install. The idle-stop (`sleepAfter`) path is not covered. |
 
 Two rules that keep gates honest:
 
