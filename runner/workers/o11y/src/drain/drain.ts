@@ -12,6 +12,7 @@ import {
   type Tenant,
 } from "@handsontable/demo-runtime/telemetry";
 import { sha256Hex } from "../gates/util.js";
+import { TransientSymbolicateError } from "./symbolicate.js";
 
 // ---- Drop records older than Loki's own reject window ----------------------
 // `reject_old_samples_max_age: 7d` 400s the WHOLE push if even one record
@@ -86,7 +87,7 @@ export interface DrainDeps {
   pushToLoki(tenant: Tenant, gzippedBody: Uint8Array): Promise<LokiPushResult>;
   /** ADR §C.3 — exception records only; a no-op passthrough for everything
    *  else (`symbolicate.ts#symbolicateResourceLogs` already does this). */
-  symbolicate(records: readonly OtlpResourceLogs[]): Promise<OtlpResourceLogs[]>;
+  symbolicate(records: readonly OtlpResourceLogs[], opts: { deferTransient: boolean }): Promise<OtlpResourceLogs[]>;
   /** Injectable clock for {@link dropOldRecords} — defaults to `Date.now`
    *  when omitted, so every existing caller/test is unaffected unless it
    *  deliberately wants a fixed "now". */
@@ -99,9 +100,10 @@ export interface KeyOutcome {
   /** `deferred`: left `written` for a later wake, see {@link KeyOutcome.deferral};
    *  unlike `error`, the batch continues. */
   outcome: "provisional" | "rejected" | "error" | "deferred";
-  /** Set on `deferred` only: the inbox read threw, this key hit Loki's stream
-   *  limit, or its tenant already had (so it was not fetched). */
-  deferral?: "fetch_error" | "stream_limit" | "tenant_limited";
+  /** Set on `deferred` only: the inbox read threw, a source-map read still
+   *  failed after its retries, this key hit Loki's stream limit, or its tenant
+   *  already had (so it was not fetched). */
+  deferral?: "fetch_error" | "map_fetch_error" | "stream_limit" | "tenant_limited";
   /** Set on `rejected` (why), on `deferred`, and also on `provisional` when
    *  one chunk 2xx'd but another 400'd — the caller should still surface
    *  that via `recordPartialReject`. `undefined` on a fully clean `provisional`. */
@@ -128,6 +130,16 @@ const STREAM_LIMIT_RE = /stream limit/i;
 
 function isStreamLimit(result: LokiPushResult): boolean {
   return result.status === 429 && STREAM_LIMIT_RE.test(result.message ?? "");
+}
+
+/** How long after its inbox hour a key may keep deferring on a failed map read:
+ *  the ledger has no per-key attempt count, and an old `written` key already
+ *  wakes the box every cron tick, so past this it pushes with its frames as they are. */
+export const MAP_RETRY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** Age of the inbox hour `parsed` names, from the key alone. */
+function inboxKeyAgeMs(parsed: { date: string; hour: string }, nowMs: number): number {
+  return nowMs - Date.parse(`${parsed.date}T${parsed.hour}:00:00Z`);
 }
 
 const MAX_RETRIES = 3;
@@ -237,14 +249,18 @@ export async function drainKey(
   const { kept, droppedOld } = dropOldRecords(records, (deps.now ?? Date.now)());
   records = kept;
 
-  // `symbolicate.ts` never throws, but this is a third, independent
-  // isolation layer: a throw here must isolate only THIS key, not the
+  // `symbolicate.ts` throws only `TransientSymbolicateError` (a failed map
+  // read, deferred below), but any other throw must isolate only THIS key, not the
   // whole batch — otherwise a poisoned key would leave the whole batch
   // `written` forever, retried and re-thrown every wake. Gets the same
   // `rejected` shape as `undecodable_object` above.
   try {
-    records = await deps.symbolicate(records);
+    const deferTransient = inboxKeyAgeMs(parsed, (deps.now ?? Date.now)()) < MAP_RETRY_MAX_AGE_MS;
+    records = await deps.symbolicate(records, { deferTransient });
   } catch (err) {
+    if (err instanceof TransientSymbolicateError) {
+      return { key, tenant, outcome: "deferred", deferral: "map_fetch_error", reason: `map_fetch_error: ${err.message}`, bytesPushed: 0, droppedOld };
+    }
     return {
       key,
       tenant,

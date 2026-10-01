@@ -624,7 +624,12 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   `nextWrittenKeys` pages past it), so the batch fills with the other tenant's keys, and
   one `o11y.drain.stream_limit` warning line names the tenant and Loki's message. Any
   other `429`, and a `5xx`, stays transient and stops the batch. An inbox read that
-  throws defers only that key; the rest of the batch still pushes and commits. A batch
+  throws defers only that key; the rest of the batch still pushes and commits. So does a
+  source-map read that still fails after two in-call retries (`deferral: "map_fetch_error"`,
+  logged as `o11y.drain.error`): the key stays `written` and nothing is pushed for it, so
+  a replay never sends an unsymbolicated copy first. The ledger counts no attempts, so the
+  deferral lasts only while the key's inbox hour is under 6 hours old
+  (`MAP_RETRY_MAX_AGE_MS`); after that the key pushes with its frames as they are. A batch
   of only deferred keys ends the wake's drain once no un-excluded tenant has keys left.
 - **Symbolication read caps.** One inbox object reads at most 32 distinct maps
   (`MAX_MAP_KEYS_PER_CALL`, first-seen order), one body adds at most 8 of them
@@ -634,6 +639,13 @@ is a size decision at the inbox/Loki layer only, not an ingest-wide refusal.
   reported as `o11y.symbolicate.skip` with reason `over_cap`, plus one aggregate
   `over_cap` line with the call's capped `frames` and `keys` that `MAX_SKIP_REPORTS`
   never suppresses.
+  Before any read, each distinct `service.version` that has a resolvable frame is listed
+  once (`sourcemaps/<version>/`, paged through the R2 cursor); only a key the listing
+  shows is admitted, so a forged frame path costs no read and is reported as `no_map`.
+  `service.version` is client-supplied, so a call lists at most 8 versions
+  (`MAX_LISTED_VERSIONS_PER_CALL`); frames of the rest stay as they were and are
+  reported per version prefix as `over_version_cap`. A list that throws (or runs past
+  5 pages) is reported as `list_error` and that version falls back to the caps above.
 
 ## 9. Lite beacon payload
 

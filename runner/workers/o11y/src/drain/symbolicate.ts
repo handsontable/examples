@@ -114,6 +114,8 @@ export type SymbolicateSkipReason =
   | "parse_error"
   | "over_budget"
   | "over_cap"
+  | "over_version_cap"
+  | "list_error"
   | "lookup_error"
   | "no_frames_matched";
 
@@ -130,6 +132,26 @@ export const MAX_FRAMES_PER_BODY = 128;
  *  one forged body then cannot use up the whole object's budget. */
 export const MAX_NEW_MAP_KEYS_PER_BODY = 8;
 
+/** Distinct `service.version` prefixes one call may list: the version is
+ *  client-supplied, so a body of forged versions would otherwise trade map
+ *  GETs for lists. A real inbox object carries one or two builds. */
+export const MAX_LISTED_VERSIONS_PER_CALL = 8;
+
+/** Thrown instead of returning when {@link SymbolicateDeps.deferTransient} is
+ *  set and a map read still failed after its retries: the caller leaves the
+ *  object for a later wake rather than push frames that a retry could resolve. */
+export class TransientSymbolicateError extends Error {
+  readonly keys: readonly string[];
+  constructor(keys: readonly string[], detail: string) {
+    super(`${keys.length} map read(s) failed: ${keys.slice(0, 3).join(", ")}: ${detail}`);
+    this.name = "TransientSymbolicateError";
+    this.keys = keys;
+  }
+}
+
+/** Waits before the 2nd and 3rd attempt of a map read that threw. */
+const MAP_READ_RETRY_DELAYS_MS: readonly number[] = [100, 300];
+
 export interface SymbolicateSkip {
   /** The maps-bucket key, e.g. `sourcemaps/<sha>/assets/index-abc.js.map`. */
   key: string;
@@ -145,6 +167,16 @@ export interface SymbolicateDeps {
   /** Reads one map object; `null` when absent — never fetches from the
    *  app origin (a rotated deploy hash can answer `200 text/html`). */
   getMap(key: string): Promise<string | null>;
+  /** The keys that exist under `prefix` (`sourcemaps/<service.version>/`),
+   *  called once per distinct version before any read: a forged frame path
+   *  then costs no `getMap`. Absent, or throwing, falls back to admitting
+   *  keys by the caps alone (a throw is reported as `list_error`). */
+  listMaps?(prefix: string): Promise<Set<string>>;
+  /** Throw {@link TransientSymbolicateError} when a map read still fails after
+   *  its retries, instead of leaving the frames unresolved. */
+  deferTransient?: boolean;
+  /** Overrides the pauses between a failing read's attempts. */
+  retryDelaysMs?: readonly number[];
   /** Called at most once per call when any key had unresolved frames, up
    *  to {@link MAX_SKIP_REPORTS} entries, plus the call's total of capped
    *  frames and keys (never suppressed). Defaults to
@@ -179,6 +211,8 @@ interface KeyStats {
   capped: number;
   lookupErrors: number;
   lookupDetail?: string;
+  /** Frames the version's listing showed have no map object: never read. */
+  absent: boolean;
 }
 
 /**
@@ -194,6 +228,12 @@ class DrainMapCache {
   /** Why a key resolved to `null`, for the skip signal. */
   #failures = new Map<string, { reason: SymbolicateSkipReason; detail?: string }>();
   #parsedBytes = 0;
+  /** Keys whose read threw on every attempt. */
+  #transient: string[] = [];
+  #transientDetail: string | undefined;
+  /** Set by the first key to exhaust its retries: the store is likely down,
+   *  so later keys get one attempt each instead of waiting out the delays. */
+  #degraded = false;
   /** A generous per-invocation ceiling on total parsed map JSON, well
    *  under the 64 MB isolate-memory budget criterion 5 sets — a
    *  batch-wide cap against a pathological object with many chunk files. */
@@ -223,13 +263,35 @@ class DrainMapCache {
     return null;
   }
 
+  transientFailures(): { keys: readonly string[]; detail: string } | null {
+    return this.#transient.length > 0 ? { keys: this.#transient, detail: this.#transientDetail ?? "" } : null;
+  }
+
+  async #read(key: string): Promise<string | null> {
+    const delays = this.#degraded ? [] : (this.#deps.retryDelaysMs ?? MAP_READ_RETRY_DELAYS_MS);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.#deps.getMap(key);
+      } catch (err) {
+        const delay = delays[attempt];
+        if (delay === undefined) {
+          this.#degraded = true;
+          throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
   async get(key: string): Promise<TraceMap | null> {
     if (this.#parsed.has(key)) return this.#parsed.get(key) ?? null;
     if (this.#parsedBytes >= DrainMapCache.MAX_PARSED_BYTES) return this.#fail(key, "over_budget");
     let text: string | null;
     try {
-      text = await this.#deps.getMap(key);
+      text = await this.#read(key);
     } catch (err) {
+      this.#transient.push(key);
+      this.#transientDetail ??= errorDetail(err);
       return this.#fail(key, "fetch_error", errorDetail(err));
     }
     if (text === null) return this.#fail(key, "no_map");
@@ -259,19 +321,47 @@ interface PlannedBody {
 function statsFor(stats: Map<string, KeyStats>, mapKey: string): KeyStats {
   let keyStats = stats.get(mapKey);
   if (!keyStats) {
-    keyStats = { attempted: 0, resolved: 0, capped: 0, lookupErrors: 0 };
+    keyStats = { attempted: 0, resolved: 0, capped: 0, lookupErrors: 0, absent: false };
     stats.set(mapKey, keyStats);
   }
   return keyStats;
 }
 
+/** What the call knows about one `service.version`'s maps. */
+type VersionListing = { kind: "listed"; keys: ReadonlySet<string> } | { kind: "over_cap" } | { kind: "unlisted" };
+
+interface PlanState {
+  admitted: Set<string>;
+  stats: Map<string, KeyStats>;
+  listings: Map<string, VersionListing>;
+  /** Per-version skips that belong to no single map key. */
+  versionSkips: Map<string, SymbolicateSkip>;
+}
+
+const versionPrefix = (serviceVersion: string): string => `sourcemaps/${serviceVersion}/`;
+
+/** Whether `body` has a frame that could name a map for `serviceVersion`. */
+function hasResolvableFrame(body: string, serviceVersion: string): boolean {
+  for (const raw of body.split("\n")) {
+    const frame = parseLine(raw);
+    if (!frame || frame.line === undefined || frame.col === undefined) continue;
+    if (!Number.isFinite(frame.line) || !Number.isFinite(frame.col) || frame.line < 1) continue;
+    if (isBabelChunk(frame.filename)) continue;
+    if (mapKeyFor(frame.filename, serviceVersion)) return true;
+  }
+  return false;
+}
+
 /** Picks the frames of one body to look up, in line order, admitting map keys
- *  into `admitted` up to {@link MAX_MAP_KEYS_PER_CALL} and
- *  {@link MAX_NEW_MAP_KEYS_PER_BODY}. Synchronous and
- *  order-only, so which frames are capped never depends on R2 timing. A
- *  `line < 1` frame is skipped (`originalPositionFor({line:0})` throws, and a
- *  `lineno: 0` frame is valid Faro input). */
-function planBody(body: string, serviceVersion: string, admitted: Set<string>, stats: Map<string, KeyStats>): PlannedBody {
+ *  into `state.admitted` up to {@link MAX_MAP_KEYS_PER_CALL} and
+ *  {@link MAX_NEW_MAP_KEYS_PER_BODY}. A key the version's listing lacks is
+ *  never admitted. Synchronous and order-only, so which frames are capped
+ *  never depends on R2 timing. A `line < 1` frame is skipped
+ *  (`originalPositionFor({line:0})` throws, and a `lineno: 0` frame is valid
+ *  Faro input). */
+function planBody(body: string, serviceVersion: string, state: PlanState): PlannedBody {
+  const { admitted, stats } = state;
+  const listing = state.listings.get(serviceVersion);
   const lines = body.split("\n");
   const frames: PlannedFrame[] = [];
   let candidates = 0;
@@ -285,7 +375,19 @@ function planBody(body: string, serviceVersion: string, admitted: Set<string>, s
     if (isBabelChunk(frame.filename)) continue; // criterion 5: left unparsed, deliberately
     const mapKey = mapKeyFor(frame.filename, serviceVersion);
     if (!mapKey) continue;
+    if (listing?.kind === "over_cap") {
+      const prefix = versionPrefix(serviceVersion);
+      const skip = state.versionSkips.get(prefix) ?? { key: prefix, reason: "over_version_cap" as const, frames: 0 };
+      skip.frames++;
+      state.versionSkips.set(prefix, skip);
+      continue;
+    }
     const keyStats = statsFor(stats, mapKey);
+    if (listing?.kind === "listed" && !listing.keys.has(mapKey)) {
+      keyStats.attempted++;
+      keyStats.absent = true;
+      continue;
+    }
     candidates++;
     const isNew = !admitted.has(mapKey);
     if (candidates > MAX_FRAMES_PER_BODY || (isNew && (admitted.size >= MAX_MAP_KEYS_PER_CALL || newKeys >= MAX_NEW_MAP_KEYS_PER_BODY))) {
@@ -354,6 +456,43 @@ function serviceVersionOf(record: OtlpResourceLogs): string | null {
   return null;
 }
 
+/** Lists each distinct `service.version` that has a resolvable frame, in
+ *  first-seen order, up to {@link MAX_LISTED_VERSIONS_PER_CALL}; the rest are
+ *  marked `over_cap`. A list that throws leaves its version `unlisted`. */
+async function listVersions(records: readonly OtlpResourceLogs[], deps: SymbolicateDeps, state: PlanState): Promise<void> {
+  const { listMaps } = deps;
+  if (!listMaps) return;
+  const versions: string[] = [];
+  for (const record of records) {
+    if (!isExceptionRecord(record)) continue;
+    const serviceVersion = serviceVersionOf(record);
+    if (!serviceVersion || versions.includes(serviceVersion)) continue;
+    const wanted = record.scopeLogs.some((scope) =>
+      scope.logRecords.some((log) => {
+        try {
+          return !!log.body?.stringValue && hasResolvableFrame(log.body.stringValue, serviceVersion);
+        } catch {
+          return false;
+        }
+      }),
+    );
+    if (wanted) versions.push(serviceVersion);
+  }
+  for (const [i, serviceVersion] of versions.entries()) {
+    if (i >= MAX_LISTED_VERSIONS_PER_CALL) {
+      state.listings.set(serviceVersion, { kind: "over_cap" });
+      continue;
+    }
+    const prefix = versionPrefix(serviceVersion);
+    try {
+      state.listings.set(serviceVersion, { kind: "listed", keys: await listMaps(prefix) });
+    } catch (err) {
+      state.listings.set(serviceVersion, { kind: "unlisted" });
+      state.versionSkips.set(prefix, { key: prefix, reason: "list_error", frames: 0, detail: errorDetail(err) });
+    }
+  }
+}
+
 /**
  * Resolves every exception record's body in `records`, leaving every other
  * record untouched. One {@link DrainMapCache} per call — see its own doc
@@ -367,9 +506,11 @@ export async function symbolicateResourceLogs(
   deps: SymbolicateDeps,
 ): Promise<OtlpResourceLogs[]> {
   const cache = new DrainMapCache(deps);
-  const stats = new Map<string, KeyStats>();
-  const admitted = new Set<string>();
+  const state: PlanState = { admitted: new Set(), stats: new Map(), listings: new Map(), versionSkips: new Map() };
+  const { admitted, stats } = state;
   const plans = new Map<object, PlannedBody>();
+
+  await listVersions(records, deps, state);
 
   for (const record of records) {
     if (!isExceptionRecord(record)) continue;
@@ -379,7 +520,7 @@ export async function symbolicateResourceLogs(
       for (const log of scope.logRecords) {
         if (!log.body?.stringValue) continue;
         try {
-          plans.set(log, planBody(log.body.stringValue, serviceVersion, admitted, stats));
+          plans.set(log, planBody(log.body.stringValue, serviceVersion, state));
         } catch {
           // a body that cannot be planned is left as it is
         }
@@ -388,6 +529,9 @@ export async function symbolicateResourceLogs(
   }
 
   for (const mapKey of admitted) await cache.get(mapKey);
+
+  const transient = cache.transientFailures();
+  if (transient && deps.deferTransient) throw new TransientSymbolicateError(transient.keys, transient.detail);
 
   const out: OtlpResourceLogs[] = [];
   for (const record of records) {
@@ -411,7 +555,7 @@ export async function symbolicateResourceLogs(
     out.push({ ...record, scopeLogs: resolvedScopeLogs });
   }
 
-  reportSkips(stats, cache, deps.onSkip ?? logSymbolicateSkips);
+  reportSkips(stats, cache, state.versionSkips, deps.onSkip ?? logSymbolicateSkips);
   return out;
 }
 
@@ -422,10 +566,11 @@ export async function symbolicateResourceLogs(
 function reportSkips(
   stats: Map<string, KeyStats>,
   cache: DrainMapCache,
+  versionSkips: ReadonlyMap<string, SymbolicateSkip>,
   onSkip: NonNullable<SymbolicateDeps["onSkip"]>,
 ): void {
-  const skips: SymbolicateSkip[] = [];
-  let suppressed = 0;
+  const skips: SymbolicateSkip[] = [...versionSkips.values()].slice(0, MAX_SKIP_REPORTS);
+  let suppressed = Math.max(0, versionSkips.size - MAX_SKIP_REPORTS);
   const overCap = { frames: 0, keys: 0 };
   for (const [key, s] of stats) {
     if (s.capped > 0) {
@@ -436,7 +581,8 @@ function reportSkips(
     if (unresolved === 0) continue;
     const failure = cache.failureOf(key);
     let skip: SymbolicateSkip | null = null;
-    if (failure) skip = { key, reason: failure.reason, frames: unresolved, ...(failure.detail !== undefined ? { detail: failure.detail } : {}) };
+    if (s.absent) skip = { key, reason: "no_map", frames: unresolved };
+    else if (failure) skip = { key, reason: failure.reason, frames: unresolved, ...(failure.detail !== undefined ? { detail: failure.detail } : {}) };
     else if (s.lookupErrors > 0) skip = { key, reason: "lookup_error", frames: unresolved, ...(s.lookupDetail !== undefined ? { detail: s.lookupDetail } : {}) };
     else if (s.capped > 0) skip = { key, reason: "over_cap", frames: unresolved };
     else if (s.resolved === 0) skip = { key, reason: "no_frames_matched", frames: unresolved };

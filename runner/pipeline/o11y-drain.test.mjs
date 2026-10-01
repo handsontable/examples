@@ -6,11 +6,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
+import { readFileSync } from "node:fs";
+import { parseDockerfileBaseImages } from "../scripts/dev-lib.mjs";
 
 register("./fixtures/o11y-worker-hooks.mjs", import.meta.url);
 
-const { drainKey, drainBatch } = await import("../workers/o11y/src/drain/drain.ts");
-const { encodeNdjson } = await import("@handsontable/demo-runtime/telemetry");
+const { drainKey, drainBatch, MAP_RETRY_MAX_AGE_MS } = await import("../workers/o11y/src/drain/drain.ts");
+const { encodeNdjson, inboxKey } = await import("@handsontable/demo-runtime/telemetry");
+const { symbolicateResourceLogs, TransientSymbolicateError } = await import("../workers/o11y/src/drain/symbolicate.ts");
 
 async function gzip(text) {
   const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
@@ -521,9 +524,19 @@ test("drainBatch stops immediately on the first `error` outcome, leaving later k
 
 // ---- Loki's active-stream limit ---------------------------------------------
 
-// Loki 3.3.2's own wording for `max_global_streams_per_user` (default 5000).
+// `validation.StreamLimitErrorMsg` as Loki 3.3.2 sends it for `max_global_streams_per_user`
+// (default 5000). `drain.ts` matches this wording; a Loki bump must re-verify it.
+const STREAM_LIMIT_WORDING_LOKI_VERSION = "3.3.2";
 const STREAM_LIMIT_MESSAGE =
   "Maximum active stream limit exceeded when trying to create stream {hot_outcome=\"o5001\"}, reduce the number of active streams (reduce labels or reduce label values), or contact your Loki administrator to see if the limit can be increased, user: 'browser'";
+
+test("the stream-limit wording fixture was captured from the Loki version the box image ships", () => {
+  const dockerfile = readFileSync(new URL("../containers/o11y/Dockerfile", import.meta.url), "utf8");
+  const tags = parseDockerfileBaseImages(dockerfile)
+    .filter((image) => image.startsWith("grafana/loki:"))
+    .map((image) => image.slice("grafana/loki:".length));
+  assert.deepEqual(tags, [STREAM_LIMIT_WORDING_LOKI_VERSION], "a Loki bump needs the stream-limit wording re-verified, then this constant moved");
+});
 
 async function pushedText(gz) {
   const stream = new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"));
@@ -691,4 +704,122 @@ test("a fetchObject throw on key 2 of 3 defers only that key: keys 1 and 3 still
   );
   assert.match(result.outcomes[1].reason ?? "", /^fetch_error: Too many subrequests\.$/);
   assert.ok(pushes.some((p) => p.includes("first")) && pushes.some((p) => p.includes("third")));
+});
+
+// ---- a failed source-map read ---------------------------------------------------
+
+const ONE_MAPPING_MAP = JSON.stringify({ version: 3, sources: ["../../src/a.ts"], names: [], mappings: "AAAA" });
+
+function exceptionRecord(bodyText) {
+  const r = record(bodyText);
+  r.resource.attributes.push({ key: "service.version", value: { stringValue: "sha1" } });
+  r.scopeLogs[0].logRecords[0].attributes = [{ key: "hot.kind", value: { stringValue: "exception" } }];
+  return r;
+}
+
+const EXCEPTION_BODY = "TypeError: x\n    at f (https://demos.handsontable.com/assets/app.js:1:1)";
+
+/** The real symbolicator over a `getMap`, with no pause between retries. */
+function realSymbolicate(getMap, calls = []) {
+  return (records, opts) => {
+    calls.push(opts);
+    return symbolicateResourceLogs(records, { getMap, retryDelaysMs: [0, 0], deferTransient: opts.deferTransient, onSkip() {} });
+  };
+}
+
+function recordingLoki(pushed) {
+  return async (_tenant, gz) => {
+    const text = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+    for (const rl of JSON.parse(text).resourceLogs) pushed.push(rl.scopeLogs[0].logRecords[0].body.stringValue);
+    return { status: 204 };
+  };
+}
+
+test("drainKey: a map read that keeps failing defers the key with nothing pushed, and the batch continues", async () => {
+  const keys = [inboxKey("worker", new Date(), 0), inboxKey("worker", new Date(), 1)];
+  const objects = { [keys[0]]: await objectBytes([exceptionRecord(EXCEPTION_BODY)]), [keys[1]]: await objectBytes([record("plain")]) };
+  const pushed = [];
+
+  const result = await drainBatch(keys, new Set(), {
+    fetchObject: async (k) => objects[k] ?? null,
+    pushToLoki: recordingLoki(pushed),
+    symbolicate: realSymbolicate(async () => {
+      throw new Error("R2 get timed out");
+    }),
+  });
+
+  assert.equal(result.stoppedEarly, false, "a flaky map read never ends the batch");
+  assert.deepEqual(result.outcomes.map((o) => [o.outcome, o.deferral]), [["deferred", "map_fetch_error"], ["provisional", undefined]]);
+  assert.match(result.outcomes[0].reason, /^map_fetch_error: /);
+  assert.deepEqual(pushed, ["plain"]);
+});
+
+test("drainKey: a map read that fails once and then answers is retried in the call and resolves", async () => {
+  const key = inboxKey("worker", new Date(), 0);
+  const bytes = await objectBytes([exceptionRecord(EXCEPTION_BODY)]);
+  const pushed = [];
+  let reads = 0;
+
+  const outcome = await drainKey(key, new Set(), {
+    fetchObject: async () => bytes,
+    pushToLoki: recordingLoki(pushed),
+    symbolicate: realSymbolicate(async () => {
+      if (reads++ === 0) throw new Error("R2 get timed out");
+      return ONE_MAPPING_MAP;
+    }),
+  });
+
+  assert.equal(outcome.outcome, "provisional");
+  assert.equal(reads, 2);
+  assert.match(pushed[0], /\(src\/a\.ts:1:1\)/);
+});
+
+test("drainKey: a replay after a deferral pushes the resolved body once, never an unsymbolicated copy first", async () => {
+  const key = inboxKey("worker", new Date(), 0);
+  const bytes = await objectBytes([exceptionRecord(EXCEPTION_BODY)]);
+  const pushed = [];
+  const seen = new Set();
+  const deps = (getMap) => ({ fetchObject: async () => bytes, pushToLoki: recordingLoki(pushed), symbolicate: realSymbolicate(getMap) });
+
+  const first = await drainKey(key, seen, deps(async () => { throw new Error("down"); }));
+  const second = await drainKey(key, seen, deps(async () => ONE_MAPPING_MAP));
+
+  assert.equal(first.outcome, "deferred");
+  assert.equal(second.outcome, "provisional");
+  assert.equal(pushed.length, 1);
+  assert.match(pushed[0], /\(src\/a\.ts:1:1\)/);
+});
+
+test("drainKey: past MAP_RETRY_MAX_AGE_MS a failing map read pushes the frames as they are instead of deferring", async () => {
+  const key = inboxKey("worker", new Date(), 0);
+  const bytes = await objectBytes([exceptionRecord(EXCEPTION_BODY)]);
+  const pushed = [];
+  const calls = [];
+  const inboxHourMs = Date.parse(`${key.split("/")[2]}T${key.split("/")[3]}:00:00Z`);
+  const deps = (now) => ({
+    fetchObject: async () => bytes,
+    pushToLoki: recordingLoki(pushed),
+    symbolicate: realSymbolicate(async () => { throw new Error("down"); }, calls),
+    now: () => now,
+  });
+
+  const young = await drainKey(key, new Set(), deps(inboxHourMs + MAP_RETRY_MAX_AGE_MS - 1));
+  const old = await drainKey(key, new Set(), deps(inboxHourMs + MAP_RETRY_MAX_AGE_MS));
+
+  assert.deepEqual([young.outcome, old.outcome], ["deferred", "provisional"]);
+  assert.deepEqual(calls, [{ deferTransient: true }, { deferTransient: false }]);
+  assert.equal(pushed.length, 1);
+  assert.equal(pushed[0], EXCEPTION_BODY, "unsymbolicated, byte for byte");
+});
+
+test("drainKey: only a TransientSymbolicateError defers; any other symbolicate throw is still a rejection", async () => {
+  const key = inboxKey("worker", new Date(), 0);
+  const bytes = await objectBytes([record("x")]);
+  const run = (err) => drainKey(key, new Set(), {
+    fetchObject: async () => bytes,
+    pushToLoki: async () => ({ status: 204 }),
+    symbolicate: async () => { throw err; },
+  });
+  assert.equal((await run(new TransientSymbolicateError(["k"], "d"))).outcome, "deferred");
+  assert.equal((await run(new Error("boom"))).outcome, "rejected");
 });
