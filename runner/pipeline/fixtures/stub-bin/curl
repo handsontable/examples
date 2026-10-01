@@ -12,6 +12,7 @@
 #                        empty     -> a valid, empty <ListBucketResult>
 #                        haskey    -> a valid listing with one
 #                                     pre-existing uploader-named <Key>
+#                                     under the requested prefix
 #                        malformed -> HTTP 200 but not real S3 XML (a proxy
 #                                     error page)
 #                        code200   -> bare `200` on stdout, nothing else — F2
@@ -25,9 +26,15 @@
 #                                     this mode for both of those calls, after
 #                                     whatever `empty`/`haskey` listing modes
 #                                     precede them in the same MODES list.
+#   STUB_CURL_ARGS_FILE     optional file receiving each call's request URL
 #   STUB_CURL_COUNTER_FILE  a file this script increments (one line per
 #                      call) so the test can also assert call counts.
 set -u
+# The listing prefix the caller asked for, decoded from the request URL (the
+# last argument), so a `haskey` key lands under whichever index prefix was listed.
+req_url="${*: -1}"
+req_prefix="$(printf '%s' "$req_url" | sed -n 's/.*[?&]prefix=\([^&]*\).*/\1/p' | sed 's/%2F/\//g')"
+[ -n "${STUB_CURL_ARGS_FILE:-}" ] && printf '%s\n' "$req_url" >> "$STUB_CURL_ARGS_FILE"
 counter_file="${STUB_CURL_COUNTER_FILE:?STUB_CURL_COUNTER_FILE not set}"
 call_index="$(wc -l < "$counter_file" 2>/dev/null || echo 0)"
 printf 'x\n' >> "$counter_file"
@@ -50,11 +57,11 @@ case "$mode" in
     exit 0
     ;;
   haskey)
-    printf '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated><Contents><Key>index/index/19999/1700000000-uploaderA-abc.tsdb.gz</Key></Contents></ListBucketResult>'
+    printf '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated><Contents><Key>%s1700000000-uploaderA-abc.tsdb.gz</Key></Contents></ListBucketResult>' "$req_prefix"
     exit 0
     ;;
   truncated)
-    printf '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>true</IsTruncated><Contents><Key>index/index/19999/1700000000-uploaderA-abc.tsdb.gz</Key></Contents></ListBucketResult>'
+    printf '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>true</IsTruncated><Contents><Key>%s1700000000-uploaderA-abc.tsdb.gz</Key></Contents></ListBucketResult>' "$req_prefix"
     exit 0
     ;;
   malformed)

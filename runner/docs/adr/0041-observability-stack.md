@@ -326,6 +326,17 @@ no query ever reaches those entries, and the index bytes they cost are negligibl
 index is not split per tenant. Compactor retention stays off: its markers would live
 on ephemeral disk, and `retention_delete_delay` outlasts any wake.
 
+The schema has two periods. The first set `index.prefix: "index/"`; a slash in the
+prefix makes the compactor fail to map the table back to a schema period, so it never
+compacted. The second period (`from: 2026-10-03`, same store, schema and 24h period)
+uses `index_`, so new tables are `index/index_<day>/…` where the old ones are
+`index/index/<day>/…`. Both periods stay in the config to keep old data readable, and
+the stop check lists both prefixes per day because records up to 7 days old still land
+in the old-prefix table after `from`. Until `from`, local and production runs write the
+old prefix; the stop-roundtrip script covers the new one with a seeded key. The old
+period can be dropped once nothing older than the `index/` lifecycle rule (90 days) is
+left under `index/index/` (follow-up, not before 90 days after `from`).
+
 **B.5 Gates**, every route authenticated or gated:
 
 | Route | Gate |

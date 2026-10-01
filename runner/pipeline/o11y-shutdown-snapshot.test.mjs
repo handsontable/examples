@@ -36,19 +36,22 @@ const STUB_BIN_DIR = path.join(HERE, "fixtures", "stub-bin");
  *  `script` should end by printing whatever the test wants to assert on.
  *  `daySpan` sets `O11Y_INDEX_DAY_SPAN_DAYS` before `shutdown.sh` is
  *  sourced (`INDEX_DAY_SPAN_DAYS` is only read at source time, not inside a
- *  function) — defaults to `1` (today + yesterday, i.e. two day-prefixes
- *  per snapshot) so most tests' call-count expectations keep meaning
+ *  function) — defaults to `1` (today + yesterday, i.e. four listings per
+ *  snapshot: two days x the `index/` and `index_` prefixes) so most tests' call-count expectations keep meaning
  *  exactly what they say without editing each one; tests that care about
  *  the wider (production) span pass `daySpan` explicitly. */
 function runBash(script, { modes = "empty", daySpan = 1 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "o11y-shutdown-test-"));
   const counterFile = path.join(dir, "curl-calls");
   writeFileSync(counterFile, "");
+  const argsFile = path.join(dir, "curl-args");
+  writeFileSync(argsFile, "");
   try {
     const full = `
 set -u
 export STUB_CURL_MODES=${JSON.stringify(modes)}
 export STUB_CURL_COUNTER_FILE=${JSON.stringify(counterFile)}
+export STUB_CURL_ARGS_FILE=${JSON.stringify(argsFile)}
 export LOKI_S3_ENDPOINT="minio.example:9000"
 export LOKI_S3_BUCKET="loki"
 export LOKI_S3_REGION="auto"
@@ -108,13 +111,13 @@ test("r2_list_prefix: a 200 that is not real S3 XML (a proxy error page) is refu
 
 // ---- snapshot_index_keys: propagates a failed listing as a failure --------
 
-test("snapshot_index_keys: fails (prints nothing usable) when either day's listing fails", () => {
+test("snapshot_index_keys: fails (prints nothing usable) when any one listing fails", () => {
   const res = runBash('snapshot_index_keys 19999 > /dev/null; echo "EXIT:$?"', { modes: "fail" });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /EXIT:1$/m);
 });
 
-test("snapshot_index_keys: succeeds (possibly empty) when both listings succeed", () => {
+test("snapshot_index_keys: succeeds (possibly empty) when every listing succeeds", () => {
   const res = runBash('snapshot_index_keys 19999 > /dev/null; echo "EXIT:$?"', { modes: "empty" });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /EXIT:0$/m);
@@ -147,9 +150,9 @@ if [ "$snapshot_ok" -eq 1 ]; then
 fi
 echo "MARKER_OK:$marker_ok"
 `;
-  // Calls 1-2 (the BEFORE snapshot's two day-prefix listings) fail; calls
-  // 3-4 (the AFTER snapshot) succeed and find the pre-existing key.
-  const res = runBash(script, { modes: "fail,fail,haskey,haskey" });
+  // Calls 1-4 (the BEFORE snapshot's four listings) fail; calls
+  // 5-8 (the AFTER snapshot) succeed and find the pre-existing key.
+  const res = runBash(script, { modes: "fail,fail,fail,fail,haskey,haskey,haskey,haskey" });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /SNAPSHOT_OK:0/);
   assert.match(res.stdout, /MARKER_OK:1/, "the marker must be refused — the pre-existing key must never be read as new");
@@ -166,8 +169,8 @@ else
   echo "MARKER_OK:1"
 fi
 `;
-  // BEFORE both empty, AFTER both find the key — a genuine new upload.
-  const res = runBash(script, { modes: "empty,empty,haskey,haskey" });
+  // BEFORE all four empty, AFTER all four find the key — a genuine new upload.
+  const res = runBash(script, { modes: "empty,empty,empty,empty,haskey,haskey,haskey,haskey" });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /MARKER_OK:0/, "a real new upload, cleanly confirmed both sides, must still write the marker");
 });
@@ -223,24 +226,24 @@ test("second wave: run_stop_protocol() itself refuses the marker when the PRE-SI
 
 test("second wave (revert check / positive control): run_stop_protocol() writes a real marker when both snapshots succeed and a genuinely new key is confirmed", () => {
   const res = withFakeLoki('run_stop_protocol; echo "EXIT:$?"; echo "CALLS:$(wc -l < "$STUB_CURL_COUNTER_FILE")"', {
-    modes: "empty,empty,haskey,haskey,code200,code200",
+    modes: "empty,empty,empty,empty,haskey,haskey,haskey,haskey,code200,code200",
   });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /EXIT:0$/m, "run_stop_protocol must return 0 — a clean stop, marker written");
-  assert.match(res.stdout, /CALLS:\s*6$/m, "before x2, after x2, PUT, HEAD — the full real marker-write path");
+  assert.match(res.stdout, /CALLS:\s*10$/m, "before x4, after x4, PUT, HEAD — the full real marker-write path");
 });
 
 // ---- the snapshot must span every day a backlogged upload could land, not
 // just today and yesterday ---------------------------------------------------
 
 test("snapshot_index_keys: queries one prefix per day from day_now down through day_now - INDEX_DAY_SPAN_DAYS", () => {
-  // daySpan=3 -> 4 day-prefixes (offsets 0..3) -> 4 curl calls for one snapshot.
+  // daySpan=3 -> 4 days (offsets 0..3) x 2 index prefixes -> 8 curl calls for one snapshot.
   const res = runBash('snapshot_index_keys 19999 > /dev/null; echo "CALLS:$(wc -l < "$STUB_CURL_COUNTER_FILE")"', {
     modes: "empty",
     daySpan: 3,
   });
   assert.equal(res.status, 0, res.stderr);
-  assert.match(res.stdout, /CALLS:\s*4$/m, "one call per day from day_now through day_now - 3, inclusive");
+  assert.match(res.stdout, /CALLS:\s*8$/m, "one call per day and index prefix from day_now through day_now - 3, inclusive");
 });
 
 // `shutdown.sh`'s `snapshot_index_keys` must not use a two-argument,
@@ -273,4 +276,36 @@ fi
     /MARKER_OK:0/,
     "a genuinely new upload under a day older than yesterday must still confirm the marker",
   );
+});
+
+// ---- both index prefixes are listed ----------------------------------------
+
+test("snapshot_index_keys: lists each day under both the index/ and index_ table prefixes", () => {
+  const res = runBash('snapshot_index_keys 19999 > /dev/null; cat "$STUB_CURL_ARGS_FILE"', {
+    modes: "empty",
+    daySpan: 0,
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /prefix=index%2Findex%2F19999%2F/, "old-prefix table listed");
+  assert.match(res.stdout, /prefix=index%2Findex_19999%2F/, "new-prefix table listed");
+});
+
+test("snapshot_index_keys: a failure in the index_ listing alone fails the whole snapshot", () => {
+  // daySpan=0 -> call 1 is index/index/<day>/ (empty), call 2 is index/index_<day>/ (fails).
+  const res = runBash('snapshot_index_keys 19999 > /dev/null; echo "EXIT:$?"', { modes: "empty,fail", daySpan: 0 });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /EXIT:1$/m, "an unconfirmable listing under either prefix is cannot-confirm, never empty");
+});
+
+test("a new upload under the index_ prefix is confirmed as new", () => {
+  const script = `
+day_now=19999
+before_keys="$(snapshot_index_keys "$day_now")"
+after_keys="$(snapshot_index_keys "$day_now")"
+if confirm_new_upload "uploaderA" "$before_keys" "$after_keys"; then echo "MARKER_OK:0"; else echo "MARKER_OK:1"; fi
+`;
+  // daySpan=0: before = old, new (both empty); after = old (empty), new (has the key).
+  const res = runBash(script, { modes: "empty,empty,empty,haskey", daySpan: 0 });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /MARKER_OK:0/, "a key that only exists under index_<day>/ must count");
 });

@@ -27,20 +27,25 @@ INDEX_DAY_SPAN_DAYS="${O11Y_INDEX_DAY_SPAN_DAYS:-7}"
 
 # snapshot_index_keys <day_now>  — every uploader-named key under EVERY day
 # prefix the wake's pushed records could span (`day_now` down through
-# `day_now - INDEX_DAY_SPAN_DAYS`, inclusive), one per line. Prints nothing and returns 1 if ANY
-# one day's listing could not be confirmed (r2_list_prefix itself fails
+# `day_now - INDEX_DAY_SPAN_DAYS`, inclusive), one per line. Each day is
+# listed under both index prefixes: Loki writes `index/` + the schema prefix,
+# and records up to 7 days old still land in the older `index/` table after
+# the `index_` schema period starts. Prints nothing and returns 1 if ANY
+# one listing could not be confirmed (r2_list_prefix itself fails
 # closed — see lib.sh) — the caller MUST treat that as "cannot confirm,"
 # never as "confirmed empty."
 snapshot_index_keys() {
   local day_now="$1"
-  local keys="" offset day listing
+  local keys="" offset day listing key_prefix
   for offset in $(seq 0 "$INDEX_DAY_SPAN_DAYS"); do
     day=$((day_now - offset))
-    if ! listing="$(r2_list_prefix "index/index/${day}/")"; then
-      return 1
-    fi
-    keys="${keys}${listing}
+    for key_prefix in "index/index/${day}/" "index/index_${day}/"; do
+      if ! listing="$(r2_list_prefix "$key_prefix")"; then
+        return 1
+      fi
+      keys="${keys}${listing}
 "
+    done
   done
   printf '%s' "$keys"
   return 0
@@ -124,7 +129,7 @@ run_stop_protocol() {
           log "new index upload confirmed (not present before SIGTERM)"
           marker_ok=0
         else
-          log "no index object bearing uploader name '${uploader_name}' is new since before SIGTERM under index/index/{$((day_now - INDEX_DAY_SPAN_DAYS))..${day_now}}/ — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
+          log "no index object bearing uploader name '${uploader_name}' is new since before SIGTERM under index/index/ and index/index_ for days $((day_now - INDEX_DAY_SPAN_DAYS))..${day_now} — not writing a marker (plan B territory, see ADR-0041 exit criterion 1)"
           marker_ok=1
         fi
       else
