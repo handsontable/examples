@@ -489,8 +489,8 @@ export class GrafanaBox extends Container<Env> {
   async #scheduleStopBackstop(wakeId: string): Promise<void> {
     try {
       if ((await this.ctx.storage.get<string>(STOP_BACKSTOP_FOR_STORAGE_KEY)) === wakeId) return;
-      await this.schedule(new Date(Date.now() + this.stopBackstopMs), STOP_BACKSTOP_SCHEDULE, { wakeId });
       await this.ctx.storage.put(STOP_BACKSTOP_FOR_STORAGE_KEY, wakeId);
+      await this.schedule(new Date(Date.now() + this.stopBackstopMs), STOP_BACKSTOP_SCHEDULE, { wakeId });
     } catch (err) {
       console.error("GrafanaBox: could not schedule the stop backstop", err);
     }

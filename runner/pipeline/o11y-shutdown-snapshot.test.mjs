@@ -313,9 +313,11 @@ test("run_stop_protocol() gives up on a Grafana that ignores SIGTERM after its g
 GRAFANA_STOP_GRACE_SECONDS=1
 export WAKE_ID=test-wake-grafana
 export LOKI_UPLOADER_NAME_FILE=/nonexistent
-bash -c 'trap "" TERM; while true; do sleep 0.05; done' &
+ready="$(mktemp -u)"
+bash -c 'trap "" TERM; touch "$0"; while true; do sleep 0.05; done' "$ready" &
 GRAFANA_PID=$!
-sleep 0.5 # let the child install its trap
+for _ in $(seq 100); do [ -e "$ready" ] && break; sleep 0.05; done
+[ -e "$ready" ] || { echo 'fake grafana never became ready'; exit 9; }
 start=$(date +%s)
 run_stop_protocol; rc=$?
 echo "EXIT:$rc"
@@ -335,9 +337,11 @@ test("run_stop_protocol() logs the real exit code of a Grafana that stops within
 GRAFANA_STOP_GRACE_SECONDS=5
 export WAKE_ID=test-wake-grafana
 export LOKI_UPLOADER_NAME_FILE=/nonexistent
-bash -c 'trap "exit 3" TERM; while true; do sleep 0.05; done' &
+ready="$(mktemp -u)"
+bash -c 'trap "exit 3" TERM; touch "$0"; while true; do sleep 0.05; done' "$ready" &
 GRAFANA_PID=$!
-sleep 0.5 # let the child install its trap
+for _ in $(seq 100); do [ -e "$ready" ] && break; sleep 0.05; done
+[ -e "$ready" ] || { echo 'fake grafana never became ready'; exit 9; }
 run_stop_protocol; echo "EXIT:$?"
 `;
   const res = runBash(script, { modes: "empty" });
