@@ -76,13 +76,11 @@ jobs:
         if: always()
         run: docker compose -p o11y-stop-roundtrip -f runner/containers/o11y/compose.yml down -v
 
-  # Schedule and manual runs only: wrangler's container runtime reaches MinIO
-  # through host.docker.internal, which this Linux runner has not yet proven it
-  # resolves, so a PR is not gated on it.
+  # Schedule and manual runs only: it needs a wrangler dev container build and
+  # compose.ci.yml (MinIO/ClickHouse on 0.0.0.0, reachable from workerd's
+  # host-gateway), so a PR is not gated on it.
   idle-stop:
     if: github.event_name != 'pull_request'
-    # Until it has run green once on ubuntu-latest.
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -126,7 +124,7 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-      # continue-on-error hides a failed step from the run status, so surface it.
+      # A step summary line, so the nightly outcome is readable without opening logs.
       - name: Report the idle-stop outcome
         if: always()
         env:
@@ -134,7 +132,7 @@ jobs:
         run: |
           echo "### idle-stop: ${IDLE_OUTCOME}" >> "$GITHUB_STEP_SUMMARY"
           if [ "${IDLE_OUTCOME}" != "success" ]; then
-            echo "::warning title=o11y idle-stop::idle-stop check outcome was ${IDLE_OUTCOME} (job is continue-on-error; see the o11y-idle-stop-logs artifact)"
+            echo "::warning title=o11y idle-stop::idle-stop check outcome was ${IDLE_OUTCOME} (see the o11y-idle-stop-logs artifact)"
           fi
 
       - name: Tear down the compose stack
