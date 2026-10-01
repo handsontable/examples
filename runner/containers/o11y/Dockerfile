@@ -56,6 +56,7 @@ COPY loki/loki-config.filesystem.yaml /etc/loki/loki-config.filesystem.yaml
 COPY loki/runtime-config.yaml /etc/loki/runtime-config.yaml
 COPY grafana/grafana.ini /etc/grafana/grafana.ini
 COPY grafana/provisioning /etc/grafana/provisioning
+COPY grafana/clickhouse /etc/grafana/clickhouse
 COPY grafana/dashboards /etc/grafana/dashboards
 
 COPY supervisor/entrypoint.sh /entrypoint.sh
