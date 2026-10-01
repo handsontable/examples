@@ -501,36 +501,50 @@ export async function queryExampleEventTotals(
   return body.data as ExampleEventRow[];
 }
 
-/** The D1 write: a real `DELETE` for the day, then one `INSERT OR REPLACE`
- *  per row, in a single `env.DB.batch` — see this section's header for why a
- *  bare `INSERT OR REPLACE` alone is not enough. A day with zero rows still
- *  issues the `DELETE` (clearing a previous run's rows for that day), so an
- *  all-quiet day is not silently left with stale data either. */
+/** D1 caps bound parameters at 100 per statement and counts every statement of
+ *  a `batch()` against the per-invocation query limit (1000 on Workers Paid),
+ *  so rows go in as multi-row `VALUES`: 12 columns x 8 rows = 96 parameters. */
+const EXAMPLE_DAILY_COLUMNS = 12;
+const EXAMPLE_DAILY_ROWS_PER_INSERT = Math.floor(100 / EXAMPLE_DAILY_COLUMNS);
+/** The rollup's share of the 1000-query budget. The rest of the nightly cron
+ *  runs in the same invocation, so this stays well under it. */
+export const EXAMPLE_DAILY_MAX_STATEMENTS = 500;
+
+/** The D1 write: a real `DELETE` for the day, then multi-row
+ *  `INSERT OR REPLACE`s, in a single `env.DB.batch` — see this section's header
+ *  for why a bare `INSERT OR REPLACE` alone is not enough, and why one batch
+ *  (a failure part-way must not leave a half-written day). A day with zero rows
+ *  still issues the `DELETE` (clearing a previous run's rows for that day), so
+ *  an all-quiet day is not silently left with stale data either. A day too big
+ *  for `EXAMPLE_DAILY_MAX_STATEMENTS` throws BEFORE the `DELETE`, so the
+ *  previous run's rows survive. */
 export async function writeExampleDaily(env: Env, day: string, rows: readonly ExampleDailyRow[]): Promise<void> {
-  const statements = [
-    env.DB.prepare("DELETE FROM example_daily WHERE day = ?1").bind(day),
-    ...rows.map((r) =>
+  const inserts: D1PreparedStatement[] = [];
+  for (let i = 0; i < rows.length; i += EXAMPLE_DAILY_ROWS_PER_INSERT) {
+    const chunk = rows.slice(i, i + EXAMPLE_DAILY_ROWS_PER_INSERT);
+    const placeholders = chunk
+      .map((_, r) => `(${Array.from({ length: EXAMPLE_DAILY_COLUMNS }, (_c, c) => `?${r * EXAMPLE_DAILY_COLUMNS + c + 1}`).join(", ")})`)
+      .join(", ");
+    inserts.push(
       env.DB.prepare(
         `INSERT OR REPLACE INTO example_daily
            (day, kind, ref, area, framework, ht_major, opens, engaged, forked, saved, shared, downloaded)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+         VALUES ${placeholders}`,
       ).bind(
-        r.day,
-        r.kind,
-        r.ref,
-        r.area,
-        r.framework,
-        r.ht_major,
-        r.opens,
-        r.engaged,
-        r.forked,
-        r.saved,
-        r.shared,
-        r.downloaded,
+        ...chunk.flatMap((r) => [
+          r.day, r.kind, r.ref, r.area, r.framework, r.ht_major,
+          r.opens, r.engaged, r.forked, r.saved, r.shared, r.downloaded,
+        ]),
       ),
-    ),
-  ];
-  await env.DB.batch(statements);
+    );
+  }
+  if (inserts.length + 1 > EXAMPLE_DAILY_MAX_STATEMENTS) {
+    throw new Error(
+      `writeExampleDaily: ${rows.length} rows need ${inserts.length + 1} D1 statements, over the ${EXAMPLE_DAILY_MAX_STATEMENTS} budget ` +
+        `(the per-invocation limit counts each batch() statement) — refusing to write ${day}`,
+    );
+  }
+  await env.DB.batch([env.DB.prepare("DELETE FROM example_daily WHERE day = ?1").bind(day), ...inserts]);
 }
 
 /**

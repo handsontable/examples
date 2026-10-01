@@ -68,6 +68,25 @@ Constraint: anonymous by construction. Counts only, no user id, no per-request r
    succeeds, because the rebuild can take longer than the visitor stays on the page. The
    editor passes the open example's `ht_major` in the Save request, so the row has the
    same values the browser would have sent (contract §5).
+   **Design change (DEV-3146):** a save is attributed to its *source example*, not to the
+   demo. The funnel panel filters `blob17='docs'` and a saved demo's own taxonomy is
+   `kind=saved, ref=<demo id>`, so saves never showed. The API worker now resolves the row's
+   `forked_from` (following saved-demo hops, capped at 5) to the example's `kind`/`ref`/`area`/
+   `bucket`. `area` is not derivable from the lineage, so the worker bundles a compact
+   `docsPath` → `[guide, area]` map, `workers/api/src/docs-taxonomy.generated.ts`,
+   regenerated from the docs-examples manifests by the import-docs workflow and pinned by a
+   freshness test. A rollup-side lineage join was rejected: the funnel reads Analytics
+   Engine, not D1. Unresolvable lineages (MCP demos, unknown docs paths) stay
+   `kind=saved, ref=<demo id>`. Saves counted before this change keep that shape.
+   The taxonomy resolves per bucket (the lineage's own, newest for the legacy bucket-less
+   form), and the lineage reads run inside the `waitUntil` chain after the D1 update, so they
+   cannot delay or cancel a save. The funnel's "saved" stage counts Save actions on any
+   descendant of an example (repeat saves, saves of a fork's fork), while `engaged`, `shared`,
+   `forked` and `downloaded` fired from a reopened saved demo still go out as `kind=saved`; so
+   per area `saved` can exceed `forked`, and the stage is not a strict narrowing of the one
+   before it.
+   `serve.share` still undercounts edge-cached views; a server-side share route does not
+   exist, so there is nothing to count on yet.
 3. **No migration for attribution**: rollups join `demos.forked_from` against `/d` and
    `/embed` view counts; demos saved before the confirmed date are reported as `unknown`.
 4. **Analytics Engine layout**: `kind`, `ref` and `area` take three of the blob slots the
@@ -90,6 +109,14 @@ Constraint: anonymous by construction. Counts only, no user id, no per-request r
    COLUMN downloaded INTEGER NOT NULL DEFAULT 0`) and the matching `reconcile.ts` rollup
    change close that gap; existing rows backfill to `downloaded = 0` (their true count for
    already-rolled days is unrecoverable from D1 alone, and 0 never overcounts).
+   **Follow-up (DEV-3146):** D1 meters every statement of a `batch()` against its
+   per-invocation query limit (1000 on Workers Paid, documented 2026-10-01) and caps bound
+   parameters at 100 per statement, so one `INSERT` per row would exhaust it on a large day.
+   Rows now go in as multi-row `INSERT`s of 8 (12 columns, 96 parameters) in the same single
+   batch as the `DELETE`, and a day needing more than 500 statements (about 4,000 rows) throws
+   before the `DELETE`, so the previous run's rows survive and Sentry gets the failure.
+   Splitting into several batches was rejected: it saves no queries and a failure between
+   batches would persist a half-written day.
 6. **Dashboard** "Examples & features" reads Analytics Engine, so it covers the last three
    months without D1: top guides by opens and engaged opens, area breakdown, framework
    split per guide, starter ranking, `ht_major` distribution, the funnel open → engaged →

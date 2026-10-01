@@ -85,6 +85,7 @@ import {
   emitPoint,
   emitPoolGauge,
   exampleSavedAttrs,
+  resolveExampleSource,
   logCronTickLine,
   logErrorLine,
   logRequestLine,
@@ -1885,7 +1886,18 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             ...(patchTitle ? { title: patchTitle } : {}),
             ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
-          }).then(() => (savedAttrs ? emitPoint(env, "example.saved", { count: 1 }, savedAttrs) : undefined));
+          }).then(async () => {
+            if (!savedAttrs) return;
+            // Attributed to the example this demo came from (ADR-0042 §2), so the funnel's
+            // "saved" lands on its guide's row. Resolved here, inside the `waitUntil` chain,
+            // so the lineage reads cannot delay or cancel the save; a failed read only costs
+            // the attribution.
+            const source = await resolveExampleSource(
+              row.forked_from,
+              async (parentId) => (await getDemo(env, parentId))?.forked_from,
+            ).catch(() => null);
+            await emitPoint(env, "example.saved", { count: 1 }, exampleSavedAttrs(demoId, row.framework, patch.exampleHtMajor, source) ?? savedAttrs);
+          });
           ctx.waitUntil(saved.catch(() => {}));
           await saved;
           // The ref the rebuild actually used, which the picker may not have asked
