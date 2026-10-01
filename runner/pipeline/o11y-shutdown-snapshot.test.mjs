@@ -34,12 +34,8 @@ const STUB_BIN_DIR = path.join(HERE, "fixtures", "stub-bin");
 /** Sources lib.sh + shutdown.sh into a fresh bash process (stubbed `curl`
  *  first on PATH) and runs `script` (bash source) in that same context.
  *  `script` should end by printing whatever the test wants to assert on.
- *  `daySpan` sets `O11Y_INDEX_DAY_SPAN_DAYS` before `shutdown.sh` is
- *  sourced (`INDEX_DAY_SPAN_DAYS` is only read at source time, not inside a
- *  function) — defaults to `1` (today + yesterday, i.e. four listings per
- *  snapshot: two days x the `index/` and `index_` prefixes) so most tests' call-count expectations keep meaning
- *  exactly what they say without editing each one; tests that care about
- *  the wider (production) span pass `daySpan` explicitly. */
+ *  `daySpan` sets `O11Y_INDEX_DAY_SPAN_DAYS` (read at source time); the
+ *  default of 1 means four listings per snapshot (2 days x 2 index prefixes). */
 function runBash(script, { modes = "empty", daySpan = 1 } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "o11y-shutdown-test-"));
   const counterFile = path.join(dir, "curl-calls");

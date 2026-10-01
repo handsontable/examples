@@ -332,8 +332,14 @@ compacted. The second period (`from: 2026-10-03`, same store, schema and 24h per
 uses `index_`, so new tables are `index/index_<day>/…` where the old ones are
 `index/index/<day>/…`. Both periods stay in the config to keep old data readable, and
 the stop check lists both prefixes per day because records up to 7 days old still land
-in the old-prefix table after `from`. Until `from`, local and production runs write the
-old prefix; the stop-roundtrip script covers the new one with a seeded key. The old
+in the old-prefix table after `from`. The new period must be live in the deployed image
+before `from` (2026-10-03 00:00 UTC): if the deploy slips past it, move `from` to at least
+one day after the real deploy date before merging, otherwise index entries written under
+`index/index/<day>` for days at or after `from` become unreachable. Until `from`, runs
+write the old prefix; the stop-roundtrip script covers the new one with a seeded key.
+The stop check's worst case is 16 listings of up to 15 s each, 240 s per snapshot before
+and after SIGTERM; with the 120 s Loki grace that is about 600 s, inside the platform's
+15-minute SIGTERM-to-SIGKILL window. The old
 period can be dropped once nothing older than the `index/` lifecycle rule (90 days) is
 left under `index/index/` (follow-up, not before 90 days after `from`).
 

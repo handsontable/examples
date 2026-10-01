@@ -460,7 +460,7 @@ async function main() {
   for (const seededKey of seededKeys) {
     const seedRes = curlS3(["-o", "/dev/null", "-w", "%{http_code}", "-X", "PUT", "--data", "seed",
       `http://localhost:${MINIO_PORT}/loki/${seededKey}`]);
-    record("C1: seeded a pre-existing uploader-named index object (admin credential)", seedRes.stdout.trim() === "200", `HTTP ${seedRes.stdout.trim()} key=${seededKey}`);
+    record(`C1: seeded a pre-existing uploader-named index object under ${seededKey.split("/").slice(0, 2).join("/")}/ (admin credential)`, seedRes.stdout.trim() === "200", `HTTP ${seedRes.stdout.trim()} key=${seededKey}`);
   }
 
   await pushLines("browser", [`roundtrip-c1-line-${RUN_ID}`], { "hot.demo_id": "r-roundtrip" });
