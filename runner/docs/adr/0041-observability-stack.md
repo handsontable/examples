@@ -2,16 +2,16 @@
 
 **Status:** Proposed — design approved 2026-09-23 (revision 3), implemented, local
 end-to-end walkthrough, every sandbox probe and the first production verification
-(2026-09-29 to 2026-10-01) complete (§L "Results"). 13 of 15 exit criteria pass with
+(2026-09-29 to 2026-10-02) complete (§L "Results"). 13 of 15 exit criteria pass with
 real evidence, criteria 5, 9 and 11 now also in production; criterion 13 passes on its
 mechanism and waits for calendar time; criterion 8 (Volume) is **Mixed**, not a pass —
 Analytics Engine points and the raw Workers Logs pool both pass at 10× with real margin,
 but the exported-logs allotment does not (§D above has the numbers and the fallback).
 The design's own §L trigger (criterion 1, 2 or 7 failing) is not engaged.
-**Stays Proposed, not Accepted, pending exactly two production readings**: exit criterion
-13's real-object retention expiry (the production inbox bucket must hold nothing older
-than 7 days; checkable on or after 2026-10-06), and the monthly exported-logs event count
-for criterion 8 (checkable around 2026-10-03/04). Both are tracked in DEV-3178.
+**Stays Proposed, not Accepted, pending exactly one production reading**: exit criterion
+13's real-object retention expiry in production (the inbox bucket must hold nothing older
+than 7 days; checkable on or after 2026-10-06, tracked in DEV-3178). The monthly
+exported-logs count behind criterion 8 is in (2026-10-02, below).
 Supersedes ADR-0040 decisions A, B, C.2 and C.3; amends ADR-0022 (o11y spend cap,
 per-script billing rows), ADR-0038 (WAF exception extended to `/telemetry/*`); adds
 routes under ADR-0020. **No longer deviates from ADR-0007**: `/grafana/*` gates
@@ -763,24 +763,23 @@ serverless store before more is built.
 | 5 | Symbolication | **PASS in production (2026-10-01)** — browser exceptions in `Loki (browser)` resolve to `src/App.tsx:2659:34` and `src/App.tsx:327:20`. Symbolication runs in the GrafanaBox `drainStep`, a Durable Object alarm: 497 alarm invocations (2026-09-29 12:30 to 2026-09-30 10:30 UTC) had CPU p99.9 22.6 ms and a per-minute peak of 22.6 ms, and a `wrangler tail` of a backlog drain showed 25 ms CPU, against the 500 ms budget. The only invocations over 500 ms are the first `GrafanaBox.isAwake` poll after a box start (520–661 ms; 580 ms in the tail), which is not on the symbolicator path. Memory: the o11y Worker peaked at 9.04 MB (limit 64 MB), but the Durable Object dataset has no memory field, so the alarm's own memory is **not measured**; no out-of-memory outcome was observed |
 | 6 | Cold start | **PASS** — sandbox: 46.5s worst-of-5 (T01), 3–22s after the T03-D3 fix (T03) |
 | 7 | Drain wake (time + cost) | **PASS at the corrected traffic scale** — sandbox (T03B): 28s wake-to-drain-complete at 1× (≈432 records/hr, T05's own per-session line count), 44s at 10× (≈4325/hr); cost $0.21/month at 1×, $0.33/month at 10× — both far under the $10 ceiling |
-| 8 | Volume | **Mixed, measured, not a breakeven guess** — Analytics Engine points and the raw Workers Logs pool both pass at 10× with real margin; the **exported-logs allotment does not** (§D above has the numbers and the fallback); **production, 2026-10-01**: the API Worker's export is not affected by the o11y Worker's "only 1% of events are being recorded" banner (a per-day cap that reset; `Loki (worker)` held 3569 `api.request` lines and Analytics Engine a weighted 3563 for the same hour). The monthly event count for the `o11y-logs` destination is still to be read, around 2026-10-03/04 (DEV-3178; 110,000 events from `handsontable-demos-api` in September so far) |
+| 8 | Volume | **Mixed, measured, not a breakeven guess** — Analytics Engine points and the raw Workers Logs pool both pass at 10× with real margin; the **exported-logs allotment does not** (§D above has the numbers and the fallback); **production, 2026-10-01/02**: the API Worker's export is not affected by the o11y Worker's "only 1% of events are being recorded" banner (a per-day cap that reset; `Loki (worker)` held 3569 `api.request` lines and Analytics Engine a weighted 3563 for the same hour). The monthly count for `o11y-logs` is at most ~0.85M events/month at current traffic (Observability → Usage per service, since Cloudflare exposes no per-destination count: 84,225 `handsontable-demos-api` log events in the 7 days to 2026-10-02, export live since 2026-09-29; ~0.36M/month if spread over all 7 days), against the ~5M/month half-allotment. That confirms the §D projection: at 10× it is 3.6M to 8.5M, straddling the line, so the row stays **Mixed** and lowering `head_sampling_rate` stays the named fallback, needed only if traffic grows |
 | 9 | Idle tab | **PASS in production (2026-09-30)** — `/grafana/dashboards` loaded at 10:40:09 UTC and the tab was left untouched; the production GrafanaBox was `running` until 10:54:26 and `stopped` at 10:55:29 UTC, 14.3–15.3 min after the last request. Sandbox (T01): 17.65 minutes with zero HTTP requests |
 | 10 | Placement | **PASS** — sandbox: EU region `mxp04` (Milan) |
 | 11 | Worker errors → structured line | **PASS** — fetch-handler and cron paths confirmed live (T05, T11); in production (2026-09-30) one anonymous `GET /api/versions/exists?v=<600 characters>` returned 500 and produced both a Sentry event (`api-production`) and the `fetch-catch-all` error line plus the `api.request` 500 line in `Loki (worker)`. The DO-alarm path is unit/pipeline-tested (T01–T03) but not independently reproduced live |
 | 12 | Stop semantics | **PASS** — `onStop` is recorded and, by design, claims nothing about cleanliness (T01); "no SIGKILL before the clean marker" is the same platform behaviour criteria 1 and 2 already confirm |
-| 13 | Retention | **Mechanism PASS, real expiry PENDING the calendar** — R2 lifecycle rules apply and read back correctly (T01, T10); the production rules were read back on 2026-09-30: inbox `inbox-7d`, loki `browser/` 30 d, `worker/` 90 d, `index/` 90 d, `state/` 30 d, maps `maps-30d`. Still to read: the production inbox bucket holds no object older than 7 days, on or after 2026-10-06 (DEV-3178). T03B's sandbox 1-day retention-clock test (`t03-retention-clock-test/`, `o11y-probe-t03-loki`) started 2026-09-23T14:15:22Z |
+| 13 | Retention | **Mechanism PASS, real expiry PENDING the calendar** — R2 lifecycle rules apply and read back correctly (T01, T10); the production rules were read back on 2026-09-30: inbox `inbox-7d`, loki `browser/` 30 d, `worker/` 90 d, `index/` 90 d, `state/` 30 d, maps `maps-30d`. Real expiry on the sandbox (2026-10-02): `o11y-probe-t03-loki` still has its 1-day rule and holds 0 objects, 0 B, where the test objects were written on 2026-09-23 (consistent with expiry; bucket info alone can't rule out a manual delete, and the bucket's own delete reported "not empty" at 0 objects, likely leftover multipart uploads). Still to read in production: the inbox bucket holds no object older than 7 days, on or after 2026-10-06 (DEV-3178). The sandbox test (`t03-retention-clock-test/`) started 2026-09-23T14:15:22Z |
 | 14 | Image size | **PASS** — 212.9 MB compressed, real `linux/amd64` build (T01), under the 1 GB bound; uncompressed size against the `standard-1` 8 GB disk was not separately recorded by any task |
 | 15 | Labels | **PASS, all four sources, both tenants** — confirmed live against the real committed `loki-config.yaml`: Faro (`demos-authoring`) and the lite beacon (`demos-embed`), browser tenant; the Cloudflare export (`demos-api`) and deploy events (`demos-o11y`), worker tenant — all seven labels populated, `service.version` present as a resource attribute but deliberately never promoted to a label (see §C.2), `hot.demo_id`/`session.id`/`cf.ray` never labels |
 
 §L's own trigger (criterion 1, 2 or 7 failing its plan B) is **not** engaged — all three pass.
-Two production readings keep this ADR at **Proposed** rather than **Accepted**: criterion
-13's real retention expiry (the production inbox bucket, on or after 2026-10-06) and the
-monthly exported-logs count behind criterion 8, around 2026-10-03/04; both are tracked in
-DEV-3178. Criterion 8's exported-logs finding is real and measured, not a missing-evidence
-gap; it is carried as a named pre-launch action in `docs/run-and-deploy.md`, and the ADR's
-own §D already names the exact fallback (lower `head_sampling_rate`) for exactly this
-situation. The monthly count is recorded here before the flip so that the decision to
-lower the rate, or not, is on the record with the ADR.
+One production reading keeps this ADR at **Proposed** rather than **Accepted**: criterion
+13's real retention expiry on the production inbox bucket, on or after 2026-10-06 (DEV-3178).
+Criterion 8's exported-logs finding is real and measured, not a missing-evidence gap: the
+monthly count (about 0.36M to 0.85M events/month today) is recorded in the row above and
+confirms the §D projection, so lowering `head_sampling_rate` stays the named fallback, to be
+used only if traffic grows toward the 10× case. The row is carried as a named action in
+`docs/run-and-deploy.md`, not as a blocker to this ADR's status.
 
 ### M. Implementation deltas (full detail in git history under
 the deleted `runner/tasks/o11y/`)

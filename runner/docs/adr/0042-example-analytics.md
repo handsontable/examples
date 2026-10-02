@@ -2,8 +2,8 @@
 
 **Status:** Proposed — design approved 2026-09-23 (revision 2), implemented.
 Ships with ADR-0041 and depends on its ingest path and Grafana; stays at the same status
-(Proposed) until ADR-0041 flips to Accepted, for the same two pending production
-readings (see ADR-0041's own status line and Implementation deltas below).
+(Proposed) until ADR-0041 flips to Accepted, for the same pending production
+reading (see ADR-0041's own status line and Implementation deltas below).
 
 ## Context
 
