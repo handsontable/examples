@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-770903c-20261001",
-  "count": 1547,
+  "hotVersion": "0.0.0-next-b0dc2e1-20261002",
+  "count": 1557,
   "examples": [
     {
       "bucket": "next",
@@ -2748,6 +2748,86 @@
       "guideTitle": "Clipboard",
       "exampleId": "example5",
       "exampleTitle": "Copy comments on paste",
+      "docPermalink": "/basic-clipboard",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clipboard/angular/example6.ts",
+      "file": "guides__cell-features__clipboard__angular__example6.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example6",
+      "exampleTitle": "Clean up pasted content before it is parsed",
+      "docPermalink": "/basic-clipboard",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clipboard/javascript/example6.js",
+      "file": "guides__cell-features__clipboard__javascript__example6.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example6",
+      "exampleTitle": "Clean up pasted content before it is parsed",
+      "docPermalink": "/basic-clipboard",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clipboard/react/example6.tsx",
+      "file": "guides__cell-features__clipboard__react__example6.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example6",
+      "exampleTitle": "Clean up pasted content before it is parsed",
+      "docPermalink": "/basic-clipboard",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clipboard/javascript/example6.ts",
+      "file": "guides__cell-features__clipboard__javascript__example6.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example6",
+      "exampleTitle": "Clean up pasted content before it is parsed",
+      "docPermalink": "/basic-clipboard",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/clipboard/vue/example6.vue",
+      "file": "guides__cell-features__clipboard__vue__example6.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Clipboard"
+      ],
+      "guide": "guides/cell-features/clipboard/clipboard.md",
+      "guideTitle": "Clipboard",
+      "exampleId": "example6",
+      "exampleTitle": "Clean up pasted content before it is parsed",
       "docPermalink": "/basic-clipboard",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -21980,6 +22060,86 @@
       "guideTitle": "Row heights",
       "exampleId": "example4",
       "exampleTitle": "Adjust row heights manually",
+      "docPermalink": "/row-height",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-height/angular/example5.ts",
+      "file": "guides__rows__row-height__angular__example5.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row heights"
+      ],
+      "guide": "guides/rows/row-height/row-height.md",
+      "guideTitle": "Row heights",
+      "exampleId": "example5",
+      "exampleTitle": "Limit the number of lines in a cell",
+      "docPermalink": "/row-height",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-height/javascript/example5.js",
+      "file": "guides__rows__row-height__javascript__example5.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row heights"
+      ],
+      "guide": "guides/rows/row-height/row-height.md",
+      "guideTitle": "Row heights",
+      "exampleId": "example5",
+      "exampleTitle": "Limit the number of lines in a cell",
+      "docPermalink": "/row-height",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-height/react/example5.tsx",
+      "file": "guides__rows__row-height__react__example5.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row heights"
+      ],
+      "guide": "guides/rows/row-height/row-height.md",
+      "guideTitle": "Row heights",
+      "exampleId": "example5",
+      "exampleTitle": "Limit the number of lines in a cell",
+      "docPermalink": "/row-height",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-height/javascript/example5.ts",
+      "file": "guides__rows__row-height__javascript__example5.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row heights"
+      ],
+      "guide": "guides/rows/row-height/row-height.md",
+      "guideTitle": "Row heights",
+      "exampleId": "example5",
+      "exampleTitle": "Limit the number of lines in a cell",
+      "docPermalink": "/row-height",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-height/vue/example5.vue",
+      "file": "guides__rows__row-height__vue__example5.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row heights"
+      ],
+      "guide": "guides/rows/row-height/row-height.md",
+      "guideTitle": "Row heights",
+      "exampleId": "example5",
+      "exampleTitle": "Limit the number of lines in a cell",
       "docPermalink": "/row-height",
       "framework": "vue",
       "displayName": "Vue 3"
