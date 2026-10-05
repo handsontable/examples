@@ -3,7 +3,7 @@
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "0.0.0-next-b0dc2e1-20261002",
-  "count": 1557,
+  "count": 1567,
   "examples": [
     {
       "bucket": "next",
@@ -10845,6 +10845,166 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/angular/example3.ts",
+      "file": "guides__columns__column-freezing__angular__example3.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example3",
+      "exampleTitle": "Freeze columns at the end",
+      "docPermalink": "/column-freezing",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/javascript/example3.js",
+      "file": "guides__columns__column-freezing__javascript__example3.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example3",
+      "exampleTitle": "Freeze columns at the end",
+      "docPermalink": "/column-freezing",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/react/example3.tsx",
+      "file": "guides__columns__column-freezing__react__example3.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example3",
+      "exampleTitle": "Freeze columns at the end",
+      "docPermalink": "/column-freezing",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/javascript/example3.ts",
+      "file": "guides__columns__column-freezing__javascript__example3.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example3",
+      "exampleTitle": "Freeze columns at the end",
+      "docPermalink": "/column-freezing",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/vue/example3.vue",
+      "file": "guides__columns__column-freezing__vue__example3.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example3",
+      "exampleTitle": "Freeze columns at the end",
+      "docPermalink": "/column-freezing",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/angular/example4.ts",
+      "file": "guides__columns__column-freezing__angular__example4.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example4",
+      "exampleTitle": "Freeze all four edges",
+      "docPermalink": "/column-freezing",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/javascript/example4.js",
+      "file": "guides__columns__column-freezing__javascript__example4.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example4",
+      "exampleTitle": "Freeze all four edges",
+      "docPermalink": "/column-freezing",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/react/example4.tsx",
+      "file": "guides__columns__column-freezing__react__example4.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example4",
+      "exampleTitle": "Freeze all four edges",
+      "docPermalink": "/column-freezing",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/javascript/example4.ts",
+      "file": "guides__columns__column-freezing__javascript__example4.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example4",
+      "exampleTitle": "Freeze all four edges",
+      "docPermalink": "/column-freezing",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/vue/example4.vue",
+      "file": "guides__columns__column-freezing__vue__example4.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example4",
+      "exampleTitle": "Freeze all four edges",
+      "docPermalink": "/column-freezing",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/columns/column-groups/angular/example1.ts",
       "file": "guides__columns__column-groups__angular__example1.ts.json",
       "breadcrumb": [
@@ -13494,7 +13654,7 @@
       "guide": "guides/columns/column-width/column-width.md",
       "guideTitle": "Column widths",
       "exampleId": "example4",
-      "exampleTitle": "Adjust the column width manually",
+      "exampleTitle": "Minimum column width",
       "docPermalink": "/column-width",
       "framework": "angular",
       "displayName": "Angular"
@@ -13510,7 +13670,7 @@
       "guide": "guides/columns/column-width/column-width.md",
       "guideTitle": "Column widths",
       "exampleId": "example4",
-      "exampleTitle": "Adjust the column width manually",
+      "exampleTitle": "Minimum column width",
       "docPermalink": "/column-width",
       "framework": "javascript",
       "displayName": "JavaScript"
@@ -13526,7 +13686,7 @@
       "guide": "guides/columns/column-width/column-width.md",
       "guideTitle": "Column widths",
       "exampleId": "example4",
-      "exampleTitle": "Adjust the column width manually",
+      "exampleTitle": "Minimum column width",
       "docPermalink": "/column-width",
       "framework": "react",
       "displayName": "React (TS)"
@@ -13542,7 +13702,7 @@
       "guide": "guides/columns/column-width/column-width.md",
       "guideTitle": "Column widths",
       "exampleId": "example4",
-      "exampleTitle": "Adjust the column width manually",
+      "exampleTitle": "Minimum column width",
       "docPermalink": "/column-width",
       "framework": "typescript",
       "displayName": "TypeScript"
@@ -13558,7 +13718,7 @@
       "guide": "guides/columns/column-width/column-width.md",
       "guideTitle": "Column widths",
       "exampleId": "example4",
-      "exampleTitle": "Adjust the column width manually",
+      "exampleTitle": "Minimum column width",
       "docPermalink": "/column-width",
       "framework": "vue",
       "displayName": "Vue 3"
