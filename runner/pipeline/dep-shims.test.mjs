@@ -281,6 +281,7 @@ test("downlevels every file of a pkg.pr.new build, fetched from the PR URL", asy
 test("only a handsontable build on the pkg.pr.new host takes the PR path", async () => {
   assert.equal(isPkgPrNewHandsontable("https://pkg.pr.new/handsontable@13766"), true);
   assert.equal(isPkgPrNewHandsontable("https://pkg.pr.new/handsontable/handsontable/handsontable@9974bd9"), true);
+  assert.equal(isPkgPrNewHandsontable("https://pkg.pr.new/handsontable@13766/"), true, "the validator lets a trailing slash through");
   for (const v of [
     "https://pkg.pr.new/@handsontable/react-wrapper@13766",
     "https://pkg.pr.new/other@13766",
