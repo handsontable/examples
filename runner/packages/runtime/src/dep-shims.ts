@@ -18,6 +18,7 @@
 
 import type { FilesMap } from "./types.js";
 import { transpileDependencyDist } from "./transpile.js";
+import { parsePkgPrNewFromUrl } from "./version.js";
 
 /**
  * Deps that need shimming, each with the single self-contained dist file to
@@ -89,27 +90,68 @@ function untarJs(tar: Uint8Array, keep: (source: string) => boolean): Record<str
   return out;
 }
 
+/** A `https://pkg.pr.new/handsontable@<ref>` dependency value (a PR preview build), host checked. */
+export function isPkgPrNewHandsontable(value: string): boolean {
+  if (parsePkgPrNewFromUrl(value) === null) return false;
+  const path = new URL(value.trim()).pathname.replace(/\/+$/, "");
+  return path.slice(path.lastIndexOf("/") + 1, path.lastIndexOf("@")) === "handsontable";
+}
+
+/** A macrotask boundary. A message rather than `setTimeout`, which Chrome throttles to one wake a
+ *  second in a background tab, so a PR demo opened with a middle-click would crawl. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    const { port1, port2 } = new MessageChannel();
+    port1.onmessage = () => {
+      port1.close();
+      resolve();
+    };
+    port2.postMessage(null);
+  });
+}
+
+/** Run `work` over `items` in slices of about `budgetMs`, yielding a macrotask in between. Babel's
+ *  `transform` is synchronous, so `await`ing it only chains microtasks and the whole package would
+ *  land as one multi-second long task that freezes the editor. */
+async function timeSliced<T>(items: T[], work: (item: T) => Promise<void>, budgetMs = 40): Promise<void> {
+  let sliceStart = performance.now();
+  for (const item of items) {
+    await work(item);
+    if (performance.now() - sliceStart > budgetMs) {
+      await yieldToEventLoop();
+      sliceStart = performance.now();
+    }
+  }
+}
+
 // One registry tarball per version: fetching ~900 files from a CDN gets throttled (unpkg's
 // 429/5xx carry no CORS headers, so the browser reports a blocked fetch, not a status) or
 // crawls (jsDelivr took 7-20s per file for a fresh prerelease), while the npm registry serves
 // the tarball in one request with `access-control-allow-origin: *`.
+//
+// A pkg.pr.new build is a URL dependency, so the bundler fetches the tarball itself and has no
+// `isModule: false` metadata to skip babel 6 with: every file is parsed, and about a third of the
+// package uses `?.`, `??`, `catch {` or object spread. The whole tree is shadowed instead of the
+// scanned few. Its cache key is the URL, which names a PR rather than a commit, so a tab left
+// open across a push keeps the older build until reload.
 const hotShimCache = new Map<string, Promise<Record<string, string>>>();
 
 function shimHandsontable(version: string, fetchImpl: typeof fetch): Promise<Record<string, string>> {
   let cached = hotShimCache.get(version);
   if (!cached) {
     cached = (async () => {
-      const url = `${REGISTRY}/handsontable/-/handsontable-${version}.tgz`;
+      const prBuild = isPkgPrNewHandsontable(version);
+      const url = prBuild ? version.trim() : `${REGISTRY}/handsontable/-/handsontable-${version}.tgz`;
       const res = await fetchImpl(url);
-      if (!res.ok) throw new Error(`Failed to fetch handsontable@${version} tarball: ${url} returned ${res.status}`);
+      const label = prBuild ? "handsontable PR build" : `handsontable@${version}`;
+      if (!res.ok) throw new Error(`Failed to fetch ${label} tarball: ${url} returned ${res.status}`);
       const gz = new Blob([await res.arrayBuffer()]).stream().pipeThrough(new DecompressionStream("gzip"));
-      const blocked = untarJs(new Uint8Array(await new Response(gz).arrayBuffer()), (s) => HOT_BLOCKING_SYNTAX.test(s));
+      const tar = new Uint8Array(await new Response(gz).arrayBuffer());
+      const shadowed = untarJs(tar, (s) => prBuild || HOT_BLOCKING_SYNTAX.test(s));
       const out: Record<string, string> = {};
-      await Promise.all(
-        Object.entries(blocked).map(async ([file, source]) => {
-          out[file] = await transpileDependencyDist(source, file);
-        }),
-      );
+      await timeSliced(Object.entries(shadowed), async ([file, source]) => {
+        out[file] = await transpileDependencyDist(source, file);
+      });
       return out;
     })();
     // A failed download must not poison the cache — the next mount retries.
@@ -165,7 +207,8 @@ export async function applyDepShims(
 
   const targets = Object.keys(DEP_SHIMS).filter((pkg) => typeof deps[pkg] === "string");
   const hotVersion = deps.handsontable;
-  const shimHot = typeof hotVersion === "string" && handsontableNeedsScan(hotVersion);
+  const shimHot =
+    typeof hotVersion === "string" && (isPkgPrNewHandsontable(hotVersion) || handsontableNeedsScan(hotVersion));
   if (!targets.length && !shimHot) return files;
 
   const fetchImpl = opts.fetchImpl ?? fetch;

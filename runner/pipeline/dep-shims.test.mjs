@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
-import { applyDepShims, DEP_SHIMS, handsontableNeedsScan } from "../packages/runtime/dist/dep-shims.js";
+import { Parser } from "acorn";
+import { applyDepShims, DEP_SHIMS, handsontableNeedsScan, isPkgPrNewHandsontable } from "../packages/runtime/dist/dep-shims.js";
 
 // DEV-2129 follow-up: the parcel bundler's babel 6 also parses dependency
 // files under /node_modules, so any dep whose published dist uses post-ES2017
@@ -228,4 +229,105 @@ test("does not download anything for a verified-clean stable version", async () 
   };
   const files = filesWithDeps({ handsontable: "18.1.1" });
   assert.deepEqual(await applyDepShims(files, { fetchImpl }), files);
+});
+
+// DEV-3338: a pkg.pr.new build is a URL dependency, so the bundler fetches the tarball itself
+// and runs every file through babel 6 — there is no registry `isModule: false` metadata to skip
+// it with. `?.`, `??`, `catch {` and object spread all kill it, so the shim downlevels the whole
+// tree from the PR tarball instead of scanning for the few constructs registry builds need.
+
+const PR_TREE = {
+  "core.js":
+    "const h = require('./helpers/string');\n" +
+    "function read(s) {\n" +
+    "  const merged = { ...s, dir: s?.layoutDirection ?? 'inherit' };\n" +
+    "  try { return h(merged); } catch { return null; }\n" +
+    "}\n" +
+    "module.exports = read;\n",
+  "helpers/string.js": "module.exports = (o) => String(o.dir);\n",
+};
+
+/** fetch stub serving `tree` at exactly `url`; `requested` records every URL. */
+function urlFetch(url, tree, requested = []) {
+  return async (asked) => {
+    requested.push(asked);
+    if (asked !== url) return { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) };
+    const buf = tgz(tree);
+    return { ok: true, status: 200, arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) };
+  };
+}
+
+test("downlevels every file of a pkg.pr.new build, fetched from the PR URL", async () => {
+  const url = "https://pkg.pr.new/handsontable@93381";
+  const requested = [];
+  const out = await applyDepShims(filesWithDeps({ handsontable: url }), { fetchImpl: urlFetch(url, PR_TREE, requested) });
+
+  assert.deepEqual(requested, [url], "the PR tarball, not the registry");
+  const shadowed = Object.keys(out).filter((k) => k.startsWith("/node_modules/handsontable/")).sort();
+  assert.deepEqual(shadowed, [
+    "/node_modules/handsontable/core.js",
+    "/node_modules/handsontable/helpers/string.js",
+  ], "plain files are shadowed too; dist/ is not");
+  for (const file of shadowed) {
+    assert.doesNotThrow(() => Parser.parse(out[file], { ecmaVersion: 2017, sourceType: "script" }), `${file} parses at ES2017`);
+  }
+  const read = new Function("require", "module", `${out["/node_modules/handsontable/core.js"]}; return module.exports;`)(
+    () => (o) => String(o.dir),
+    { exports: {} },
+  );
+  assert.equal(read({ layoutDirection: "rtl" }), "rtl", "downleveled code still behaves");
+});
+
+test("only a handsontable build on the pkg.pr.new host takes the PR path", async () => {
+  assert.equal(isPkgPrNewHandsontable("https://pkg.pr.new/handsontable@13766"), true);
+  assert.equal(isPkgPrNewHandsontable("https://pkg.pr.new/handsontable/handsontable/handsontable@9974bd9"), true);
+  assert.equal(isPkgPrNewHandsontable("https://pkg.pr.new/handsontable@13766/"), true, "the validator lets a trailing slash through");
+  for (const v of [
+    "https://pkg.pr.new/@handsontable/react-wrapper@13766",
+    "https://pkg.pr.new/other@13766",
+    "https://evil.example/handsontable@13766",
+    "http://pkg.pr.new/handsontable@13766",
+    "13766",
+    "18.1.1",
+  ]) {
+    assert.equal(isPkgPrNewHandsontable(v), false, v);
+  }
+  const fetchImpl = async () => {
+    throw new Error("must not fetch");
+  };
+  const files = filesWithDeps({ handsontable: "https://evil.example/handsontable@13766" });
+  assert.deepEqual(await applyDepShims(files, { fetchImpl }), files);
+});
+
+test("a missing PR build rejects naming the URL and is retried on the next mount", async () => {
+  const url = "https://pkg.pr.new/handsontable@93382";
+  const deps = filesWithDeps({ handsontable: url });
+  const missing = async () => ({ ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) });
+  await assert.rejects(applyDepShims(deps, { fetchImpl: missing }), /handsontable PR build tarball: https:\/\/pkg\.pr\.new\/handsontable@93382 returned 404/);
+  const out = await applyDepShims(deps, { fetchImpl: urlFetch(url, PR_TREE) });
+  assert.ok(out["/node_modules/handsontable/core.js"]);
+});
+
+test("downleveling a whole PR build yields to the event loop between files", async () => {
+  // babel's transform is synchronous; chained awaits alone would freeze the editor for the
+  // whole tree (about 3 s for a real build), so the loop must hand back macrotasks as it goes.
+  const url = "https://pkg.pr.new/handsontable@93383";
+  const tree = {};
+  for (let i = 0; i < 400; i++) tree[`plugins/p${i}.js`] = `module.exports = (o) => ({ ...o, v${i}: o?.a ?? ${i} });\n`;
+  const fetchImpl = urlFetch(url, tree);
+  let maxGap = 0;
+  let last = performance.now();
+  const tick = setInterval(() => {
+    const now = performance.now();
+    maxGap = Math.max(maxGap, now - last);
+    last = now;
+  }, 1);
+  const started = performance.now();
+  const out = await applyDepShims(filesWithDeps({ handsontable: url }), { fetchImpl });
+  const elapsed = performance.now() - started;
+  maxGap = Math.max(maxGap, performance.now() - last);
+  clearInterval(tick);
+  assert.equal(Object.keys(out).filter((k) => k.startsWith("/node_modules/handsontable/")).length, 400);
+  assert.ok(elapsed > 200, `precondition: the work is long enough to measure (${Math.round(elapsed)} ms)`);
+  assert.ok(maxGap < elapsed / 2, `longest block ${Math.round(maxGap)} ms of ${Math.round(elapsed)} ms`);
 });
