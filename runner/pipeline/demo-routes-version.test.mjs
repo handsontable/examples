@@ -53,6 +53,10 @@ globalThis.fetch = async (input, init) => {
   if (url.startsWith("https://login.invalid") && init?.headers?.Authorization === "Bearer test-token") {
     return Response.json({ email: AUTHOR, sub: "u1" });
   }
+  // A PR build looks up the PR's current commit (DEV-3338).
+  if (url.startsWith("https://pkg.pr.new/") && init?.method === "HEAD") {
+    return new Response(null, { headers: { "x-commit-key": "handsontable:handsontable:abc1234" } });
+  }
   // Anything else is a test escaping its sandbox. A throw inside
   // authenticate's try/catch reads as 401, inside fetchVersionCatalog as 502 —
   // both fail the asserting test loudly instead of reaching a live registry.

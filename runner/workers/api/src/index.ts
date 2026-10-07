@@ -48,6 +48,8 @@ import { ImportError, MAX_PAYLOAD_CHARS, importFromUrl, validatePayloadFiles } f
 import { VERSION_QUERY_RE, sessionIdFits } from "./storage-key.js";
 import { BuildFailure, buildFailureTags, createDemo, createPendingDemo, demoBuildState, getDemo, getDemoSource, hasCachedBuild, invalidateDemo, isUserBuildError, serveDemoAsset, shortId, updateDemo, userBuildErrorDetail, withEntryScript, type DemoRow } from "./share.js";
 import { BuildJobBase, scheduleSnapshotBuild } from "./snapshot-jobs.js";
+import { resolvePrSha } from "./pr-build.js";
+import { refreshPrDemo } from "./pr-refresh.js";
 import {
   budgetPausedMessage,
   countEgress,
@@ -1420,7 +1422,9 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         // cached build is an R2 copy, and tier 1 finishes well inside every
         // caller's patience, so both keep the synchronous path and its
         // built-and-verified answer.
-        if (cfg.tier === 2 && !(await hasCachedBuild(env, body.framework, version.ref, pinnedFiles))) {
+        // Once, so the cache check and the build agree on the PR commit.
+        const prSha = await resolvePrSha(env, version.ref);
+        if (cfg.tier === 2 && !(await hasCachedBuild(env, body.framework, version.ref, pinnedFiles, prSha))) {
           const pending = await createPendingDemo(env, {
             entry: { framework: body.framework, ...cfg },
             files: pinnedFiles,
@@ -1430,12 +1434,14 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             createdBy: id.email,
             forkedFrom: `mcp:${body.framework}`,
             now: nowIso(),
+            prSha,
           });
           await scheduleSnapshotBuild(env, {
             demoId: pending.id,
             framework: body.framework,
             htVersion: version.ref,
             filesKey: `demos/${pending.id}/__source.json`,
+            ...(prSha ? { prSha } : {}),
           });
           await recordUsageEvent(env, "share_created", body.framework);
           return json(
@@ -1466,6 +1472,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           createdBy: id.email,
           forkedFrom: `mcp:${body.framework}`,
           now: nowIso(),
+          prSha,
         });
         await recordUsageEvent(env, "share_created", body.framework);
         return json(
@@ -1664,7 +1671,8 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // __source.json — the stored source keeps matching the artifact still
           // being served until the rebuild actually succeeds — and metadata lands
           // now rather than riding along, so a failed build cannot eat a rename.
-          if (cfg.tier === 2 && !(await hasCachedBuild(env, row.framework, version.ref, pinnedFiles))) {
+          const prSha = await resolvePrSha(env, version.ref);
+          if (cfg.tier === 2 && !(await hasCachedBuild(env, row.framework, version.ref, pinnedFiles, prSha))) {
             await env.ARTIFACTS.put(
               `demos/${demoId}/__job.json`,
               JSON.stringify({ framework: row.framework, files: pinnedFiles }),
@@ -1672,6 +1680,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             );
             const sets = ["build_status='building'", "build_error=NULL", "updated_at=?"];
             const binds: unknown[] = [nowIso()];
+            if (prSha) { sets.push("ht_attempt_sha=?"); binds.push(prSha); }
             if (patchTitle) { sets.push("title=?"); binds.push(patchTitle); }
             if (patchDescription !== undefined) { sets.push("description=?"); binds.push(patchDescription ?? null); }
             await env.DB.prepare(`UPDATE demos SET ${sets.join(", ")} WHERE id=?`).bind(...binds, demoId).run();
@@ -1681,6 +1690,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
               framework: row.framework,
               htVersion: version.ref,
               filesKey: `demos/${demoId}/__job.json`,
+              ...(prSha ? { prSha } : {}),
             });
             return json(
               {
@@ -1707,6 +1717,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             ...(patchTitle ? { title: patchTitle } : {}),
             ...(patchDescription !== undefined ? { description: patchDescription } : {}),
             now: nowIso(),
+            prSha,
           });
           // `htVersion` is what was built, not what was asked for — see the create handler.
           return json({ ok: true, id: demoId, url: `/d/${demoId}`, editUrl: `/edit/${demoId}`, rebuilt: true, htVersion: version.ref });
@@ -1944,7 +1955,15 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         if (sub === "" && !url.pathname.endsWith("/")) {
           return Response.redirect(`${url.origin}${url.pathname}/${url.search}`, 308);
         }
-        const asset = await serveDemoAsset(env, ctx, demoId, sub, { embed });
+        const asset = await serveDemoAsset(env, ctx, demoId, sub, {
+          embed,
+          // A view can start a build now, so it answers to the same ceiling as an
+          // anonymous caller would.
+          prRefresh: (row) => refreshPrDemo(env, row, {
+            budgetDenied: async () => (await budgetGate(env, { isAuthenticated: async () => false, what: `pr refresh ${row.framework}` })) !== null,
+            recordBuild: () => recordUsageEvent(env, "build", row.framework),
+          }),
+        });
         // Count the page load only, and only when it resolved to a real demo:
         // counting unresolved ids would let a crawler write arbitrary rows.
         //

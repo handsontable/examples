@@ -4,7 +4,8 @@
 // builder container -> upload the static output to R2 -> record metadata in D1 ->
 // mint a short id. Client views serve immutable static artifacts from R2 (no live
 // container). Builds are immutable per (framework, ht_version, files_hash) and
-// cached forever (ADR-0006).
+// cached forever (ADR-0006); for a PR build the version half is the PR's commit,
+// not its number (pr-build.ts).
 
 import { getSandbox } from "@cloudflare/sandbox";
 import { injectSchemeIntoHtml } from "@handsontable/demo-runtime/scheme";
@@ -19,6 +20,8 @@ import { htmlEntryLoadsModule, snapshotBuildCommand } from "./build-command.js";
 import { htMajorFromVersion, injectLiteHtml } from "./monitor-inject.js";
 import { emitPoint } from "./telemetry/points.js";
 import { kvKeyFits, r2KeyFits } from "./storage-key.js";
+import { cacheable, cacheRef, pinPrFiles, prNumber, resolvePrSha } from "./pr-build.js";
+import type { PrRefresh } from "./pr-refresh.js";
 
 type SandboxLike = {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<unknown>;
@@ -54,6 +57,11 @@ export interface DemoRow {
   build_status?: string | null;
   /** One-line cause when build_status='failed'; never a log (the DEMOS-1Y rule). */
   build_error?: string | null;
+  /** PR demos only (0010): the commit the served artifact was built from, and the
+   *  last commit a build was started for — they differ while a refresh runs or
+   *  after one failed. */
+  ht_built_sha?: string | null;
+  ht_attempt_sha?: string | null;
 }
 
 /** What a demo's build columns say right now, with one repair: a row stuck in
@@ -98,6 +106,13 @@ const BUILD_PIPELINE_VERSION = 2;
 /** build_cache key for a (framework, version, files) triple. */
 export function buildCacheKey(framework: string, htVersion: string, hash: string): string {
   return `v${BUILD_PIPELINE_VERSION}:${framework}:${htVersion}:${hash}`;
+}
+
+/** What the container installs: a PR demo's stored files stay on the PR number,
+ *  the build gets the exact commit its cache key names. */
+function buildFiles(files: Record<string, string>, htVersion: string, sha: string | null): Record<string, string> {
+  const pr = sha ? prNumber(htVersion) : null;
+  return pr && sha ? pinPrFiles(files, pr, sha) : files;
 }
 
 async function sha256Hex(input: string): Promise<string> {
@@ -472,6 +487,7 @@ export interface CreateArgs {
   now: string;                          // ISO timestamp (Workers-safe: passed in)
   id?: string;                          // fixed id (render-ms compat); else random
   visibility?: string;                  // 'unlisted' (default) | 'public'
+  prSha?: string | null;                // PR commit to build; undefined asks pkg.pr.new
 }
 
 /** Is an identical build already in the cache? The MCP create/update routes ask
@@ -482,10 +498,13 @@ export async function hasCachedBuild(
   framework: string,
   htVersion: string,
   files: Record<string, string>,
+  prSha?: string | null,
 ): Promise<boolean> {
   const hash = await filesHash(files);
+  const sha = await resolvePrSha(env, htVersion, prSha);
+  if (!cacheable(htVersion, sha)) return false;
   const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
-    .bind(buildCacheKey(framework, htVersion, hash)).first<{ r2_prefix: string }>();
+    .bind(buildCacheKey(framework, cacheRef(htVersion, sha), hash)).first<{ r2_prefix: string }>();
   return Boolean(cached);
 }
 
@@ -509,13 +528,15 @@ export async function createPendingDemo(env: Env, args: CreateArgs): Promise<{ i
     { httpMetadata: { contentType: "application/json" } },
   );
 
+  // The commit being built counts as attempted, so a failed first build is not
+  // retried by the first view (pr-refresh.ts).
   await env.DB.prepare(
-    `INSERT OR REPLACE INTO demos (id,title,description,framework,tier,ht_version,files_hash,r2_prefix,forked_from,visibility,revoked,created_by,created_at,updated_at,build_status,build_error)
-     VALUES (?,?,?,?,?,?,?,?,?, ?, 0, ?,?,?, ?, ?)`,
+    `INSERT OR REPLACE INTO demos (id,title,description,framework,tier,ht_version,files_hash,r2_prefix,forked_from,visibility,revoked,created_by,created_at,updated_at,build_status,build_error,ht_attempt_sha)
+     VALUES (?,?,?,?,?,?,?,?,?, ?, 0, ?,?,?, ?, ?, ?)`,
   ).bind(
     id, args.title, args.description ?? null, args.entry.framework, args.entry.tier,
     args.htVersion, hash, r2Prefix, args.forkedFrom ?? null, args.visibility ?? "unlisted",
-    args.createdBy, args.now, args.now, "building", null,
+    args.createdBy, args.now, args.now, "building", null, args.prSha ?? null,
   ).run();
   await invalidateDemo(env, id);
 
@@ -583,11 +604,15 @@ export async function createDemo(
   // source would read as many demos. The source hash repeats across those retries.
   const demoKey = args.id ?? `src-${hash.slice(0, 12)}`;
   return withSnapshotBuildPoint(env, args.entry.framework, demoKey, buildReason, async (addBytes) => {
-    const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
+    const sha = await resolvePrSha(env, args.htVersion, args.prSha);
+    const buildKey = buildCacheKey(args.entry.framework, cacheRef(args.htVersion, sha), hash);
 
     // Reuse a prior identical build if present.
-    const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
-      .bind(buildKey).first<{ r2_prefix: string }>();
+    const useCache = cacheable(args.htVersion, sha);
+    const cached = useCache
+      ? await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
+        .bind(buildKey).first<{ r2_prefix: string }>()
+      : null;
 
     const r2Prefix = `demos/${id}/`;
 
@@ -607,15 +632,17 @@ export async function createDemo(
         }
       }
     } else {
-      const built = await runBuild(env, args.entry, args.files);
+      const built = await runBuild(env, args.entry, buildFiles(args.files, args.htVersion, sha));
       for (const [rel, contents] of Object.entries(built)) {
         await env.ARTIFACTS.put(r2Prefix + rel, contents, {
           httpMetadata: { contentType: contentTypeFor(rel) },
         });
         addBytes(contentsByteLength(contents));
       }
-      await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
-        .bind(buildKey, r2Prefix, args.now).run();
+      if (useCache) {
+        await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
+          .bind(buildKey, r2Prefix, args.now).run();
+      }
     }
 
     // Store the source snapshot (for forking a saved demo). Served only via the
@@ -627,12 +654,12 @@ export async function createDemo(
     );
 
     await env.DB.prepare(
-      `INSERT OR REPLACE INTO demos (id,title,description,framework,tier,ht_version,files_hash,r2_prefix,forked_from,visibility,revoked,created_by,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?, ?, 0, ?,?,?)`,
+      `INSERT OR REPLACE INTO demos (id,title,description,framework,tier,ht_version,files_hash,r2_prefix,forked_from,visibility,revoked,created_by,created_at,updated_at,ht_built_sha,ht_attempt_sha)
+       VALUES (?,?,?,?,?,?,?,?,?, ?, 0, ?,?,?, ?,?)`,
     ).bind(
       id, args.title, args.description ?? null, args.entry.framework, args.entry.tier,
       args.htVersion, hash, r2Prefix, args.forkedFrom ?? null, args.visibility ?? "unlisted",
-      args.createdBy, args.now, args.now,
+      args.createdBy, args.now, args.now, sha, sha,
     ).run();
     await invalidateDemo(env, id);
 
@@ -654,6 +681,8 @@ export interface UpdateArgs {
   title?: string;
   description?: string | null;
   now: string;
+  /** PR commit to build; undefined asks pkg.pr.new (see CreateArgs). */
+  prSha?: string | null;
 }
 
 /** Rebuild a saved demo in place (edit-page Save): re-run the build for the new
@@ -670,11 +699,15 @@ export async function updateDemo(
 ): Promise<void> {
   return withSnapshotBuildPoint(env, args.entry.framework, args.id, buildReason, async (addBytes) => {
     const hash = await filesHash(args.files);
-    const buildKey = buildCacheKey(args.entry.framework, args.htVersion, hash);
+    const sha = await resolvePrSha(env, args.htVersion, args.prSha);
+    const buildKey = buildCacheKey(args.entry.framework, cacheRef(args.htVersion, sha), hash);
     const r2Prefix = `demos/${args.id}/`;
 
-    const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
-      .bind(buildKey).first<{ r2_prefix: string }>();
+    const useCache = cacheable(args.htVersion, sha);
+    const cached = useCache
+      ? await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
+        .bind(buildKey).first<{ r2_prefix: string }>()
+      : null;
 
     if (cached && cached.r2_prefix !== r2Prefix) {
       const src = cached.r2_prefix;
@@ -689,15 +722,17 @@ export async function updateDemo(
         }
       }
     } else if (!cached) {
-      const built = await runBuild(env, args.entry, args.files);
+      const built = await runBuild(env, args.entry, buildFiles(args.files, args.htVersion, sha));
       for (const [rel, contents] of Object.entries(built)) {
         await env.ARTIFACTS.put(r2Prefix + rel, contents, {
           httpMetadata: { contentType: contentTypeFor(rel) },
         });
         addBytes(contentsByteLength(contents));
       }
-      await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
-        .bind(buildKey, r2Prefix, args.now).run();
+      if (useCache) {
+        await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
+          .bind(buildKey, r2Prefix, args.now).run();
+      }
     }
     // (cached && cached.r2_prefix === r2Prefix): identical code already built here —
     // nothing is written, so nothing to add; `bytes` reports 0 for this outcome.
@@ -713,8 +748,8 @@ export async function updateDemo(
     // A completed rebuild is a ready demo whatever state preceded it, so the build
     // columns reset unconditionally — this is also how the async path (BuildJob's
     // alarm calls this function) flips 'building' to 'ready'.
-    const sets = ["ht_version=?", "files_hash=?", "updated_at=?", "build_status='ready'", "build_error=NULL"];
-    const binds: unknown[] = [args.htVersion, hash, args.now];
+    const sets = ["ht_version=?", "files_hash=?", "updated_at=?", "build_status='ready'", "build_error=NULL", "ht_built_sha=?", "ht_attempt_sha=?"];
+    const binds: unknown[] = [args.htVersion, hash, args.now, sha, sha];
     if (args.title !== undefined) { sets.push("title=?"); binds.push(args.title); }
     if (args.description !== undefined) { sets.push("description=?"); binds.push(args.description ?? null); }
     await env.DB.prepare(`UPDATE demos SET ${sets.join(", ")} WHERE id=?`).bind(...binds, args.id).run();
@@ -826,7 +861,7 @@ export async function serveDemoAsset(
   ctx: ExecutionContext,
   id: string,
   subpath: string,
-  opts: { embed: boolean },
+  opts: { embed: boolean; prRefresh?: (row: DemoRow) => Promise<PrRefresh | null> },
 ): Promise<Response> {
   // T9 (DEV-2163) gave the user-facing 404/410 a branded HTML body. Statuses and triggers are
   // unchanged; only document-ish requests get the page, so a missing hashed asset
@@ -882,6 +917,18 @@ export async function serveDemoAsset(
       : new Response("This demo has been revoked.", { status: 410 });
   }
 
+  // Before the artifact read, so a rebuild finishing in between serves its new
+  // document rather than the one read before it.
+  let refresh: PrRefresh | null = null;
+  if (isDocRequest && opts.prRefresh) {
+    try {
+      refresh = await opts.prRefresh(row);
+    } catch (err) {
+      // A refresh that cannot be decided must never cost the demo its last good build.
+      console.warn(`[pr-build] refresh check for ${id} failed, serving the current build:`, err);
+    }
+  }
+
   const clean = subpath.replace(/^\/+/, "");
   // Never serve the private source snapshot as a public asset. Stays plain text:
   // every `__`-prefixed path is a file request, never a document one — and
@@ -910,7 +957,8 @@ export async function serveDemoAsset(
   // exactly as the synchronous Save always has. The status flip reaches this read
   // because updateDemo/markSnapshotFailed both invalidate the KV row cache.
   if (!obj) {
-    const buildState = demoBuildState(row, Date.now());
+    // A refresh claimed for a demo whose first build failed is a first build again.
+    const buildState = refresh ? "building" : demoBuildState(row, Date.now());
     if (buildState === "building") {
       if (isDocRequest) record(503, 0);
       return html
@@ -946,6 +994,19 @@ export async function serveDemoAsset(
           homeUrl,
         })
       : new Response("Not found", { status: 404 });
+  }
+
+  // A PR demo whose PR has moved on waits for the rebuild instead of showing a
+  // reviewer the old commit as if it were current.
+  if (refresh) {
+    record(503, 0);
+    return errorPageResponse({
+      status: 503,
+      title: "Updating to the latest commit",
+      body: `Pull request #${refresh.pr} has a newer commit (${refresh.sha.slice(0, 7)}) than this demo was built from. It is rebuilding now — usually a minute or two. This page refreshes itself until the demo is ready.`,
+      homeUrl,
+      refreshSeconds: 10,
+    });
   }
 
   const headers = new Headers();
