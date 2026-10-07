@@ -20,7 +20,7 @@ import { htmlEntryLoadsModule, snapshotBuildCommand } from "./build-command.js";
 import { htMajorFromVersion, injectLiteHtml } from "./monitor-inject.js";
 import { emitPoint } from "./telemetry/points.js";
 import { kvKeyFits, r2KeyFits } from "./storage-key.js";
-import { cacheRef, pinPrFiles, prNumber, resolvePrSha } from "./pr-build.js";
+import { cacheable, cacheRef, pinPrFiles, prNumber, resolvePrSha } from "./pr-build.js";
 import type { PrRefresh } from "./pr-refresh.js";
 
 type SandboxLike = {
@@ -502,6 +502,7 @@ export async function hasCachedBuild(
 ): Promise<boolean> {
   const hash = await filesHash(files);
   const sha = await resolvePrSha(env, htVersion, prSha);
+  if (!cacheable(htVersion, sha)) return false;
   const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
     .bind(buildCacheKey(framework, cacheRef(htVersion, sha), hash)).first<{ r2_prefix: string }>();
   return Boolean(cached);
@@ -607,8 +608,11 @@ export async function createDemo(
     const buildKey = buildCacheKey(args.entry.framework, cacheRef(args.htVersion, sha), hash);
 
     // Reuse a prior identical build if present.
-    const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
-      .bind(buildKey).first<{ r2_prefix: string }>();
+    const useCache = cacheable(args.htVersion, sha);
+    const cached = useCache
+      ? await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
+        .bind(buildKey).first<{ r2_prefix: string }>()
+      : null;
 
     const r2Prefix = `demos/${id}/`;
 
@@ -635,8 +639,10 @@ export async function createDemo(
         });
         addBytes(contentsByteLength(contents));
       }
-      await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
-        .bind(buildKey, r2Prefix, args.now).run();
+      if (useCache) {
+        await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
+          .bind(buildKey, r2Prefix, args.now).run();
+      }
     }
 
     // Store the source snapshot (for forking a saved demo). Served only via the
@@ -697,8 +703,11 @@ export async function updateDemo(
     const buildKey = buildCacheKey(args.entry.framework, cacheRef(args.htVersion, sha), hash);
     const r2Prefix = `demos/${args.id}/`;
 
-    const cached = await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
-      .bind(buildKey).first<{ r2_prefix: string }>();
+    const useCache = cacheable(args.htVersion, sha);
+    const cached = useCache
+      ? await env.DB.prepare("SELECT r2_prefix FROM build_cache WHERE build_key = ?")
+        .bind(buildKey).first<{ r2_prefix: string }>()
+      : null;
 
     if (cached && cached.r2_prefix !== r2Prefix) {
       const src = cached.r2_prefix;
@@ -720,8 +729,10 @@ export async function updateDemo(
         });
         addBytes(contentsByteLength(contents));
       }
-      await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
-        .bind(buildKey, r2Prefix, args.now).run();
+      if (useCache) {
+        await env.DB.prepare("INSERT OR REPLACE INTO build_cache (build_key, r2_prefix, created_at) VALUES (?,?,?)")
+          .bind(buildKey, r2Prefix, args.now).run();
+      }
     }
     // (cached && cached.r2_prefix === r2Prefix): identical code already built here —
     // nothing is written, so nothing to add; `bytes` reports 0 for this outcome.
@@ -906,20 +917,6 @@ export async function serveDemoAsset(
       : new Response("This demo has been revoked.", { status: 410 });
   }
 
-  // A PR demo whose PR has moved on waits for the rebuild instead of showing a
-  // reviewer the old commit as if it were current.
-  const refresh = isDocRequest && opts.prRefresh ? await opts.prRefresh(row) : null;
-  if (refresh) {
-    record(503, 0);
-    return errorPageResponse({
-      status: 503,
-      title: "Updating to the latest commit",
-      body: `Pull request #${refresh.pr} has a newer commit (${refresh.sha.slice(0, 7)}) than this demo was built from. It is rebuilding now — usually a minute or two. This page refreshes itself until the demo is ready.`,
-      homeUrl,
-      refreshSeconds: 10,
-    });
-  }
-
   const clean = subpath.replace(/^\/+/, "");
   // Never serve the private source snapshot as a public asset. Stays plain text:
   // every `__`-prefixed path is a file request, never a document one — and
@@ -984,6 +981,29 @@ export async function serveDemoAsset(
           homeUrl,
         })
       : new Response("Not found", { status: 404 });
+  }
+
+  // A PR demo whose PR has moved on waits for the rebuild instead of showing a
+  // reviewer the old commit as if it were current. Only once there is an artifact
+  // to replace: a first build keeps its own "still building" page above.
+  let refresh: PrRefresh | null = null;
+  if (isDocRequest && opts.prRefresh) {
+    try {
+      refresh = await opts.prRefresh(row);
+    } catch (err) {
+      // A refresh that cannot be decided must never cost the demo its last good build.
+      console.warn(`[pr-build] refresh check for ${id} failed, serving the current build:`, err);
+    }
+  }
+  if (refresh) {
+    record(503, 0);
+    return errorPageResponse({
+      status: 503,
+      title: "Updating to the latest commit",
+      body: `Pull request #${refresh.pr} has a newer commit (${refresh.sha.slice(0, 7)}) than this demo was built from. It is rebuilding now — usually a minute or two. This page refreshes itself until the demo is ready.`,
+      homeUrl,
+      refreshSeconds: 10,
+    });
   }
 
   const headers = new Headers();

@@ -63,7 +63,11 @@ export function fakeD1(seedRows = [], seedTokens = [], { buildCacheHit = true } 
           // and so a route that forgets to write a change cannot appear to.
           return row ? { ...row } : null;
         }
-        if (/FROM demos WHERE id = \?/.test(sql)) return demos.get(binds[0]) ?? null;
+        if (/FROM demos WHERE id = \?/.test(sql)) {
+          // A copy, as D1 returns: a caller holding a row must not see later writes.
+          const row = demos.get(binds[0]);
+          return row ? { ...row } : null;
+        }
         if (/FROM build_cache/.test(sql)) {
           cacheLookups.push(binds[0]);
           return buildCacheHit ? { r2_prefix: "demos/_prior-identical-build/" } : null;
@@ -111,11 +115,11 @@ function applyPrRefreshWrite(demos, sql, binds) {
     Object.assign(row, { build_status: "building", build_error: null, ht_attempt_sha: sha, updated_at: now });
     return 1;
   }
-  if (/UPDATE demos SET build_status=\?, ht_attempt_sha=\? WHERE id=\?/.test(sql)) {
-    const [status, sha, id] = binds;
+  if (/UPDATE demos SET build_status=\?, ht_attempt_sha=\?, updated_at=\? WHERE id=\?/.test(sql)) {
+    const [status, sha, updatedAt, id] = binds;
     const row = demos.get(id);
     if (!row) return 0;
-    Object.assign(row, { build_status: status, ht_attempt_sha: sha });
+    Object.assign(row, { build_status: status, ht_attempt_sha: sha, updated_at: updatedAt });
     return 1;
   }
   return undefined;

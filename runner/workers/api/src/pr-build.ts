@@ -45,7 +45,11 @@ export async function latestPrSha(env: Env, pr: string, opts: { fresh?: boolean 
     return null;
   }
   if (!sha || !SHA_RE.test(sha)) return null;
-  await env.CACHE.put(key, sha, { expirationTtl: SHA_TTL_SECONDS });
+  try {
+    await env.CACHE.put(key, sha, { expirationTtl: SHA_TTL_SECONDS });
+  } catch {
+    // KV allows one write per key per second; the answer is still good.
+  }
   return sha;
 }
 
@@ -54,6 +58,12 @@ export async function resolvePrSha(env: Env, htVersion: string, given?: string |
   if (given !== undefined) return given;
   const pr = prNumber(htVersion);
   return pr ? latestPrSha(env, pr, { fresh: true }) : null;
+}
+
+/** False for a PR build whose commit is unknown: its bare-number key is the one
+ *  that served stale PR builds, so such a build neither reads nor writes the cache. */
+export function cacheable(htVersion: string, sha: string | null): boolean {
+  return sha !== null || prNumber(htVersion) === null;
 }
 
 /** The version half of a build cache key: the same artifact only for the same commit. */

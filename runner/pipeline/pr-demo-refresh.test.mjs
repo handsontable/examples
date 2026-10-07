@@ -20,7 +20,7 @@ import { setSandboxFactory } from "./fixtures/cloudflare-sandbox-stub.mjs";
 register("./fixtures/worker-hooks.mjs", import.meta.url);
 
 const { default: worker } = await import("../workers/api/src/index.ts");
-const { updateDemo } = await import("../workers/api/src/share.ts");
+const { hasCachedBuild, updateDemo } = await import("../workers/api/src/share.ts");
 const { runSnapshotJob } = await import("../workers/api/src/snapshot-jobs.ts");
 const { latestPrSha, pinPrFiles, prNumber, resolvePrSha } = await import("../workers/api/src/pr-build.ts");
 const { refreshPrDemo } = await import("../workers/api/src/pr-refresh.ts");
@@ -380,6 +380,114 @@ test("an MCP create and rebuild count the commit they build as attempted", async
       assert.ok(flip.binds.includes(NEW_SHA));
       assert.equal(scheduled[0].prSha, NEW_SHA);
     }
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a PR build whose commit is unknown skips the cache instead of reusing the bare-number build", async () => {
+  const { env, cacheLookups, writes } = makeEnv([prRow()], [], {}, { buildCacheHit: true });
+  const written = {};
+  setSandboxFactory(() => ({
+    mkdir: async () => {},
+    async writeFile(path, contents) { written[path] = contents; },
+    readFile: async () => "",
+    destroy: async () => {},
+    exec: async () => ({ success: false, exitCode: 1, stdout: "", stderr: "stop" }),
+  }));
+  const files = {
+    "/package.json": JSON.stringify({ dependencies: { handsontable: "https://pkg.pr.new/handsontable@13766" } }),
+    "/index.js": "import 'handsontable';",
+  };
+  try {
+    assert.equal(await hasCachedBuild(env, "javascript", "13766", files, null), false);
+    await updateDemo(env, {
+      id: "abc123",
+      entry: { framework: "javascript", tier: 1, installCommand: "pnpm install", buildCommand: "vite build", outputDir: "dist", outputGlob: null },
+      files,
+      htVersion: "13766",
+      now: "2026-10-07T00:00:00.000Z",
+      prSha: null,
+    }).catch(() => {});
+  } finally {
+    setSandboxFactory(null);
+  }
+  assert.deepEqual(cacheLookups, [], "the build_cache is never asked");
+  assert.ok(written["/app/package.json"], "the build ran instead of copying a cached artifact");
+  assert.equal(JSON.parse(written["/app/package.json"]).dependencies.handsontable, "https://pkg.pr.new/handsontable@13766");
+  assert.equal(writes.filter((w) => /INTO build_cache/.test(w.sql)).length, 0);
+});
+
+test("a viewer who loses the claim to a concurrent view waits for the same build", async () => {
+  const { env, scheduled } = makeEnv([prRow()]);
+  const stub = stubPkgPrNew(NEW_SHA);
+  const opts = { budgetDenied: async () => false, recordBuild: async () => {} };
+  try {
+    const [a, b] = await Promise.all([refreshPrDemo(env, prRow(), opts), refreshPrDemo(env, prRow(), opts)]);
+    assert.equal(scheduled.length, 1);
+    assert.deepEqual(a, { pr: "13766", sha: NEW_SHA });
+    assert.deepEqual(b, { pr: "13766", sha: NEW_SHA });
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a first build keeps its own still-building page", async () => {
+  const { env, scheduled } = makeEnv([prRow({
+    build_status: "building",
+    ht_built_sha: null,
+    ht_attempt_sha: NEW_SHA,
+    updated_at: new Date().toISOString(),
+  })]);
+  const stub = stubPkgPrNew(NEW_SHA);
+  try {
+    const res = await view(env);
+    assert.equal(res.status, 503);
+    const body = await res.text();
+    assert.match(body, /This demo is still building/);
+    assert.doesNotMatch(body, /newer commit/);
+    assert.equal(scheduled.length, 0);
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a refresh that cannot be scheduled is undone so the next view tries again", async () => {
+  const stale = prRow({ build_status: "building", updated_at: "2026-01-01T00:00:00.000Z" });
+  const { env, demos } = makeEnv([stale], [], ARTIFACT);
+  let calls = 0;
+  env.BUILD_JOBS = {
+    idFromName: (name) => name,
+    get: () => ({ async fetch() { calls++; return new Response("down", { status: 500 }); } }),
+  };
+  const stub = stubPkgPrNew(NEW_SHA);
+  try {
+    const res = await view(env);
+    assert.equal(res.status, 200, "the old build is served when no rebuild could start");
+    assert.deepEqual(
+      { status: demos.get("abc123").build_status, attempt: demos.get("abc123").ht_attempt_sha, updated: demos.get("abc123").updated_at },
+      { status: "building", attempt: OLD_SHA, updated: "2026-01-01T00:00:00.000Z" },
+      "the row is back exactly as it was, so the stale window still lets the next view claim it",
+    );
+    await view(env);
+    assert.equal(calls, 2, "the next view tries to schedule again");
+  } finally {
+    stub.restore();
+  }
+});
+
+test("a refresh check that throws serves the current build instead of a 500", async () => {
+  const { env } = makeEnv([prRow()], [], ARTIFACT);
+  const stub = stubPkgPrNew(NEW_SHA);
+  const realPrepare = env.DB.prepare;
+  env.DB.prepare = (sql) => {
+    if (/SELECT ht_version, build_status/.test(sql)) throw new Error("D1 is down");
+    return realPrepare(sql);
+  };
+  try {
+    const res = await view(env);
+    assert.equal(res.status, 200);
+    assert.match(await res.text(), /old build/);
   } finally {
     stub.restore();
   }
