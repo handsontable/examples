@@ -492,3 +492,22 @@ test("a refresh check that throws serves the current build instead of a 500", as
     stub.restore();
   }
 });
+
+test("a demo whose first build failed is rebuilt for the PR's next commit", async () => {
+  const { env, scheduled } = makeEnv([prRow({
+    build_status: "failed",
+    build_error: "vite exploded",
+    ht_built_sha: null,
+    ht_attempt_sha: OLD_SHA,
+  })]);
+  const stub = stubPkgPrNew(NEW_SHA);
+  try {
+    const res = await view(env);
+    assert.equal(res.status, 503);
+    assert.match(await res.text(), /This demo is still building/);
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].prSha, NEW_SHA);
+  } finally {
+    stub.restore();
+  }
+});

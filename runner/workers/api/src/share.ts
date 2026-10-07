@@ -917,6 +917,18 @@ export async function serveDemoAsset(
       : new Response("This demo has been revoked.", { status: 410 });
   }
 
+  // Before the artifact read, so a rebuild finishing in between serves its new
+  // document rather than the one read before it.
+  let refresh: PrRefresh | null = null;
+  if (isDocRequest && opts.prRefresh) {
+    try {
+      refresh = await opts.prRefresh(row);
+    } catch (err) {
+      // A refresh that cannot be decided must never cost the demo its last good build.
+      console.warn(`[pr-build] refresh check for ${id} failed, serving the current build:`, err);
+    }
+  }
+
   const clean = subpath.replace(/^\/+/, "");
   // Never serve the private source snapshot as a public asset. Stays plain text:
   // every `__`-prefixed path is a file request, never a document one — and
@@ -945,7 +957,8 @@ export async function serveDemoAsset(
   // exactly as the synchronous Save always has. The status flip reaches this read
   // because updateDemo/markSnapshotFailed both invalidate the KV row cache.
   if (!obj) {
-    const buildState = demoBuildState(row, Date.now());
+    // A refresh claimed for a demo whose first build failed is a first build again.
+    const buildState = refresh ? "building" : demoBuildState(row, Date.now());
     if (buildState === "building") {
       if (isDocRequest) record(503, 0);
       return html
@@ -984,17 +997,7 @@ export async function serveDemoAsset(
   }
 
   // A PR demo whose PR has moved on waits for the rebuild instead of showing a
-  // reviewer the old commit as if it were current. Only once there is an artifact
-  // to replace: a first build keeps its own "still building" page above.
-  let refresh: PrRefresh | null = null;
-  if (isDocRequest && opts.prRefresh) {
-    try {
-      refresh = await opts.prRefresh(row);
-    } catch (err) {
-      // A refresh that cannot be decided must never cost the demo its last good build.
-      console.warn(`[pr-build] refresh check for ${id} failed, serving the current build:`, err);
-    }
-  }
+  // reviewer the old commit as if it were current.
   if (refresh) {
     record(503, 0);
     return errorPageResponse({
