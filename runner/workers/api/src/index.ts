@@ -1488,6 +1488,10 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             // already carried. Echoed so a machine caller can see which ref won
             // instead of reporting back whatever it sent (review of PR #230).
             htVersion: version.ref,
+            // The PR commit the artifact was built from: the one `createDemo` was
+            // handed, so it cannot differ from what was installed. Null for a
+            // release, or a PR whose current commit pkg.pr.new could not report.
+            builtCommit: prSha,
             status: "ready",
           },
           201,
@@ -1515,6 +1519,9 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             : null,
           url: `/d/${row.id}`,
           htVersion: row.ht_version,
+          // The commit /d serves right now: during a refresh to a newer PR commit,
+          // still the old one, because that artifact is what keeps serving.
+          builtCommit: row.ht_built_sha ?? null,
         });
       }
 
@@ -1720,7 +1727,8 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             prSha,
           });
           // `htVersion` is what was built, not what was asked for — see the create handler.
-          return json({ ok: true, id: demoId, url: `/d/${demoId}`, editUrl: `/edit/${demoId}`, rebuilt: true, htVersion: version.ref });
+          // `builtCommit` as on the create handler: the commit `updateDemo` was handed.
+          return json({ ok: true, id: demoId, url: `/d/${demoId}`, editUrl: `/edit/${demoId}`, rebuilt: true, htVersion: version.ref, builtCommit: prSha });
         }
 
         if (patchTitle === undefined && patchDescription === undefined) {
@@ -1775,7 +1783,13 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         // given, so the snapshot's own pin is what repairs them. Null means the
         // editor falls back to npm latest, as it does for a fresh playground.
         const row = await getDemo(env, parts[2]!);
-        return json({ ...src, htVersion: editorVersionRef(row?.ht_version, src.files) });
+        // `builtCommit`: the PR commit /d serves — the status route's field, here
+        // because this route is public and is how hot-mcp's `read_demo` reads a demo.
+        return json({
+          ...src,
+          htVersion: editorVersionRef(row?.ht_version, src.files),
+          builtCommit: row?.ht_built_sha ?? null,
+        });
       }
 
       // GET /api/demos/:id  (public) — metadata; 410 if revoked
