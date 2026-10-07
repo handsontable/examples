@@ -1,8 +1,18 @@
 import { test, expect, type Route, type Page } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { activeEditor, flushFaro, previewReady, stubShell, abortSandpackHosts } from "./helpers.js";
+import { readFileSync } from "node:fs";
+import { activeEditor, flushFaro, previewReady, stubShell, abortSandpackHosts, workspaceFiles } from "./helpers.js";
 import { fingerprint } from "../packages/runtime/src/telemetry/fingerprint.js";
+import { stableBucketVersions } from "../packages/runtime/src/version.js";
+
+// The version a bare visit starts on (`catalog.ts`'s DEFAULT_VERSION), read
+// from `catalog.json` so the weekly bucket re-pin cannot leave it stale here.
+const DEFAULT_VERSION = stableBucketVersions(
+  (JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")) as { bucketVersions: Record<string, string> })
+    .bucketVersions,
+)[0];
+const newerPatch = (v: string) => v.replace(/\d+$/, (patch) => String(Number(patch) + 1));
 
 // Faro in the authoring app. Gated: needs a dist built with
 // VITE_TELEMETRY_LOCAL=1 (contract §10), served on its own port (never
@@ -656,8 +666,8 @@ test.describe("Faro in the authoring app", () => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
-    // The stubbed version list remounts the preview once after load, and a
-    // remount closes the open burst; drive the ladder after it.
+    // The preview mounts once the stubbed version list resolves, and a mount
+    // closes the open burst; drive the ladder after it.
     await expect(page).toHaveURL(/[?&]v=18\.0\.0\b/);
 
     const relay = (message: string, sentry = false) =>
@@ -920,6 +930,47 @@ test.describe("Faro in the authoring app", () => {
     const [record] = records();
     expect(record!.type).toBe("DemoError");
     expect(uncaught()[0]!.context).toMatchObject({ "hot.surface": "demo-runtime", "hot.framework": "javascript" });
+  });
+
+  // Between an npm release and the weekly bucket re-pin, npm `latest` is newer
+  // than the default version a bare visit starts on. Mounting before
+  // /api/versions answered booted the preview on the default, then remounted on
+  // `latest`: two Sandpack boots and an `abandoned` preview.ready_ms on every
+  // such visit (DEV-3344). The versions response is held until the starter
+  // artifact has loaded, which is the order that remounted. The oracle is the
+  // `abandoned` point the first mount's cleanup emits; the aborted bundler
+  // keeps the preview booting, so nothing else settles the tracker first.
+  test("a bare visit mounts the preview once when npm latest is newer than the default version", async ({ page }) => {
+    await stubShell(page);
+    const latest = newerPatch(DEFAULT_VERSION);
+    let releaseVersions!: () => void;
+    const versionsHeld = new Promise<void>((resolve) => { releaseVersions = resolve; });
+    // Registered after stubShell, so it takes precedence over the stub there.
+    await page.route("**/api/versions", async (route) => {
+      await versionsHeld;
+      await route.fulfill({ json: { latest, next: "19.0.0-next.1", versions: [latest, DEFAULT_VERSION] } });
+    });
+    const captured = captureTelemetry(page);
+    const bundlerNavigations: string[] = [];
+    page.on("request", (r) => {
+      if (r.isNavigationRequest() && /sandpack/.test(new URL(r.url()).hostname)) bundlerNavigations.push(r.url());
+    });
+    const pinnedCore = async () => /"handsontable": "([^"]+)"/.exec((await workspaceFiles(page))["/package.json"] ?? "")?.[1];
+
+    await page.goto("/?example=react");
+    await page.waitForFunction(() => "__HOT_FILES__" in window);
+    await expect.poll(pinnedCore, { message: "the starter artifact loaded on the default version" }).toBe(DEFAULT_VERSION);
+    releaseVersions();
+    // The same-bucket re-pin runs in the commit that would have torn down the first mount.
+    await expect.poll(pinnedCore, { message: "the workspace moved to npm latest" }).toBe(latest);
+    await expect.poll(() => bundlerNavigations.length, { message: "the preview mounted" }).toBeGreaterThan(0);
+    await flushFaro(page, eventSeen(captured));
+
+    const abandoned = captured
+      .flatMap((b) => b.measurements ?? [])
+      .filter((m) => m.type === "preview.ready_ms")
+      .filter((m) => (m.context as Record<string, string> | undefined)?.["hot.outcome"] === "abandoned");
+    expect(abandoned, "no preview was torn down by the version swap").toEqual([]);
   });
 });
 
