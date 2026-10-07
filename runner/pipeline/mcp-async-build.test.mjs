@@ -137,7 +137,7 @@ test("the status route needs the service secret and reports each state", async (
     tier2Row({ id: "b1", build_status: "building", updated_at: now }),
     tier2Row({ id: "s1", build_status: "building", updated_at: stale }),
     tier2Row({ id: "f1", build_status: "failed", build_error: "install failed: boom" }),
-    tier2Row({ id: "r1" }),
+    tier2Row({ id: "r1", ht_version: "13106", ht_built_sha: "abc1234" }),
     tier2Row({ id: "v1", revoked: 1 }),
   ]);
 
@@ -159,6 +159,9 @@ test("the status route needs the service secret and reports each state", async (
 
   const ready = await (await worker.fetch(statusRequest("r1"), env, ctx)).json();
   assert.equal(ready.status, "ready");
+  // The commit /d serves, for a PR demo; none for a demo that has not recorded one.
+  assert.equal(ready.builtCommit, "abc1234");
+  assert.equal(building.builtCommit, null);
 
   // A row stuck in 'building' past the stale window reads as failed, with an
   // explanation even though no failure was ever recorded for it.

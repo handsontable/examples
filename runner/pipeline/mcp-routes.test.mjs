@@ -150,10 +150,13 @@ test("a created demo answers with the four links and its owner", async () => {
   // — this assertion caught that addition, which is its job; grew, reviewed,
   // admitted. `status` joined with the detached tier-2 builds (snapshot-jobs.ts),
   // so a caller can tell this synchronous "ready" from the 202's "building".
+  // `builtCommit` joined with PR builds keyed on the PR's current commit.
   assert.deepEqual(
     Object.keys(body).sort(),
-    ["createdBy", "editUrl", "embedUrl", "htVersion", "id", "shareUrl", "status", "url"],
+    ["builtCommit", "createdBy", "editUrl", "embedUrl", "htVersion", "id", "shareUrl", "status", "url"],
   );
+  // A release has no commit to report.
+  assert.equal(body.builtCommit, null);
   assert.equal(body.status, "ready");
   assert.equal(body.url, `/d/${body.id}`);
   assert.equal(body.embedUrl, `/embed/${body.id}`);
@@ -165,6 +168,29 @@ test("a created demo answers with the four links and its owner", async () => {
   // match /^\d+\.\d+\.\d+/, so a shape match could pass with the seeded catalog
   // silently ignored (a drifted CACHE key) and the registry dependency back.
   assert.equal(body.htVersion, "16.2.0");
+});
+
+test("a PR demo answers with the commit it was built from", async () => {
+  const { env } = makeEnv();
+  // The build looks up the PR's current commit; answer it here, not over the network.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => String(url).startsWith("https://pkg.pr.new/")
+    ? new Response(null, { headers: { "x-commit-key": "handsontable:handsontable:f66dd0d" } })
+    : realFetch(url, init);
+  let res;
+  try {
+    res = await worker.fetch(
+      createRequest({ framework: "react", title: "Grid", description: "A PR build", files: filesWith(PR_URL) }),
+      env,
+      ctx,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.equal(body.htVersion, "13106");
+  assert.equal(body.builtCommit, "f66dd0d");
 });
 
 test("a created demo is written with the caller as its owner, and its owner's listing finds it", async () => {
@@ -267,6 +293,8 @@ test("an MCP rebuild derives the bare ref from a pkg.pr.new-pinned payload and r
   // The bare ref, never the URL: the column must hold what the validator
   // accepts, or the next /edit boot refuses the demo all over again.
   assert.equal(body.htVersion, "13106");
+  // The commit the rebuild installed, so the caller can say which one the link shows.
+  assert.equal(body.builtCommit, "abc1234");
   // updateDemo's UPDATE is the write oracle (parseDemosInsert only reads
   // INSERTs): bind order is ht_version, files_hash, updated_at, ..., id.
   const update = writes.find((w) => /UPDATE demos SET ht_version=/.test(w.sql));

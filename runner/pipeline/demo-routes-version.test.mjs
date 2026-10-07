@@ -307,6 +307,18 @@ const blankSource = (framework = "javascript") => ({
 const sourceRequest = (id) =>
   new Request(`https://demos.handsontable.com/api/demos/${id}/source`);
 
+test("the source names the PR commit the demo's /d serves, and none for a release", async () => {
+  const { env } = makeEnv(
+    [demoRow({ framework: "javascript", ht_version: "13106", ht_built_sha: "abc1234" })],
+    [],
+    blankSource(),
+  );
+  assert.equal((await (await worker.fetch(sourceRequest("abc123"), env, ctx)).json()).builtCommit, "abc1234");
+
+  const release = makeEnv([demoRow({ framework: "javascript" })], [], blankSource());
+  assert.equal((await (await worker.fetch(sourceRequest("abc123"), release.env, ctx)).json()).builtCommit, null);
+});
+
 test("a stored demo whose index.html loads no module is repaired on read", async () => {
   const { env } = makeEnv([demoRow({ framework: "javascript" })], [], blankSource());
   const res = await worker.fetch(sourceRequest("abc123"), env, ctx);

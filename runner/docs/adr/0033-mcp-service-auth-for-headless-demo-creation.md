@@ -97,6 +97,19 @@ demo could not. Absent fields mean "leave the column alone" (never falling back 
 at the start of the handler, per the DEV-2495 lesson on the broker path), and a patch with
 nothing in it is a 400 rather than a pointless rebuild.
 
+**Amended 2026-10-07 — the built commit (DEV-3338).** A PR demo is built from the PR's
+current commit and rebuilds itself when the PR moves on, so `htVersion` (the bare PR number)
+no longer says which code a link shows. The MCP responses carry `builtCommit`. It is the PR
+commit the `/d` artifact was built from, and `null` for a release or for a PR whose commit
+pkg.pr.new could not report:
+
+- the synchronous `201` create and `200` rebuild return the commit handed to
+  `createDemo()`/`updateDemo()`;
+- a `202` returns none, because nothing is built yet;
+- `GET /api/mcp/demos/:id/status` and the public `GET /api/demos/:id/source` return
+  `ht_built_sha`. During a refresh this is still the old commit, because that is what `/d`
+  serves until the new build lands.
+
 ## Consequences
 
 A demo can be created end-to-end from a prompt, owned by the person who asked, appearing in
