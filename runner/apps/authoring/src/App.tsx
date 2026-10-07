@@ -2053,10 +2053,18 @@ function Authoring({
     });
     return () => { cancelled = true; };
   }, [version, nextVersion, versionsResolved]);
-  // True while a next-format version's real availability is still unknown:
-  // either /api/versions hasn't resolved yet, or the exists-check above is
-  // in flight. Blocks the runtime-mount effect until it's settled.
-  const versionPending = isNextPrereleaseVersion(version) && (!versionsResolved || versionCheckPending);
+  // True while the version to mount is still unknown, which blocks the
+  // runtime-mount effect until it's settled. Two cases:
+  //  - a next-format version whose real availability is unknown: /api/versions
+  //    hasn't resolved yet, or the exists-check above is in flight;
+  //  - a visit that pinned nothing, still on the DEFAULT_VERSION placeholder:
+  //    the versions fetch swaps in npm `latest`, and between an npm release and
+  //    the next bucket re-pin that is a different version, so mounting first
+  //    boots the preview twice (DEV-3344). Only the mount waits; the starter
+  //    artifact still loads in parallel.
+  const versionPending =
+    (isNextPrereleaseVersion(version) && (!versionsResolved || versionCheckPending)) ||
+    (!versionsResolved && !hadUrlVersion.current && version === DEFAULT_VERSION);
 
   // A candidate bucket absent from the static index (Sentry DEMOS-1C) is a
   // by-design outcome (ADR-0021 #2/#3, most selectable versions have no
