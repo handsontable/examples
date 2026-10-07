@@ -1519,9 +1519,8 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             : null,
           url: `/d/${row.id}`,
           htVersion: row.ht_version,
-          // The commit /d serves right now. While a refresh to a newer PR commit
-          // runs this is still the old one — that is the artifact being served,
-          // which is what the field promises, so not `ht_attempt_sha`.
+          // The commit /d serves right now: during a refresh to a newer PR commit,
+          // still the old one, because that artifact is what keeps serving.
           builtCommit: row.ht_built_sha ?? null,
         });
       }
