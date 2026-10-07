@@ -7,29 +7,46 @@
 //   redux 5         ES2020 dist
 //   jspdf 4         transitive fast-png uses optional chaining (ES2020)
 //   @simonwep/pickr static class fields (ES2022) — no parseable version exists
+//   @a2ui/web_core  import attributes (`with { type: "json" }`, ES2025) in two files
 //
-// For each dep listed in DEP_SHIMS we fetch one self-contained dist file at
-// the exact version pinned in the sandbox package.json, compile it to the
-// babel 6 floor with the same babel 8 pass as example sources, and inject it
-// as sandbox files under /node_modules/<pkg>/. Sandbox files shadow the
-// packager's copy during module resolution, so babel 6 never sees the raw
-// modern dist. The package stays in the root package.json so the packager
-// still resolves its transitive deps (e.g. react-redux → use-sync-external-store).
+// For each dep listed in DEP_SHIMS we fetch its dist at the exact version
+// pinned in the sandbox package.json, compile it to the babel 6 floor with the
+// same babel 8 pass as example sources, and inject it as sandbox files under
+// /node_modules/<pkg>/. Sandbox files shadow the packager's copy during module
+// resolution, so babel 6 never sees the raw modern dist. The package stays in
+// the root package.json so the packager still resolves its transitive deps
+// (e.g. react-redux → use-sync-external-store).
+//
+// Two shapes. `{ file }` is a single self-contained dist (UMD or an ESM bundle
+// that only imports peers): it becomes the package's `index.js` and a minimal
+// package.json points `main` at it. `{ files }` is for unbundled packages where
+// only a few files are unparseable: each listed file is shadowed at its own
+// path and everything else, including the package.json with its `exports` map,
+// stays the packager's copy — the same per-file shadowing `shimHandsontable`
+// does for prerelease Handsontable builds.
 
 import type { FilesMap } from "./types.js";
 import { transpileDependencyDist } from "./transpile.js";
 import { parsePkgPrNewFromUrl } from "./version.js";
 
 /**
- * Deps that need shimming, each with the single self-contained dist file to
- * fetch. UMD bundles (pickr, jspdf) inline their own dependencies; the redux
- * ESM dists only import peers the bundler already resolves.
+ * Deps that need shimming. `file`: the single self-contained dist to fetch —
+ * UMD bundles (pickr, jspdf) inline their own dependencies; the redux ESM
+ * dists only import peers the bundler already resolves. `files`: the package
+ * is unbundled and only these files, shadowed in place, carry syntax babel 6
+ * cannot parse.
  */
-export const DEP_SHIMS: Record<string, { file: string }> = {
+export type DepShim = { file: string; files?: never } | { files: string[]; file?: never };
+
+export const DEP_SHIMS: Record<string, DepShim> = {
   "@simonwep/pickr": { file: "dist/pickr.min.js" },
   redux: { file: "dist/redux.mjs" },
   "react-redux": { file: "dist/react-redux.mjs" },
   jspdf: { file: "dist/jspdf.umd.min.js" },
+  // 0.12: the two version entry points import their JSON schema with
+  // `with { type: "json" }` (src/v0_9/index.js:44, src/v0_8/index.js:26); the
+  // other ~140 files parse. Pre-transpiling strips the attribute clause.
+  "@a2ui/web_core": { files: ["src/v0_9/index.js", "src/v0_8/index.js"] },
 };
 
 const CDN = "https://unpkg.com";
@@ -161,7 +178,7 @@ function shimHandsontable(version: string, fetchImpl: typeof fetch): Promise<Rec
   return cached;
 }
 
-/** Transpiled dist cache, keyed by `<pkg>@<version>` — shims are immutable per version. */
+/** Transpiled dist cache, keyed by `<pkg>@<version>/<file>` — shims are immutable per version. */
 const shimCache = new Map<string, Promise<string>>();
 
 function fetchAndTranspile(
@@ -170,11 +187,11 @@ function fetchAndTranspile(
   file: string,
   fetchImpl: typeof fetch,
 ): Promise<string> {
-  const key = `${pkg}@${version}`;
+  const key = `${pkg}@${version}/${file}`;
   let cached = shimCache.get(key);
   if (!cached) {
     cached = (async () => {
-      const url = `${CDN}/${key}/${file}`;
+      const url = `${CDN}/${key}`;
       const res = await fetchImpl(url);
       if (!res.ok) {
         throw new Error(`Failed to fetch dependency shim for ${pkg}: ${url} returned ${res.status}`);
@@ -220,7 +237,15 @@ export async function applyDepShims(
   await Promise.all(
     targets.map(async (pkg) => {
       const version = deps[pkg] as string;
-      const shim = DEP_SHIMS[pkg] as { file: string };
+      const shim = DEP_SHIMS[pkg] as DepShim;
+      if (shim.files) {
+        await Promise.all(
+          shim.files.map(async (file) => {
+            out[`/node_modules/${pkg}/${file}`] = await fetchAndTranspile(pkg, version, file, fetchImpl);
+          }),
+        );
+        return;
+      }
       const code = await fetchAndTranspile(pkg, version, shim.file, fetchImpl);
       out[`/node_modules/${pkg}/index.js`] = code;
       out[`/node_modules/${pkg}/package.json`] = JSON.stringify({

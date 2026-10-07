@@ -103,6 +103,70 @@ test("turns regex literals babel 6 cannot parse into RegExp constructor calls", 
   assert.ok(new Function(`${shim.replace(/export const (\w+)/g, "globalThis.$1")}; return [a.test("1b"), a.test("ab"), n.exec("2026").groups.year]`)().join() === "true,false,2026");
 });
 
+// @a2ui/web_core 0.12 is unbundled (~140 files behind an `exports` map) and only its two
+// version entry points carry `import x from "./schemas/x.json" with { type: "json" }`, which
+// babel 6 rejects ("Support for the experimental syntax 'moduleAttributes' isn't currently
+// enabled") while the Vite build behind `/d` is fine. A `files` shim shadows just those two
+// at their own paths — no `index.js` / package.json override, so the `exports` map and the
+// relative imports inside the shadowed files keep resolving against the packager's copy.
+const ATTR_SRC =
+  "import schema from './schemas/server_to_client.json' with { type: 'json' };\n" +
+  "export const Schemas = { schema };\n" +
+  "export { Catalog } from '../catalog/types.js';\n" +
+  "export { default as common } from './schemas/common_types.json' with { type: 'json' };\n";
+
+test("shadows listed files in place and strips import attributes", async () => {
+  const fetched = [];
+  const fetchImpl = async (url) => {
+    fetched.push(url);
+    return { ok: true, text: async () => ATTR_SRC };
+  };
+  const files = filesWithDeps({ "@a2ui/web_core": "0.12.0-test-attrs" });
+  const out = await applyDepShims(files, { fetchImpl });
+
+  assert.deepEqual(
+    fetched.sort(),
+    DEP_SHIMS["@a2ui/web_core"].files.map((f) => `https://unpkg.com/@a2ui/web_core@0.12.0-test-attrs/${f}`).sort(),
+    "every listed file fetched at the pinned version",
+  );
+  const shadowed = Object.keys(out).filter((k) => k.startsWith("/node_modules/@a2ui/web_core/")).sort();
+  assert.deepEqual(
+    shadowed,
+    DEP_SHIMS["@a2ui/web_core"].files.map((f) => `/node_modules/@a2ui/web_core/${f}`).sort(),
+    "only the listed files are shadowed; no index.js or package.json override",
+  );
+  const shim = out["/node_modules/@a2ui/web_core/src/v0_9/index.js"];
+  assert.ok(!/\bwith\s*\{/.test(shim), "attribute clause stripped from import and export-from");
+  assert.match(shim, /from\s*['"]\.\/schemas\/server_to_client\.json['"]/, "JSON import kept, relative path untouched");
+  assert.match(shim, /from\s*['"]\.\.\/catalog\/types\.js['"]/, "re-exports kept as ESM");
+  Parser.parse(shim, { ecmaVersion: 2017, sourceType: "module" });
+});
+
+test("strips the options argument of a dynamic import()", async () => {
+  // `import("./x.json", { with: { type: "json" } })` is the same clause in call form.
+  // Dynamic import itself is ES2020, so this parses at that level rather than the
+  // ES2017 floor the static checks use.
+  const src = "export const lazy = () => import('./schemas/sample.json', { with: { type: 'json' } });\n";
+  const fetchImpl = async () => ({ ok: true, text: async () => src });
+  const out = await applyDepShims(filesWithDeps({ "@a2ui/web_core": "0.12.0-test-dynamic" }), { fetchImpl });
+  const shim = out["/node_modules/@a2ui/web_core/src/v0_9/index.js"];
+  assert.ok(!/\bwith\s*:/.test(shim), "options argument removed");
+  assert.match(shim, /import\(['"]\.\/schemas\/sample\.json['"]\)/, "dynamic import kept");
+  Parser.parse(shim, { ecmaVersion: 2020, sourceType: "module" });
+});
+
+test("caches `files` shims per file, not per package", async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls++;
+    return { ok: true, text: async () => ATTR_SRC };
+  };
+  await applyDepShims(filesWithDeps({ "@a2ui/web_core": "0.12.0-test-files-cache" }), { fetchImpl });
+  assert.equal(calls, DEP_SHIMS["@a2ui/web_core"].files.length, "one fetch per listed file");
+  await applyDepShims(filesWithDeps({ "@a2ui/web_core": "0.12.0-test-files-cache" }), { fetchImpl });
+  assert.equal(calls, DEP_SHIMS["@a2ui/web_core"].files.length, "remount served from cache");
+});
+
 test("rejects with the package name when the dist fetch fails", async () => {
   const fetchImpl = async () => ({ ok: false, status: 404, text: async () => "" });
   await assert.rejects(

@@ -335,6 +335,29 @@ function regexConstructorPlugin({ types: t }: { types: any }) {
 }
 
 /**
+ * Drop import attributes (`import x from "./x.json" with { type: "json" }`), which
+ * babel 6 cannot parse ("Support for the experimental syntax 'moduleAttributes' isn't
+ * currently enabled"). Babel 8 parses the clause by default; emptying the node leaves a
+ * plain import the bundler resolves itself, and its JSON loader handles the file.
+ */
+function stripImportAttributesPlugin() {
+  const strip = (path: any) => {
+    if (path.node.attributes?.length) path.node.attributes = [];
+  };
+  return {
+    visitor: {
+      ImportDeclaration: strip,
+      ExportNamedDeclaration: strip,
+      ExportAllDeclaration: strip,
+      // `import("./x.json", { with: { type: "json" } })` — the options argument.
+      ImportExpression(path: any) {
+        if (path.node.options) path.node.options = null;
+      },
+    },
+  };
+}
+
+/**
  * Compile a plain-JS dependency dist down to the babel 6 parse floor (used by
  * dep-shims.ts for packages whose published dist uses post-ES2017 syntax).
  * `sourceType: "unambiguous"` keeps UMD bundles in script mode so their
@@ -344,7 +367,7 @@ export async function transpileDependencyDist(code: string, filename: string): P
   const babel = await loadBabel();
   const compiled = babel.transform(code, {
     filename,
-    plugins: [regexConstructorPlugin],
+    plugins: [regexConstructorPlugin, stripImportAttributesPlugin],
     presets: [["env", { targets: TARGETS, modules: false, include: ["transform-classes"] }]],
     sourceType: "unambiguous",
     sourceMaps: false,
