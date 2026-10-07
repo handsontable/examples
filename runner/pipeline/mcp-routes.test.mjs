@@ -250,7 +250,17 @@ test("an MCP rebuild derives the bare ref from a pkg.pr.new-pinned payload and r
   // package.json asks for (bare ref in D1, exact URL in the snapshot), and the
   // sentinel is repaired rather than re-stored.
   const { env, writes, artifacts } = makeEnv([demoRow({ ht_version: "latest" })]);
-  const res = await worker.fetch(patchRequest("abc123", { files: filesWith(PR_URL) }), env, ctx);
+  // The build looks up the PR's current commit (DEV-3338); answer it here, not over the network.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => String(url).startsWith("https://pkg.pr.new/")
+    ? new Response(null, { headers: { "x-commit-key": "handsontable:handsontable:abc1234" } })
+    : realFetch(url, init);
+  let res;
+  try {
+    res = await worker.fetch(patchRequest("abc123", { files: filesWith(PR_URL) }), env, ctx);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(body.rebuilt, true);

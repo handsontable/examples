@@ -49,6 +49,9 @@ export function parseDemosInsert(sql, binds) {
  */
 export function fakeD1(seedRows = [], seedTokens = [], { buildCacheHit = true } = {}) {
   const writes = [];
+  // The build_cache keys asked for, in order — the only observable of what a
+  // build is keyed on, since the fake answers every lookup alike.
+  const cacheLookups = [];
   const demos = new Map(seedRows.map((row) => [row.id, row]));
   const tokens = new Map(seedTokens.map((row) => [row.id, { ...row }]));
   const prepare = (sql) => {
@@ -62,6 +65,7 @@ export function fakeD1(seedRows = [], seedTokens = [], { buildCacheHit = true } 
         }
         if (/FROM demos WHERE id = \?/.test(sql)) return demos.get(binds[0]) ?? null;
         if (/FROM build_cache/.test(sql)) {
+          cacheLookups.push(binds[0]);
           return buildCacheHit ? { r2_prefix: "demos/_prior-identical-build/" } : null;
         }
         return null;
@@ -71,7 +75,7 @@ export function fakeD1(seedRows = [], seedTokens = [], { buildCacheHit = true } 
         const inserted = parseDemosInsert(sql, binds);
         if (inserted) demos.set(inserted.id, inserted);
         applyTokenWrite(tokens, sql, binds);
-        return { success: true, meta: {} };
+        return { success: true, meta: { changes: applyPrRefreshWrite(demos, sql, binds) } };
       },
       async all() {
         if (/FROM api_tokens ORDER BY created_at DESC/.test(sql)) {
@@ -85,7 +89,36 @@ export function fakeD1(seedRows = [], seedTokens = [], { buildCacheHit = true } 
     });
     return { bind: (...binds) => bound(binds), ...bound([]) };
   };
-  return { db: { prepare }, writes, demos, tokens };
+  return { db: { prepare }, writes, demos, tokens, cacheLookups };
+}
+
+/**
+ * Apply the PR-refresh claim (pr-refresh.ts) and its undo to the `demos` map,
+ * honouring the claim's WHERE clause and answering `meta.changes` — the claim is
+ * only atomic because of that condition, so a fake that always applied it would
+ * pass a double-scheduling bug.
+ */
+function applyPrRefreshWrite(demos, sql, binds) {
+  if (/UPDATE demos SET build_status='building', build_error=NULL, ht_attempt_sha=\?/.test(sql)) {
+    // Each condition applies only while the SQL still says it.
+    const [sha, now, id, staleBefore, notSha, version] = binds;
+    const row = demos.get(id);
+    const staleClause = /build_status!='building' OR updated_at<\?/.test(sql);
+    const busy = row?.build_status === "building" && !(staleClause && row.updated_at < staleBefore);
+    const retry = /COALESCE\(ht_attempt_sha,''\)!=\?/.test(sql) && (row?.ht_attempt_sha ?? "") === notSha;
+    const moved = /AND ht_version=\?/.test(sql) && row?.ht_version !== version;
+    if (!row || busy || retry || moved) return 0;
+    Object.assign(row, { build_status: "building", build_error: null, ht_attempt_sha: sha, updated_at: now });
+    return 1;
+  }
+  if (/UPDATE demos SET build_status=\?, ht_attempt_sha=\? WHERE id=\?/.test(sql)) {
+    const [status, sha, id] = binds;
+    const row = demos.get(id);
+    if (!row) return 0;
+    Object.assign(row, { build_status: status, ht_attempt_sha: sha });
+    return 1;
+  }
+  return undefined;
 }
 
 /**
@@ -238,7 +271,7 @@ export const AUTHOR = "dev@handsontable.com";
  * under test on the browser routes.
  */
 export function makeEnv(seedRows = [], seedTokens = [], seedArtifacts = {}, opts = {}) {
-  const { db, writes, demos, tokens } = fakeD1(seedRows, seedTokens, opts);
+  const { db, writes, demos, tokens, cacheLookups } = fakeD1(seedRows, seedTokens, opts);
   const artifacts = fakeR2(seedArtifacts);
   const buildJobs = fakeBuildJobs();
   const env = {
@@ -256,7 +289,7 @@ export function makeEnv(seedRows = [], seedTokens = [], seedArtifacts = {}, opts
     // Not the production host, so the Sentry gate in index.ts stays inert.
     PREVIEW_HOST: "localhost:8787",
   };
-  return { env, writes, demos, artifacts, tokens, scheduled: buildJobs.scheduled };
+  return { env, writes, demos, artifacts, tokens, cacheLookups, scheduled: buildJobs.scheduled };
 }
 
 export const ctx = {

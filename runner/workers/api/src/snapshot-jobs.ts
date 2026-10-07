@@ -38,6 +38,8 @@ export interface SnapshotJob {
    * is still being served until the rebuild actually succeeds.
    */
   filesKey: string;
+  /** PR commit to build (DEV-3338); absent asks pkg.pr.new at build time. */
+  prSha?: string;
   /** At-capacity retries burned so far (they cost nothing — no container booted). */
   attempt: number;
 }
@@ -104,6 +106,7 @@ export async function runSnapshotJob(env: Env, job: SnapshotJob): Promise<void> 
       entry: { framework: job.framework, ...cfg },
       files,
       htVersion: job.htVersion,
+      prSha: job.prSha,
       // No title/description on purpose: absent means "leave the column alone",
       // so a rename committed while the build ran is never reverted (DEV-2495).
       now: new Date().toISOString(),
