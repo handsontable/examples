@@ -552,6 +552,14 @@ export const DOCS_GUIDES: readonly (readonly [guide: string, area: string])[] = 
  [
   "recipes/performance/expensive-cell-renderer/expensive-cell-renderer.md",
   "Recipes"
+ ],
+ [
+  "recipes/real-time/ai-columns-jev/ai-columns-jev.md",
+  "Recipes"
+ ],
+ [
+  "recipes/themes/tabler-icons/tabler-icons.md",
+  "Recipes"
  ]
 ];
 
@@ -1251,6 +1259,7 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/columns/column-freezing/angular/example2.ts": 34,
  "guides/columns/column-freezing/angular/example3.ts": 34,
  "guides/columns/column-freezing/angular/example4.ts": 34,
+ "guides/columns/column-freezing/angular/example5.ts": 34,
  "guides/columns/column-freezing/javascript/example1.js": 34,
  "guides/columns/column-freezing/javascript/example1.ts": 34,
  "guides/columns/column-freezing/javascript/example2.js": 34,
@@ -1259,14 +1268,18 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/columns/column-freezing/javascript/example3.ts": 34,
  "guides/columns/column-freezing/javascript/example4.js": 34,
  "guides/columns/column-freezing/javascript/example4.ts": 34,
+ "guides/columns/column-freezing/javascript/example5.js": 34,
+ "guides/columns/column-freezing/javascript/example5.ts": 34,
  "guides/columns/column-freezing/react/example1.tsx": 34,
  "guides/columns/column-freezing/react/example2.tsx": 34,
  "guides/columns/column-freezing/react/example3.tsx": 34,
  "guides/columns/column-freezing/react/example4.tsx": 34,
+ "guides/columns/column-freezing/react/example5.tsx": 34,
  "guides/columns/column-freezing/vue/example1.vue": 34,
  "guides/columns/column-freezing/vue/example2.vue": 34,
  "guides/columns/column-freezing/vue/example3.vue": 34,
  "guides/columns/column-freezing/vue/example4.vue": 34,
+ "guides/columns/column-freezing/vue/example5.vue": 34,
  "guides/columns/column-groups/angular/example1.ts": 35,
  "guides/columns/column-groups/angular/example2.ts": 35,
  "guides/columns/column-groups/angular/example3.ts": 35,
@@ -2166,6 +2179,8 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "recipes/performance/persist-column-layout/angular/example1.ts": 103,
  "recipes/performance/persist-column-layout/javascript/example1.js": 103,
  "recipes/performance/persist-column-layout/react/example1.tsx": 103,
+ "recipes/real-time/ai-columns-jev/javascript/example1.js": 137,
+ "recipes/real-time/ai-columns-jev/javascript/example1.ts": 137,
  "recipes/real-time/chartjs-sync/angular/example1.ts": 105,
  "recipes/real-time/chartjs-sync/javascript/example1.js": 105,
  "recipes/real-time/chartjs-sync/javascript/example1.ts": 105,
@@ -2184,7 +2199,12 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "recipes/rendering-styling/sparkline-cell-renderer/angular/example1.ts": 108,
  "recipes/rendering-styling/sparkline-cell-renderer/javascript/example1.js": 108,
  "recipes/rendering-styling/sparkline-cell-renderer/javascript/example1.ts": 108,
- "recipes/rendering-styling/sparkline-cell-renderer/react/example1.tsx": 108
+ "recipes/rendering-styling/sparkline-cell-renderer/react/example1.tsx": 108,
+ "recipes/themes/tabler-icons/angular/example1.ts": 138,
+ "recipes/themes/tabler-icons/javascript/example1.js": 138,
+ "recipes/themes/tabler-icons/javascript/example1.ts": 138,
+ "recipes/themes/tabler-icons/react/example1.tsx": 138,
+ "recipes/themes/tabler-icons/vue/example1.vue": 138
 };
 
 export const DOCS_BUCKET_OVERRIDES: Readonly<Record<string, Readonly<Record<string, number>>>> = {};
