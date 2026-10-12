@@ -170,6 +170,18 @@ test("manifest: a truncated body served as application/json names the bucket and
   assert.equal(error.cause instanceof Error, true);
 });
 
+test("manifest: a body stream cut by the network rethrows the transport error, not an unparseable-JSON one", async (t) => {
+  // The headers arrived as application/json but the connection died mid-body, so
+  // `res.json()` rejects with the browser's own `TypeError: Failed to fetch`.
+  const cut = new TypeError("Failed to fetch");
+  withFetch(t, () => ({ ...reply({ body: "" }), json: async () => { throw cut; } }));
+
+  const error = await rejection(fetchDocsManifest("net-cut"));
+
+  assert.equal(error, cut);
+  assert.equal(isDocsResourceMissing(error), false);
+});
+
 test("manifest: a 200 body that is neither HTML nor JSON rejects as non-missing", async (t) => {
   withFetch(t, () => reply({ contentType: "text/plain", body: "not json at all" }));
 

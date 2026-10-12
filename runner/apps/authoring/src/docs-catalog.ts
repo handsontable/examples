@@ -57,6 +57,9 @@ async function fetchDocsJson<T>(url: string, describe: string): Promise<T> {
     try {
       return (await res.json()) as T;
     } catch (cause) {
+      // A connection cut mid-body is a transport failure, not a bad artifact, so it
+      // keeps its own error rather than being reported as unparseable JSON.
+      if (!(cause instanceof SyntaxError)) throw cause;
       // A truncated or half-uploaded artifact served correctly as JSON. Left as a
       // plain (transient) Error — the host does have the file — but re-thrown with
       // `describe` so it still carries the bucket key. A bare `res.json()` reject
