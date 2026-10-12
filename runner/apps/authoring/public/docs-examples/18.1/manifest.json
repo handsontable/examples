@@ -3,7 +3,7 @@
   "docsBranch": "prod-docs/18.1",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "18.1.2",
-  "count": 1477,
+  "count": 1479,
   "examples": [
     {
       "bucket": "18.1",
@@ -19975,6 +19975,40 @@
       "docPermalink": "/recipes/performance/persist-column-layout",
       "framework": "react",
       "displayName": "React (TS)"
+    },
+    {
+      "bucket": "18.1",
+      "docsPath": "recipes/real-time/ai-columns-jev/javascript/example1.js",
+      "file": "recipes__real-time__ai-columns-jev__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Real Time",
+        "Add AI-classified columns with Jev"
+      ],
+      "guide": "recipes/real-time/ai-columns-jev/ai-columns-jev.md",
+      "guideTitle": "Add AI-classified columns with Jev",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/real-time/ai-columns-jev",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "18.1",
+      "docsPath": "recipes/real-time/ai-columns-jev/javascript/example1.ts",
+      "file": "recipes__real-time__ai-columns-jev__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Real Time",
+        "Add AI-classified columns with Jev"
+      ],
+      "guide": "recipes/real-time/ai-columns-jev/ai-columns-jev.md",
+      "guideTitle": "Add AI-classified columns with Jev",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/real-time/ai-columns-jev",
+      "framework": "typescript",
+      "displayName": "TypeScript"
     },
     {
       "bucket": "18.1",
