@@ -27,6 +27,8 @@ const WORKERD_NOT_RUNNING = "The container is not running, consider calling star
 /** DEMOS-K's post-regression wording — the shape the DEV-2537 patterns miss. */
 const WORKERD_CONTAINER_PORT = "There was an internal networking error connecting to the container port";
 
+const WORKERD_EXITED = "The container just exited";
+
 const html = { isUpgrade: false, wantsHtml: true, acceptsHtml: true };
 
 test("recognises the workerd port message PR #195 shipped with", () => {
@@ -58,7 +60,12 @@ test("recognises the 'networking error connecting to the container port' shape (
   assert.equal(isPreviewPortUnreachable(new Error(WORKERD_CONTAINER_PORT)), true);
 });
 
-test("recognises all four shapes through a cause chain", () => {
+test("recognises 'The container just exited'", () => {
+  // The container dying mid-request is the same transient race as "not running".
+  assert.equal(isPreviewPortUnreachable(new Error(WORKERD_EXITED)), true);
+});
+
+test("recognises all five shapes through a cause chain", () => {
   const wrapped = new Error("preview forward failed", { cause: new Error(WORKERD) });
   assert.equal(isPreviewPortUnreachable(wrapped), true);
   assert.equal(isPreviewPortUnreachable(new Error("outer", { cause: wrapped })), true);
@@ -73,6 +80,10 @@ test("recognises all four shapes through a cause chain", () => {
   );
   assert.equal(
     isPreviewPortUnreachable(new Error("wrapped", { cause: new Error(WORKERD_CONTAINER_PORT) })),
+    true,
+  );
+  assert.equal(
+    isPreviewPortUnreachable(new Error("wrapped", { cause: new Error(WORKERD_EXITED) })),
     true,
   );
 });
@@ -90,6 +101,13 @@ test("does not match a genuine boot failure or an adjacent 'container is not …
   // status (a thrown 500) and today's report.
   assert.equal(isPreviewPortUnreachable(new Error("Container failed to start: exit 137")), false);
   assert.equal(isPreviewPortUnreachable(new Error("The container is not authorized")), false);
+});
+
+test("does not match a container exit that carries a code or is not 'just exited'", () => {
+  // Near-misses: a real boot failure (exit code) and a normal exit stay loud, keeping
+  // today's status and report. Red under a too-loose `/container.*exit/i` row.
+  assert.equal(isPreviewPortUnreachable(new Error("The container exited with code 1")), false);
+  assert.equal(isPreviewPortUnreachable(new Error("The container exited normally")), false);
 });
 
 test("does not fold in an unrelated networking error (DEV-2856 over-match guard)", () => {

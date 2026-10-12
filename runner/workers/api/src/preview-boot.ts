@@ -71,10 +71,10 @@ export const BOOT_WINDOW_MS = 90_000;
 const MAX_CAUSE_DEPTH = 5;
 
 /**
- * The four messages workerd raises out of `container.getTcpPort(port).fetch()`, verbatim
+ * The messages workerd raises out of `container.getTcpPort(port).fetch()`, verbatim
  * from DEMOS-K. None of them exists in any package here — they come from the runtime — so a
  * message match is the only signal available, and each is listed rather than generalised so a
- * fifth shape shows up as a new Sentry event instead of being silently swallowed.
+ * new shape shows up as a new Sentry event instead of being silently swallowed.
  */
 const PORT_UNREACHABLE = [
   /connecting to the port/i, // "There has been an internal error connecting to the port"
@@ -86,6 +86,7 @@ const PORT_UNREACHABLE = [
   // teardown-path predicate on the strength of one coincidental overlap.
   /container is not running/i, // "The container is not running, consider calling start()"
   /networking error connecting to the container port/i, // "There was an internal networking error connecting to the container port" (DEMOS-K, regressed 2026-09)
+  /container just exited/i, // "The container just exited": the process died under an in-flight request
 ];
 
 /**
