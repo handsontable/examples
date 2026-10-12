@@ -899,3 +899,84 @@ test("POST /telemetry/lite: the fingerprint ignores the stack — two rebuilds w
   const fpB = aeB.points.find((p) => p.indexes[0] === "error.uncaught").blobs[10];
   assert.equal(fpA, fpB, "same n/m, different stack chunk hash — must be the same fingerprint");
 });
+
+// ---- first-seen feed, transient classes, readable fingerprint ---------------
+
+const registryKeys = (doStorage) => [...doStorage._data.keys()].filter((k) => k.startsWith("fp:"));
+
+test("POST /telemetry/lite: an ordinary error still reaches the first-seen registry", async () => {
+  const { env, doStorage } = freshEnv();
+  await worker.fetch(liteRequest(litePayload()), env, ctx);
+  await ctx.drain();
+  assert.equal(registryKeys(doStorage).length, 1);
+});
+
+for (const [name, n, m] of [
+  ["a stale-deploy ChunkLoadError", "ChunkLoadError", "Failed to load chunk _next/static/chunks/0abc._.js from module 123"],
+  ["a webpack Loading chunk failure", "Error", "Loading chunk 42 failed."],
+  ["a container still starting", "SandboxError", "Container is starting. Please retry in a moment."],
+]) {
+  test(`POST /telemetry/lite: ${name} is counted but never registers a new fingerprint`, async () => {
+    const { env, ae, doStorage } = freshEnv();
+    const res = await worker.fetch(liteRequest(litePayload({ s: "embed", n, m })), env, ctx);
+    await ctx.drain();
+    assert.equal(res.status, 204);
+    assert.equal(ae.points.filter((p) => p.indexes[0] === "error.uncaught").length, 1, "the metric is still written");
+    assert.deepEqual(registryKeys(doStorage), [], "the fp: registry must not see it");
+  });
+}
+
+test("POST /telemetry/lite: error.uncaught carries the normalised message in reason (blob9)", async () => {
+  const { env, ae } = freshEnv();
+  await worker.fetch(
+    liteRequest(
+      litePayload({
+        n: "Error",
+        m: 'The "getSelectedRangeActive" method cannot be called because this Handsontable instance has been destroyed',
+      }),
+    ),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  const point = ae.points.find((p) => p.indexes[0] === "error.uncaught");
+  assert.equal(
+    point.blobs[8],
+    "Error: The <str> method cannot be called because this Handsontable instance has been destroyed",
+  );
+});
+
+test("POST /telemetry/lite: the message column is scrubbed and truncated", async () => {
+  const { env, ae } = freshEnv();
+  await worker.fetch(
+    liteRequest(
+      litePayload({
+        n: "Error",
+        m: `Cannot send to jane.doe@example.com from 203.0.113.7 ${"word ".repeat(60)}`,
+      }),
+    ),
+    env,
+    ctx,
+  );
+  await ctx.drain();
+  const reason = ae.points.find((p) => p.indexes[0] === "error.uncaught").blobs[8];
+  assert.ok(!reason.includes("jane.doe@example.com"), reason);
+  assert.ok(!reason.includes("203.0.113.7"), reason);
+  assert.ok(reason.length > 0 && reason.length <= 200, `length ${reason.length}`);
+});
+
+test("POST /telemetry/lite: redaction that expands the text cannot push the message column past its cap", async () => {
+  const { env, ae } = freshEnv();
+  await worker.fetch(liteRequest(litePayload({ n: "Error", m: "a@b.co ".repeat(60) })), env, ctx);
+  await ctx.drain();
+  const reason = ae.points.find((p) => p.indexes[0] === "error.uncaught").blobs[8];
+  assert.ok(!reason.includes("@"), reason);
+  assert.ok(reason.length <= 200, `length ${reason.length}`);
+});
+
+test("POST /telemetry/lite: a web_vital point keeps its own reason, unaffected by the error column", async () => {
+  const { env, ae } = freshEnv();
+  await worker.fetch(liteRequest(liteVitalPayload()), env, ctx);
+  await ctx.drain();
+  assert.equal(ae.points.find((p) => p.indexes[0] === "web_vital").blobs[8], "LCP");
+});

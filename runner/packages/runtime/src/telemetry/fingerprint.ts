@@ -57,19 +57,42 @@ export function fingerprint(context: string, message: string): string {
   return `${context}:${fnv1a64Hex(fingerprintShape(message))}`;
 }
 
+// Bounded like the code-frame patterns above. A V8 frame (`at fn (url:l:c)`) or a
+// Firefox/Safari frame (`fn@url:l:c`) always ends in a `:line:col` position.
+const V8_FRAME_LINE = /^[ \t]{0,32}at[ \t].{0,2000}:\d{1,9}:\d{1,9}\)?[ \t]{0,32}$/;
+const GECKO_FRAME_LINE = /^[ \t]{0,32}[^\s@]{0,200}@\S{0,2000}:\d{1,9}:\d{1,9}[ \t]{0,32}$/;
+// A bundler's content hash or a `:line:col` position names the build, not the fault.
+const HASHED_ASSET = /[\w.-]{1,64}-[\w-]{6,12}\.(?:m?js|css)\b/g;
+const SOURCE_POSITION = /(\.(?:m?[jt]sx?|css|vue)|<anonymous>)(?::\d{1,9}){1,2}\b/g;
+
+/**
+ * Drops stack-frame lines and bundle identity (hashed asset names, `:line:col`)
+ * from a message, so the same fault thrown from two builds hashes alike. Runs
+ * BEFORE `normalizeMonitorMessage`, which collapses the newlines the frame
+ * match depends on; URLs it leaves for that normaliser's own `<url>` rule.
+ */
+export function stripBundleIdentity(message: string): string {
+  return message
+    .split("\n")
+    .filter((line) => !V8_FRAME_LINE.test(line) && !GECKO_FRAME_LINE.test(line))
+    .join("\n")
+    .replace(HASHED_ASSET, "<asset>")
+    .replace(SOURCE_POSITION, "$1");
+}
+
 /** `normalizeMonitorMessage` keeps only its first 4096 characters anyway; cutting
  *  here too keeps `stripCodeFrame` off the rest of a client-sized message. */
 const FINGERPRINT_INPUT_MAX_CHARS = 4096;
 
 /**
- * The normalised text `fingerprint()` hashes: code frame stripped, then
- * `normalizeMonitorMessage`. Also the only message text a demo-runtime Faro
- * record carries (contract §3, §6). Idempotent
+ * The normalised text `fingerprint()` hashes: code frame, stack frames and
+ * bundle identity stripped, then `normalizeMonitorMessage`. Also the only
+ * message text a demo-runtime Faro record carries (contract §3, §6). Idempotent
  * (`pipeline/demo-event-collapse.test.mjs`), so the record's own fingerprint
  * agrees with the metric point's.
  */
 export function fingerprintShape(message: string): string {
-  return normalizeMonitorMessage(stripCodeFrame(message.slice(0, FINGERPRINT_INPUT_MAX_CHARS)));
+  return normalizeMonitorMessage(stripBundleIdentity(stripCodeFrame(message.slice(0, FINGERPRINT_INPUT_MAX_CHARS))));
 }
 
 /**

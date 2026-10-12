@@ -246,7 +246,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `session.start_ms` | browser | framework, ht_major, outcome, reason | duration_ms | outcomes as `session.start`; reason `cold`, `warm` |
 | `hmr.roundtrip_ms` | browser | framework, ht_major | duration_ms | — |
 | `web_vital` | browser, beacon | surface, framework, ht_major, reason, device, demo_id | value | reason `LCP`, `INP`, `CLS`, `TTFB` |
-| `error.uncaught` | browser, beacon | surface, fingerprint, demo_id | count | — |
+| `error.uncaught` | browser, beacon | surface, fingerprint, demo_id, reason (lite beacons: the message, §7) | count | — |
 | `error.handled` | browser, API worker | surface, route_class, fingerprint | count | — |
 | `example.open` | browser (ADR-0042) | kind, ref, area, framework, ht_major, bucket, reason (`entry`) | count | reason `deep-link`, `picker`, `switch`, `version-switch`, `fork` |
 | `example.engaged`, `example.forked`, `example.shared`, `example.downloaded` | browser (ADR-0042) | kind, ref, area, framework, ht_major, bucket | count | — |
@@ -488,9 +488,20 @@ stores a record, and a `t:"vital"` beacon is a hash-only item that writes its `w
 
 `fingerprint(context, message)` = `<context>:<16 hex chars of FNV-1a 64 over the
 normalised message>`, synchronous and identical in browser and Worker; the normalisation
-is `normalizeMonitorMessage` plus `stripCodeFrame`. For `hot.surface = demo-runtime`,
+is `normalizeMonitorMessage` plus `stripCodeFrame` plus `stripBundleIdentity` (stack-frame
+lines and hashed asset names, so one fault thrown from two builds
+shares a fingerprint; `normalizeMonitorMessage` itself is unchanged, Sentry grouping uses it
+too). For `hot.surface = demo-runtime`,
 keystroke-ladder shapes (`"<identifier> is not defined"` and similar) collapse to one
 fingerprint per shape. Demo-runtime fingerprints never feed the new-fingerprint alert.
+Nor do expected, self-healing classes (`isExpectedTransientError`: `ChunkLoadError` /
+`Loading chunk N failed` from a tab that outlived a deploy, and `Container is starting`):
+they still write their `error.uncaught`/`error.handled` point, only the `fp:` registry write
+is skipped, on the lite, Faro and API-feed paths alike.
+
+A lite `error.uncaught` point stores that same normalised text, scrubbed with the inbox's
+`scrubBodyText`, in `reason` (`blob9`), so a fingerprint on the new-fingerprint panel can be
+read back to a message. The Faro/OTLP emitters leave `reason` empty.
 
 `context` is caller-chosen (typically `hot.surface` or a metric name) and MAY itself
 contain further `:`-separated segments, e.g. `docs-example-load:fetch` or

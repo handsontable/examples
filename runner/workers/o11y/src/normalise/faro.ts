@@ -15,6 +15,7 @@ import {
   fingerprint as computeFingerprint,
   faroItemToRecord,
   feedsNewFingerprintAlert,
+  isExpectedTransientError,
   INBOX_RECORD_MAX_BYTES,
   isValidFingerprint,
   METRICS,
@@ -268,7 +269,8 @@ function processException(
   const point = handled
     ? toAePoint("error.handled", { count: 1 }, { ...common, surface, route_class: aeOnly.route_class, fingerprint: fp })
     : toAePoint("error.uncaught", { count: 1 }, { ...common, surface, fingerprint: fp, demo_id: demoId });
-  return { points: [point], fingerprint: feedsNewFingerprintAlert(surface) ? fp : undefined };
+  const feeds = feedsNewFingerprintAlert(surface) && !isExpectedTransientError(fallbackMessage);
+  return { points: [point], fingerprint: feeds ? fp : undefined };
 }
 
 /** Unpacks a Faro `TransportBody`, scrubs/converts/validates every item,
