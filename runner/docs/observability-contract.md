@@ -388,7 +388,9 @@ A build that fails on the demo's own input is client input (`isUserBuildError` i
 It answers `422 {"error":"<phase> failed: <detail>","code":"build_failed","detail":<the
 build error, one line>}`. `error` carries the diagnostic because MCP clients read only
 that field; the editor keys on `code`. `api.request` records it as `4xx`, so `api-5xx-rate`
-does not count it. `snapshot.build` still records `failed`, and the
+does not count it. It is not reported to Sentry, because it is the author's own error; the
+structured `fetch-catch-all:build-failure` line in Loki (worker) still carries it.
+`snapshot.build` still records `failed`, and the
 `snapshot-build-failed-rate` alert is the backstop: it fires when one framework has more
 than 50 % failed builds over 30 min with at least 10 failed across at least 3 distinct
 demos (one author retrying one broken demo does not fire it). The stored demo is

@@ -14,6 +14,7 @@ import { setSandboxFactory } from "./fixtures/cloudflare-sandbox-stub.mjs";
 register("./fixtures/worker-hooks.mjs", import.meta.url);
 
 const { default: worker } = await import("../workers/api/src/index.ts");
+const { captures } = await import("./fixtures/sentry-cloudflare-stub.mjs");
 
 const REAL_FETCH = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
@@ -251,4 +252,37 @@ test("api.request records the exact status of a 5xx in its reason blob, and noth
   await seedCatalog(four.env);
   assert.equal((await worker.fetch(ROUTES[0][1](), four.env, four.ctx)).status, 422);
   assert.deepEqual((await four.pointsOf("api.request")).map((p) => p.blobs[REASON_SLOT]), [""]);
+});
+
+/** The Sentry reports a request added, keyed by the build-failure fingerprint. */
+const buildCapturesSince = (from) =>
+  captures.slice(from).filter((c) => c.kind === "exception" && c.context?.fingerprint?.[0] === "snapshot-build");
+
+for (const [name, makeRequest] of ROUTES) {
+  test(`${name}: a 422 build_failed is the author's input and is not reported to Sentry`, async () => {
+    setSandboxFactory(rejectsCode);
+    const { env, ctx } = setup();
+    await seedCatalog(env);
+    const from = captures.length;
+    assert.equal((await worker.fetch(makeRequest(), env, ctx)).status, 422);
+    assert.deepEqual(buildCapturesSince(from), []);
+  });
+}
+
+test("an install refused on the author's dependency (422) is not reported to Sentry", async () => {
+  setSandboxFactory(failedInstall(USER_INSTALL_FAILURES[0][1]));
+  const { env, ctx } = setup();
+  await seedCatalog(env);
+  const from = captures.length;
+  assert.equal((await worker.fetch(ROUTES[0][1](), env, ctx)).status, 422);
+  assert.deepEqual(buildCapturesSince(from), []);
+});
+
+test("a build failure that is ours (5xx) still reaches Sentry under the snapshot-build fingerprint", async () => {
+  setSandboxFactory(builder(() => ({ success: false, exitCode: 137, stdout: "", stderr: "Killed\n" })));
+  const { env, ctx } = setup();
+  await seedCatalog(env);
+  const from = captures.length;
+  assert.equal((await worker.fetch(ROUTES[0][1](), env, ctx)).status, 500);
+  assert.equal(buildCapturesSince(from).length, 1);
 });
