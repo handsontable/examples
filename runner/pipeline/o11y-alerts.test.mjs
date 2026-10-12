@@ -22,6 +22,13 @@ const {
   FIVE_XX_MIN_REQUESTS,
   previewReadyRateRule,
   PREVIEW_READY_MIN_SAMPLES,
+  PREVIEW_READY_MIN_FAILURES,
+  tier2LivenessRule,
+  TIER2_LIVENESS_MIN_ATTEMPTS,
+  previewSlowRule,
+  PREVIEW_SLOW_MIN_SAMPLES,
+  EMBED_ERROR_MIN_VIEWS,
+  COMPILE_ERROR_DOUBLING_FLOOR,
   sessionStartP95Rule,
   SESSION_START_P95_MIN_SAMPLES,
   embedErrorRateRule,
@@ -938,7 +945,7 @@ test("fiveXxRateRule: excludes deliberate refusals via exact counts, and still-b
   const fake = makeFakeAeQuery(rows);
   const result = await fiveXxRateRule({}, fake.queryFn);
   assert.equal(result.firing, false, "fully-matched deliberate degradations must not push the rate over threshold");
-  assert.match(result.detail, /^0\.10% 5xx over the last 15 min \(1\/1000/);
+  assert.match(result.detail, /^0\.10% 5xx over the last hour \(1\/1000/);
   assert.ok(fake.calls.some((sql) => sql.includes(AE_COLUMNS.route_class)), "SQL must filter on the route_class column");
 });
 
@@ -954,7 +961,7 @@ test("fiveXxRateRule: a genuine api/session 500 with NO matching session.start r
   const fake = makeFakeAeQuery(rows);
   const result = await fiveXxRateRule({}, fake.queryFn);
   assert.equal(result.firing, true, "a genuine api/session fault must still be able to fire the rule");
-  assert.match(result.detail, /^1\.48% 5xx over the last 15 min \(15\/1014/);
+  assert.match(result.detail, /^1\.48% 5xx over the last hour \(15\/1014/);
 });
 
 test("fiveXxRateRule: a real problem on a normal route still fires even alongside a full load of excluded degradation noise", async () => {
@@ -972,7 +979,7 @@ test("fiveXxRateRule: a real problem on a normal route still fires even alongsid
   const fake = makeFakeAeQuery(rows);
   const result = await fiveXxRateRule({}, fake.queryFn);
   assert.equal(result.firing, true, "the excluded noise must not mask a real problem on a normal route");
-  assert.match(result.detail, /^5\.00% 5xx over the last 15 min \(5\/100/);
+  assert.match(result.detail, /^5\.00% 5xx over the last hour \(5\/100/);
 });
 
 test("fiveXxRateRule: a still-building 503 on d/:id and embed/:id is excluded, but a build-failed 500 there counts (DEV-3143)", async () => {
@@ -994,7 +1001,7 @@ test("fiveXxRateRule: a still-building 503 on d/:id and embed/:id is excluded, b
   ]);
   const fired = await fiveXxRateRule({}, broken.queryFn);
   assert.equal(fired.firing, true, "a build-failed 500 on d/:id / embed/:id must not be hidden");
-  assert.match(fired.detail, /^2\.91% 5xx over the last 15 min \(30\/1030/);
+  assert.match(fired.detail, /^2\.91% 5xx over the last hour \(30\/1030/);
   assert.ok(broken.calls.some((sql) => sql.includes(AE_COLUMNS.reason)), "SQL must filter on the reason column carrying the status");
 });
 
@@ -1032,10 +1039,27 @@ test("fiveXxRateRule sample floor: below 100 requests even 100% 5xx does not fir
 
   const atFloor = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(98, 2)).queryFn);
   assert.equal(atFloor.firing, true, atFloor.detail);
-  assert.match(atFloor.detail, /^2\.00% 5xx over the last 15 min \(2\/100,/);
+  assert.match(atFloor.detail, /^2\.00% 5xx over the last hour \(2\/100,/);
 
   const healthy = await fiveXxRateRule({}, makeFakeAeQuery(apiRows(500, 0)).queryFn);
   assert.equal(healthy.firing, false);
+});
+
+test("fiveXxRateRule: reads a 1 h window, so traffic spread over 45 min still counts and traffic older than 1 h does not", async () => {
+  const spread = makeFakeAeQuery([
+    { metric: "api.request", route_class: "api/demos", outcome: "2xx", count: 98, ageMs: 45 * 60_000 },
+    { metric: "api.request", route_class: "api/demos", outcome: "5xx", count: 2, ageMs: 45 * 60_000 },
+  ]);
+  const result = await fiveXxRateRule({}, spread.queryFn);
+  assert.equal(result.firing, true, result.detail);
+  assert.ok(spread.calls.every((sql) => sql.includes("INTERVAL '3600' SECOND")), "1-hour window");
+
+  const stale = makeFakeAeQuery([
+    { metric: "api.request", route_class: "api/demos", outcome: "2xx", count: 98, ageMs: 70 * 60_000 },
+    { metric: "api.request", route_class: "api/demos", outcome: "5xx", count: 2, ageMs: 70 * 60_000 },
+  ]);
+  const staleResult = await fiveXxRateRule({}, stale.queryFn);
+  assert.equal(staleResult.firing, false, "70 minutes ago is outside the window");
 });
 
 test("fiveXxRateRule sample floor: the floor counts the ADJUSTED total, not the raw one", async () => {
@@ -1115,7 +1139,7 @@ test("previewReadyRateRule: a real below-threshold tier still fires correctly al
   ]);
   const result = await previewReadyRateRule({}, fake.queryFn);
   assert.equal(result.firing, true, result.detail);
-  assert.match(result.detail, /tier 1: 80\.0% ready \(80\/100,/, "abandoned must not appear in the reported denominator");
+  assert.match(result.detail, /tier 1: 80\.0% ready over the last 6 h \(80\/100,/, "abandoned must not appear in the reported denominator");
 });
 
 function previewRows(tier, ready, error, abandoned = 0) {
@@ -1136,10 +1160,38 @@ test("previewReadyRateRule sample floor: 9 non-abandoned previews at 44% ready d
 
   const atFloor = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("1", 5, 5)).queryFn);
   assert.equal(atFloor.firing, true, atFloor.detail);
-  assert.match(atFloor.detail, /tier 1: 50\.0% ready \(5\/10,/);
+  assert.match(atFloor.detail, /tier 1: 50\.0% ready over the last 6 h \(5\/10,/);
 
   const healthyAtFloor = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("1", 10, 0)).queryFn);
   assert.equal(healthyAtFloor.firing, false);
+});
+
+test("previewReadyRateRule failure floor: 97 ready + 2 failed does not fire even when the rate is under threshold, 3 failed does", async () => {
+  assert.equal(PREVIEW_READY_MIN_FAILURES, 3);
+  const twoFailed = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("2", 8, 2)).queryFn);
+  assert.equal(twoFailed.firing, false, `8/10 = 80% ready but only 2 failures: ${twoFailed.detail}`);
+
+  const threeFailed = await previewReadyRateRule({}, makeFakeAeQuery(previewRows("2", 7, 3)).queryFn);
+  assert.equal(threeFailed.firing, true, threeFailed.detail);
+  assert.match(threeFailed.detail, /tier 2: 70\.0% ready over the last 6 h \(7\/10, 3 failed,/);
+
+  const timeouts = await previewReadyRateRule({}, makeFakeAeQuery([
+    ...previewRows("2", 7, 1),
+    { metric: "preview.ready_ms", tier: "2", outcome: "timeout", count: 2 },
+  ]).queryFn);
+  assert.equal(timeouts.firing, true, `timeouts count as failures: ${timeouts.detail}`);
+});
+
+test("previewReadyRateRule: reads a 6 h window (a failure burst 5 h ago still counts, one 7 h ago does not)", async () => {
+  const HOUR = 3_600_000;
+  const recent = makeFakeAeQuery(previewRows("2", 7, 3).map((r) => ({ ...r, ageMs: 5 * HOUR })));
+  const recentResult = await previewReadyRateRule({}, recent.queryFn);
+  assert.equal(recentResult.firing, true, recentResult.detail);
+  assert.ok(recent.calls.every((sql) => sql.includes("INTERVAL '21600' SECOND")), "6-hour window");
+
+  const stale = makeFakeAeQuery(previewRows("2", 7, 3).map((r) => ({ ...r, ageMs: 7 * HOUR })));
+  const staleResult = await previewReadyRateRule({}, stale.queryFn);
+  assert.equal(staleResult.firing, false, "7 h ago is outside the window");
 });
 
 test("previewReadyRateRule sample floor: abandoned previews never count toward the floor", async () => {
@@ -1160,6 +1212,81 @@ test("previewReadyRateRule sample floor: a firing alert resolves once the tier d
   assert.equal(await evaluateAndNotify(quiet, { ...deps, nowMs: 2000 }), "resolved");
   assert.equal(slackCalls.length, 2);
   assert.match(slackCalls[1], /resolved/);
+});
+
+function tier2Rows(ready, error, abandoned = 0, tier = "2") {
+  return previewRows(tier, ready, error, abandoned);
+}
+
+test("tier2LivenessRule: zero ready with at least 5 attempts fires; below 5 attempts, any ready, or Tier-1 only does not", async () => {
+  assert.equal(TIER2_LIVENESS_MIN_ATTEMPTS, 5);
+  const dead = makeFakeAeQuery(tier2Rows(0, 5));
+  const deadResult = await tier2LivenessRule({}, dead.queryFn);
+  assert.equal(deadResult.firing, true, deadResult.detail);
+  assert.equal(deadResult.rule, "tier2-liveness");
+  assert.match(deadResult.detail, /5 attempted/);
+  assert.ok(dead.calls.every((sql) => sql.includes("INTERVAL '21600' SECOND")), "6-hour window");
+  assert.ok(dead.calls.every((sql) => sql.includes(`${AE_COLUMNS.tier} = '2'`)), "Tier 2 only");
+
+  const quiet = await tier2LivenessRule({}, makeFakeAeQuery(tier2Rows(0, 4)).queryFn);
+  assert.equal(quiet.firing, false, `4 attempts is a quiet period: ${quiet.detail}`);
+
+  const oneReady = await tier2LivenessRule({}, makeFakeAeQuery(tier2Rows(1, 20)).queryFn);
+  assert.equal(oneReady.firing, false, "a single ready proves the tier is alive");
+
+  const abandonedOnly = await tier2LivenessRule({}, makeFakeAeQuery(tier2Rows(0, 0, 500)).queryFn);
+  assert.equal(abandonedOnly.firing, false, "abandoned previews are not attempts");
+
+  const tier1Dead = await tier2LivenessRule({}, makeFakeAeQuery(tier2Rows(0, 50, 0, "1")).queryFn);
+  assert.equal(tier1Dead.firing, false, "a dead Tier 1 is not a Tier-2 outage");
+
+  const outOfWindow = await tier2LivenessRule({}, makeFakeAeQuery(tier2Rows(0, 9).map((r) => ({ ...r, ageMs: 7 * 3_600_000 }))).queryFn);
+  assert.equal(outOfWindow.firing, false, "failures older than 6 h are outside the window");
+});
+
+test("tier2LivenessRule: a firing alert resolves once a preview reaches ready", async () => {
+  const writer = fakeInboxWriter();
+  const slackCalls = [];
+  const deps = { inboxWriter: writer, postSlack: async (t) => slackCalls.push(t), aeSink: fakeAeSink(), commonAttrs: COMMON_ATTRS, nowMs: 1000 };
+  const dead = await tier2LivenessRule({}, makeFakeAeQuery(tier2Rows(0, 6)).queryFn);
+  assert.equal(await evaluateAndNotify(dead, deps), "fired");
+  const alive = await tier2LivenessRule({}, makeFakeAeQuery(tier2Rows(1, 6)).queryFn);
+  assert.equal(await evaluateAndNotify(alive, { ...deps, nowMs: 2000 }), "resolved");
+});
+
+function readyDurations(n, ms, tier = "2") {
+  return Array.from({ length: n }, () => ({ metric: "preview.ready_ms", tier, outcome: "ready", duration_ms: ms }));
+}
+
+test("previewSlowRule: Tier-2 ready p95 above 180 s fires with 10 ready previews; at 180 s, below the floor, or other tiers/outcomes do not", async () => {
+  assert.equal(PREVIEW_SLOW_MIN_SAMPLES, 10);
+  const slow = makeFakeAeQuery([...readyDurations(8, 40_000), ...readyDurations(2, 200_000)]);
+  const slowResult = await previewSlowRule({}, slow.queryFn);
+  assert.equal(slowResult.firing, true, slowResult.detail);
+  assert.equal(slowResult.rule, "preview-slow");
+  assert.match(slowResult.detail, /p95 200\.0s over the last 6 h \(threshold 180s/);
+  assert.ok(slow.calls.every((sql) => sql.includes("INTERVAL '21600' SECOND")), "6-hour window");
+  assert.ok(slow.calls.some((sql) => sql.includes(AE_COLUMNS.duration_ms)), "reads duration_ms");
+  assert.ok(slow.calls.every((sql) => sql.includes(`${AE_COLUMNS.outcome} = 'ready'`)), "ready only");
+
+  const atThreshold = await previewSlowRule({}, makeFakeAeQuery([...readyDurations(8, 40_000), ...readyDurations(2, 180_000)]).queryFn);
+  assert.equal(atThreshold.firing, false, "exactly 180 s is not above the threshold");
+
+  const belowFloor = await previewSlowRule({}, makeFakeAeQuery(readyDurations(9, 500_000)).queryFn);
+  assert.equal(belowFloor.firing, false, `9 ready previews are below the floor: ${belowFloor.detail}`);
+  assert.match(belowFloor.detail, /9 ready Tier-2 preview\(s\)/);
+
+  const healthy = await previewSlowRule({}, makeFakeAeQuery(readyDurations(30, 60_000)).queryFn);
+  assert.equal(healthy.firing, false);
+
+  const wrongTier = await previewSlowRule({}, makeFakeAeQuery(readyDurations(30, 500_000, "1")).queryFn);
+  assert.equal(wrongTier.firing, false, "Tier 1 durations must not feed the Tier-2 p95");
+
+  const errorsExcluded = await previewSlowRule({}, makeFakeAeQuery([
+    ...readyDurations(20, 60_000),
+    ...Array.from({ length: 10 }, () => ({ metric: "preview.ready_ms", tier: "2", outcome: "timeout", duration_ms: 600_000 })),
+  ]).queryFn);
+  assert.equal(errorsExcluded.firing, false, "timeouts carry long durations but are not ready times");
 });
 
 test("sessionStartP95Rule: over 20s fires, under does not; outcome='ready' filter is real, not decorative", async () => {
@@ -1243,7 +1370,7 @@ test("sessionStartP95Rule sample floor: a firing alert resolves once ready start
   assert.match(slackCalls[1], /resolved/);
 });
 
-test("embedErrorRateRule: a demo over 20% error rate with >50 views fires; under threshold and the views floor do not", async () => {
+test("embedErrorRateRule: a demo over 20% error rate with at least 50 views in 7 days fires; under threshold and the views floor do not", async () => {
   const over = makeFakeAeQuery([
     { metric: "error.uncaught", surface: "embed", demo_id: "r-react", count: 30 },
     { metric: "serve.embed", outcome: "2xx", demo_id: "r-react", count: 100 },
@@ -1258,12 +1385,37 @@ test("embedErrorRateRule: a demo over 20% error rate with >50 views fires; under
     // Under threshold: 5% error rate on a demo with plenty of views.
     { metric: "error.uncaught", surface: "embed", demo_id: "r-vue", count: 5 },
     { metric: "serve.embed", outcome: "2xx", demo_id: "r-vue", count: 100 },
-    // Views floor: 100% error rate but only 50 views (not > 50) — excluded.
-    { metric: "error.uncaught", surface: "embed", demo_id: "r-tiny", count: 50 },
-    { metric: "serve.embed", outcome: "2xx", demo_id: "r-tiny", count: 50 },
+    // Views floor: 100% error rate but only 49 views (< 50) — excluded.
+    { metric: "error.uncaught", surface: "embed", demo_id: "r-tiny", count: 49 },
+    { metric: "serve.embed", outcome: "2xx", demo_id: "r-tiny", count: 49 },
   ]);
   const underResult = await embedErrorRateRule({}, under.queryFn);
   assert.equal(underResult.firing, false, underResult.detail);
+});
+
+test("embedErrorRateRule: reads a 7-day window, and a demo at exactly 50 views is evaluated", async () => {
+  assert.equal(EMBED_ERROR_MIN_VIEWS, 50);
+  const DAY = 24 * 3_600_000;
+  const week = makeFakeAeQuery([
+    { metric: "error.uncaught", surface: "embed", demo_id: "r-slow", count: 20, ageMs: 5 * DAY },
+    { metric: "serve.embed", outcome: "2xx", demo_id: "r-slow", count: 60, ageMs: 5 * DAY },
+  ]);
+  const weekResult = await embedErrorRateRule({}, week.queryFn);
+  assert.equal(weekResult.firing, true, `views 5 days ago fall inside the window: ${weekResult.detail}`);
+  assert.match(weekResult.detail, /r-slow: 33\.3% \(20\/60 views\)/);
+  assert.ok(week.calls.every((sql) => sql.includes("INTERVAL '604800' SECOND")), "7-day window");
+
+  const stale = makeFakeAeQuery([
+    { metric: "error.uncaught", surface: "embed", demo_id: "r-old", count: 20, ageMs: 8 * DAY },
+    { metric: "serve.embed", outcome: "2xx", demo_id: "r-old", count: 60, ageMs: 8 * DAY },
+  ]);
+  assert.equal((await embedErrorRateRule({}, stale.queryFn)).firing, false, "8 days ago is outside the window");
+
+  const atFloor = makeFakeAeQuery([
+    { metric: "error.uncaught", surface: "embed", demo_id: "r-edge", count: 11 },
+    { metric: "serve.embed", outcome: "2xx", demo_id: "r-edge", count: 50 },
+  ]);
+  assert.equal((await embedErrorRateRule({}, atFloor.queryFn)).firing, true, "11/50 = 22% at the 50-view floor");
 });
 
 test("compileErrorDoublingRule: today >= 2x yesterday (floor met) fires; under the doubling ratio and under the floor do not", async () => {
@@ -1271,8 +1423,8 @@ test("compileErrorDoublingRule: today >= 2x yesterday (floor met) fires; under t
   const YESTERDAY_AGE_MS = 90_000_000; // ~25h ago, within the 24-48h-ago window
 
   const over = makeFakeAeQuery([
-    { metric: "sandpack.compile_error", ht_major: "18", count: 10, ageMs: TODAY_AGE_MS },
-    { metric: "sandpack.compile_error", ht_major: "18", count: 4, ageMs: YESTERDAY_AGE_MS },
+    { metric: "sandpack.compile_error", ht_major: "18", count: 40, ageMs: TODAY_AGE_MS },
+    { metric: "sandpack.compile_error", ht_major: "18", count: 15, ageMs: YESTERDAY_AGE_MS },
   ]);
   const overResult = await compileErrorDoublingRule({}, over.queryFn);
   assert.equal(overResult.firing, true, overResult.detail);
@@ -1280,14 +1432,27 @@ test("compileErrorDoublingRule: today >= 2x yesterday (floor met) fires; under t
   assert.ok(over.calls.some((s) => s.includes(AE_COLUMNS.ht_major)), "SQL must group by ht_major (AE_COLUMNS.ht_major)");
 
   const under = makeFakeAeQuery([
-    // Under the doubling ratio: 10 today vs 6 yesterday (< 2x).
-    { metric: "sandpack.compile_error", ht_major: "19", count: 10, ageMs: TODAY_AGE_MS },
-    { metric: "sandpack.compile_error", ht_major: "19", count: 6, ageMs: YESTERDAY_AGE_MS },
-    // Under the floor: 3 today (< 5) even against 0 yesterday — never "doubling".
-    { metric: "sandpack.compile_error", ht_major: "20", count: 3, ageMs: TODAY_AGE_MS },
+    // Under the doubling ratio: 30 today vs 20 yesterday (< 2x).
+    { metric: "sandpack.compile_error", ht_major: "19", count: 30, ageMs: TODAY_AGE_MS },
+    { metric: "sandpack.compile_error", ht_major: "19", count: 20, ageMs: YESTERDAY_AGE_MS },
+    // Under the floor: 19 today (< 20) even against 0 yesterday — never "doubling".
+    { metric: "sandpack.compile_error", ht_major: "20", count: 19, ageMs: TODAY_AGE_MS },
   ]);
   const underResult = await compileErrorDoublingRule({}, under.queryFn);
   assert.equal(underResult.firing, false, underResult.detail);
+});
+
+test("compileErrorDoublingRule floor: 6 today vs 0 yesterday does not fire, 20 vs 0 does", async () => {
+  assert.equal(COMPILE_ERROR_DOUBLING_FLOOR, 20);
+  const small = await compileErrorDoublingRule({}, makeFakeAeQuery([
+    { metric: "sandpack.compile_error", ht_major: "18", count: 6, ageMs: 60_000 },
+  ]).queryFn);
+  assert.equal(small.firing, false, small.detail);
+
+  const atFloor = await compileErrorDoublingRule({}, makeFakeAeQuery([
+    { metric: "sandpack.compile_error", ht_major: "18", count: 20, ageMs: 60_000 },
+  ]).queryFn);
+  assert.equal(atFloor.firing, true, atFloor.detail);
 });
 
 test("snapshotBuildFailedRateRule: a framework-wide build break fires; one author's failing saves do not", async () => {
