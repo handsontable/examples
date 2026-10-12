@@ -33,3 +33,25 @@ export function osOf(ua: string): string {
   if (/linux|x11|cros/i.test(ua)) return "linux";
   return "other";
 }
+
+/** The SDK's 503 wording while a Tier-2 container is still booting. Mirrors
+ *  `session-lifecycle.ts`'s own pattern, which cannot import this package (it is
+ *  loaded as bare `.ts` by `pipeline/`). */
+const CONTAINER_STARTING_PATTERN = /container is starting/i;
+
+const EXPECTED_TRANSIENT_PATTERNS: readonly RegExp[] = [
+  // A tab that outlived a deploy asks for a chunk the deploy rotated away.
+  /^ChunkLoadError\b/,
+  /\bLoading (?:CSS )?chunk \S{1,64} failed/i,
+  /\bFailed to load chunk \S/i,
+  CONTAINER_STARTING_PATTERN,
+];
+
+/**
+ * Whether an error is an expected, self-healing condition (stale-deploy chunk
+ * load, a container still booting) that should still be counted as a metric but
+ * never announced as a new fingerprint. `text` is `"<name>: <message>"`.
+ */
+export function isExpectedTransientError(text: string): boolean {
+  return EXPECTED_TRANSIENT_PATTERNS.some((pattern) => pattern.test(text));
+}

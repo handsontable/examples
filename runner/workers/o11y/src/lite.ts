@@ -14,7 +14,9 @@ import {
   beaconToRecord,
   feedsNewFingerprintAlert,
   fingerprint,
+  fingerprintShape,
   INBOX_RECORD_MAX_BYTES,
+  isExpectedTransientError,
   isValidLitePayload,
   LITE_PAYLOAD_MAX_BYTES,
   scrubTelemetry,
@@ -42,6 +44,10 @@ import { registerRoute } from "./router.js";
 function liteServiceIdentity(env: Env): ServiceIdentity {
   return { name: "demos-embed", version: "unknown", environment: env.O11Y_ENV };
 }
+
+/** `reason` is one Analytics Engine blob; the shape is already capped at 200
+ *  characters, this bounds what scrubbing and multibyte text can add. */
+const LITE_ERROR_REASON_MAX_CHARS = 200;
 
 /** §7's fingerprint input for a lite `err` payload: the error's own name
  *  and (truncated, client-side) message — never the stack.
@@ -127,10 +133,19 @@ async function handleLite(req: Request, env: Env, ctx: ExecutionContext): Promis
   let itemFingerprint: string | undefined;
 
   if (body.t === "err") {
-    const fp = fingerprint(body.s, liteErrorFingerprintMessage(body));
-    itemFingerprint = feedsNewFingerprintAlert(body.s as Surface) ? fp : undefined;
+    const fingerprintMessage = liteErrorFingerprintMessage(body);
+    const fp = fingerprint(body.s, fingerprintMessage);
+    // Transient classes stay counted by the point below, only the first-seen registry skips them.
+    itemFingerprint =
+      feedsNewFingerprintAlert(body.s as Surface) && !isExpectedTransientError(fingerprintMessage) ? fp : undefined;
+    // The readable half of the hash, scrubbed like the stored body: a fingerprint alone says nothing.
+    const reason = scrubBodyText(fingerprintShape(fingerprintMessage)).slice(0, LITE_ERROR_REASON_MAX_CHARS);
     aePoints.push(
-      toAePoint("error.uncaught", { count: 1 }, { ...common, surface: body.s, fingerprint: fp, demo_id: body.demo }),
+      toAePoint(
+        "error.uncaught",
+        { count: 1 },
+        { ...common, surface: body.s, fingerprint: fp, demo_id: body.demo, reason },
+      ),
     );
   } else {
     aePoints.push(

@@ -168,7 +168,7 @@ const REGISTRY_DATA = {
   },
   "error.uncaught": {
     emittedBy: "browser, beacon",
-    blobs: ["surface", "fingerprint", "demo_id"],
+    blobs: ["surface", "fingerprint", "demo_id", "reason"],
     doubles: ["count"],
   },
   "error.handled": {

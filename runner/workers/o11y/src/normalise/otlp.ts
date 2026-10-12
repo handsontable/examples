@@ -14,6 +14,7 @@ import {
   ATTR_SERVICE_NAME,
   hoistAttributes,
   INBOX_RECORD_MAX_BYTES,
+  isExpectedTransientError,
   isValidFingerprint,
   msToUnixNano,
   RESOURCE_ATTRS,
@@ -210,6 +211,7 @@ function apiFingerprintFeed(
   if (finalResourceAttrs[ATTR_SERVICE_NAME] !== "demos-api") return undefined;
   if (bodyJsonAttrs["log.kind"] !== API_FINGERPRINT_LOG_KIND) return undefined;
   if (typeof candidate !== "string" || !isValidFingerprint(candidate)) return undefined;
+  if (isExpectedTransientError(`${bodyJsonAttrs["name"] ?? ""}: ${bodyJsonAttrs["message"] ?? ""}`)) return undefined;
   return candidate;
 }
 

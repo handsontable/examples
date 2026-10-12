@@ -489,6 +489,17 @@ test("Faro exception: an invalid context['hot.fingerprint'] is discarded the sam
   assert.match(item.ingestItem.fingerprint, /^authoring:[0-9a-f]{16}$/);
 });
 
+test("Faro exception: a ChunkLoadError keeps its AE point but skips the registry", async () => {
+  const body = faroFixture("exception-code-frame.json");
+  body.exceptions[0].type = "ChunkLoadError";
+  body.exceptions[0].value = "Failed to load chunk _next/static/chunks/0abc._.js";
+  delete body.exceptions[0].fingerprint;
+  delete body.exceptions[0].context["hot.fingerprint"];
+  const [item] = await processFaroBody(body, ENV, SERVICE, Date.now());
+  assert.equal(item.ingestItem.fingerprint, undefined);
+  assert.ok(item.aePoints.some((p) => p.indexes[0] === "error.uncaught"), "still counted");
+});
+
 // ---- the fallback fingerprint (no wire/AE-only fingerprint present — the
 // raw window.onerror/unhandledrejection/render-crash path) must hash the
 // contract-normalised `type: value` message, never `record.body`'s
@@ -910,6 +921,22 @@ test("read half: all four conditions met — the API's own hot.fingerprint feeds
   );
   assert.equal(result.items.length, 1);
   assert.equal(result.items[0].fingerprint, "chat-answer:0123456789abcdef");
+});
+
+test("an expected transient failure (container still starting) is not fed to the registry, a real one still is", async () => {
+  const feed = async (name, message) =>
+    (
+      await processOtlpBody(
+        new TextEncoder().encode(apiErrorLineOtlpBody({ bodyExtra: { name, message } })),
+        "application/json",
+        ENV,
+        Date.now(),
+      )
+    ).items[0];
+  const starting = await feed("SandboxError", "Container is starting. Please retry in a moment.");
+  assert.equal(starting.fingerprint, undefined);
+  assert.ok(starting.record, "the line itself is still stored");
+  assert.equal((await feed("Error", "boom")).fingerprint, "chat-answer:0123456789abcdef");
 });
 
 test("condition 1: a body-JSON service.name claiming demos-api does NOT feed the registry — only the REAL resource attribute counts", async () => {

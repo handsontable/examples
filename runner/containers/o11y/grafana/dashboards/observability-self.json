@@ -524,7 +524,7 @@
       "id": 9,
       "type": "table",
       "title": "New handled-error fingerprints (first seen)",
-      "description": "One row per fingerprint the o11y cron saw for the first time (exact InboxWriter registry, excluding demo-runtime). Time is the cron tick that announced it, so up to about 12 minutes after the first event. No Slack message is sent for these.",
+      "description": "One row per fingerprint the o11y cron saw for the first time (exact InboxWriter registry, excluding demo-runtime). Time is the cron tick that announced it, so up to about 12 minutes after the first event. No Slack message is sent for these. Beacon-reported errors have their message in the Fingerprint messages table below.",
       "gridPos": {
         "h": 8,
         "w": 24,
@@ -608,6 +608,47 @@
             "max"
           ]
         }
+      }
+    },
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Fingerprint messages (error.uncaught, lite beacons)",
+      "description": "What a fingerprint means: the scrubbed, normalised message the d and embed beacons reported, per fingerprint (match it against the first-seen table above). Only beacons store it; other emitters leave it empty.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "datasource": {
+        "type": "vertamedia-clickhouse-datasource",
+        "uid": "clickhouse-runner-events"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "vertamedia-clickhouse-datasource",
+            "uid": "clickhouse-runner-events"
+          },
+          "query": "SELECT blob11 AS fingerprint, blob9 AS message, sum(_sample_interval * double1) AS points FROM runner_events WHERE $timeFilterByColumn(timestamp) AND index1 = 'error.uncaught' AND blob3 = '$environment' AND blob9 != '' GROUP BY fingerprint, message ORDER BY points DESC LIMIT 200",
+          "format": "table",
+          "table": "runner_events",
+          "round": "0s",
+          "intervalFactor": 1
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
       }
     }
   ]
