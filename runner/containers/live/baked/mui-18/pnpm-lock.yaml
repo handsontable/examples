@@ -15,14 +15,14 @@ importers:
         specifier: ^11.14.1
         version: 11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7)
       '@handsontable/react-wrapper':
-        specifier: 18.1.1
-        version: 18.1.1(handsontable@18.1.1)
+        specifier: 18.1.2
+        version: 18.1.2(handsontable@18.1.2)
       '@mui/material':
         specifier: ^9.2.0
         version: 9.2.0(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       handsontable:
-        specifier: 18.1.1
-        version: 18.1.1
+        specifier: 18.1.2
+        version: 18.1.2
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -156,8 +156,8 @@ packages:
   '@emotion/weak-memoize@0.4.0':
     resolution: {integrity: sha512-snKqtPW01tN0ui7yu9rGv69aJXr/a/Ywvl11sUjNtEcRc+ng/mQriFL0wLXMef74iHa/EkftbDzU9F8iFbH+zg==}
 
-  '@handsontable/react-wrapper@18.1.1':
-    resolution: {integrity: sha512-MT5Np9GBVOKgRbfukFxfaR0JE421xKXmUmyDLKjrOqfZ3/PHiTO2UfZZOz7b3ON0vsOOyTnfB9vEGZnnxNdvSQ==}
+  '@handsontable/react-wrapper@18.1.2':
+    resolution: {integrity: sha512-mlb5DpsXGSeFWCEnugD+q80b0qHPr5HGhRY9BCJB0sdYPLqiZmD2IJkpprMuCUb/NpJCcomUsA/z/AMhrpaE5A==}
     peerDependencies:
       handsontable: ^18.0.0
 
@@ -588,8 +588,8 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
-  handsontable@18.1.1:
-    resolution: {integrity: sha512-8vz/jp96m0aJQPRepOBoImsC/bLe9mE/O4nOB6mll9DCjN5nqXHX9LV4zu/XDpD89TKJwtA+TNhVUkFQxW+q7w==}
+  handsontable@18.1.2:
+    resolution: {integrity: sha512-iL4Cia0Fsl+md1oCqUS8PJqfft3583d5ptc5M7ewfp6JTUsNsrIcpF3GPYvZy57e7P5PACX8WboGlkwgHn0h9Q==}
 
   hasown@2.0.4:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
@@ -1011,9 +1011,9 @@ snapshots:
 
   '@emotion/weak-memoize@0.4.0': {}
 
-  '@handsontable/react-wrapper@18.1.1(handsontable@18.1.1)':
+  '@handsontable/react-wrapper@18.1.2(handsontable@18.1.2)':
     dependencies:
-      handsontable: 18.1.1
+      handsontable: 18.1.2
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -1308,7 +1308,7 @@ snapshots:
 
   function-bind@1.1.2: {}
 
-  handsontable@18.1.1: {}
+  handsontable@18.1.2: {}
 
   hasown@2.0.4:
     dependencies:
