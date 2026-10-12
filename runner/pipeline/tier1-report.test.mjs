@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tier1Report } from "../apps/authoring/src/tier1Report.ts";
+import { isOpaqueNetworkFailure } from "../apps/authoring/src/fetchFailure.ts";
 
 // DEV-2569 / Sentry DEMOS-15. One issue held two populations — our own compiler chunk
 // failing to load, and bundler diagnostics over the visitor's half-typed source — and the
@@ -118,14 +119,29 @@ test("a compiler failure whose cause named no URL still reports", () => {
   assert.deepEqual(r.fingerprint, ["tier1-compiler-asset"]);
 });
 
-// Sentry DEMOS-15. The newest events are the mount rejecting with the browser's own
-// `TypeError: Failed to fetch` (the bundler never loaded on the visitor's network): not a
-// diagnostic about their code, and already counted by `sandpack.bundler_unreachable`.
+// A transport failure is not a diagnostic about the visitor's code, and `sandpack.bundler_unreachable` already counts it.
 test("the mount's opaque transport failure is not a compile error report", () => {
   assert.equal(
     tier1Report(compile({ name: "TypeError", message: "Failed to fetch", opaqueNetworkFailure: true })),
     null,
   );
+});
+
+// Mirrors the App.tsx call site: `opaqueNetworkFailure: isOpaqueNetworkFailure(e)`.
+const factsFor = (e) => compile({
+  name: e.name,
+  message: e.message,
+  opaqueNetworkFailure: isOpaqueNetworkFailure(e),
+});
+
+test("a real `TypeError: Failed to fetch` runs through the classifier and is not reported", () => {
+  assert.equal(tier1Report(factsFor(new TypeError("Failed to fetch"))), null);
+});
+
+test("a real compile error runs through the classifier and is still reported", () => {
+  const err = new Error(CODE_FRAME);
+  err.name = "SandpackCompileError";
+  assert.ok(tier1Report(factsFor(err)));
 });
 
 test("a visitor compile error is still reported when the transport flag is false or absent", () => {

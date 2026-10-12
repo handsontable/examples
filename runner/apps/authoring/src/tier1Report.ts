@@ -69,7 +69,7 @@ const COMPILE_TITLE = "Tier-1 compile failed";
 /**
  * Decide how a Tier-1 error is reported, or that it is not.
  *
- * Order is load-bearing twice.
+ * Order is load-bearing three times.
  *
  * The compiler-asset branch comes **first, ahead of the `monitorDemos` gate**. That flag is
  * DEV-2527's temporary demo instrumentation and has a documented teardown
@@ -82,6 +82,10 @@ const COMPILE_TITLE = "Tier-1 compile failed";
  * The evaluated-throw stand-down (DEV-2552) comes next: a throw from a module that already
  * started evaluating belongs to the in-preview reporter, which files it with the preview's
  * own stack, tier, framework and demo id. Reporting it here as well filed one fault twice.
+ *
+ * The opaque transport failure (the mount's `TypeError: Failed to fetch`) stands down third,
+ * after both of those and before the `monitorDemos` gate: it is not a diagnostic about the
+ * visitor's code, and `sandpack.bundler_unreachable` already counts it.
  */
 export function tier1Report(facts: Tier1ErrorFacts): Tier1Report | null {
   if (facts.compilerUnavailable) {
