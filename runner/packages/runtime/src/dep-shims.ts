@@ -54,11 +54,11 @@ const CDN = "https://unpkg.com";
 // DEV-3162 — Handsontable ships unbundled (~900 `.js` files), and builds cut from `develop`
 // carry syntax the bundler's babel 6 cannot parse: logical assignment (`??=`, `||=`, `&&=`,
 // sheetsBar/sheetModel.js) and regex lookbehind / named groups (utils/cellLinks). Optional
-// chaining and `??` are fine — stable 18.1.1 is full of them and previews. Only the few files
+// chaining and `??` are fine — stable 18.1.2 is full of them and previews. Only the few files
 // that use the blocking constructs are shadowed, so the rest of the package stays the
 // packager's copy. Stable releases up to HOT_LAST_KNOWN_GOOD are verified clean; anything newer
 // or any prerelease is scanned, because `develop` reaches a stable release eventually.
-const HOT_LAST_KNOWN_GOOD = [18, 1, 1] as const;
+const HOT_LAST_KNOWN_GOOD = [18, 1, 2] as const;
 const HOT_BLOCKING_SYNTAX = /(?:\?\?|\|\||&&)=|\(\?<[=!A-Za-z_$]/;
 const REGISTRY = "https://registry.npmjs.org";
 
