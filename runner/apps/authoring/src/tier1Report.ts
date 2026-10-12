@@ -40,6 +40,9 @@ export interface Tier1ErrorFacts {
   /** `navigator.onLine`. `false` is proof the visitor's network is down, so the failure is
    *  not ours; `true` proves nothing, so it is not treated as evidence either way. */
   online?: boolean;
+  /** `isOpaqueNetworkFailure(e)`: the browser's own transport failure, e.g. the mount's
+   *  `TypeError: Failed to fetch` when the bundler cannot be reached. */
+  opaqueNetworkFailure?: boolean;
   /** The DEV-2527 demo-monitoring flag. Deliberately an input, so the gate ORDER is tested. */
   monitorDemos: boolean;
 }
@@ -66,7 +69,7 @@ const COMPILE_TITLE = "Tier-1 compile failed";
 /**
  * Decide how a Tier-1 error is reported, or that it is not.
  *
- * Order is load-bearing twice.
+ * Order is load-bearing three times.
  *
  * The compiler-asset branch comes **first, ahead of the `monitorDemos` gate**. That flag is
  * DEV-2527's temporary demo instrumentation and has a documented teardown
@@ -79,6 +82,10 @@ const COMPILE_TITLE = "Tier-1 compile failed";
  * The evaluated-throw stand-down (DEV-2552) comes next: a throw from a module that already
  * started evaluating belongs to the in-preview reporter, which files it with the preview's
  * own stack, tier, framework and demo id. Reporting it here as well filed one fault twice.
+ *
+ * The opaque transport failure (the mount's `TypeError: Failed to fetch`) stands down third,
+ * after both of those and before the `monitorDemos` gate: it is not a diagnostic about the
+ * visitor's code, and `sandpack.bundler_unreachable` already counts it.
  */
 export function tier1Report(facts: Tier1ErrorFacts): Tier1Report | null {
   if (facts.compilerUnavailable) {
@@ -109,6 +116,9 @@ export function tier1Report(facts: Tier1ErrorFacts): Tier1Report | null {
     };
   }
   if (facts.name === "SandpackEvaluationError") return null;
+  // The bundler never loaded on the visitor's network: nothing about their source, and
+  // `sandpack.bundler_unreachable` already counts it.
+  if (facts.opaqueNetworkFailure) return null;
   if (!facts.monitorDemos) return null;
   return {
     tags: { surface: "demo-runtime", kind: "sandpack-compile", tier: "1" },
