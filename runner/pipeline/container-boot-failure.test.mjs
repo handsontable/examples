@@ -272,3 +272,43 @@ test("poll() reports the cause as the message and the log beside it", async () =
     globalThis.window = windowBefore;
   }
 });
+
+/** The DEMOS-T log: the seed `cp` printed only "cannot create …" lines (none of which
+ *  announce or mention a failure by marker word), then the boot wrapper's own exit
+ *  sentinel. The sentinel is bookkeeping, not a cause. */
+const CP_COLLISION_LOG = [
+  "::seeding immutable baked dependencies::",
+  "cp: cannot create hard link './node_modules/rxjs' to '/baked/angular-18/node_modules/rxjs': File exists",
+  "cp: cannot create directory './node_modules/.pnpm/zone.js@0.16.2': File exists",
+  "__RUNNER_EXIT__:1",
+].join("\n");
+
+test("the boot wrapper's exit sentinel is never the cause", () => {
+  const { cause, tail } = bootFailureDetail(CP_COLLISION_LOG);
+  assert.equal(cause, "cp: cannot create directory './node_modules/.pnpm/zone.js@0.16.2': File exists");
+  assert.ok(tail.includes("__RUNNER_EXIT__:1"), "the exit code stays in the context tail");
+});
+
+test("a log that is only the sentinel falls back to the generic cause", () => {
+  assert.equal(bootFailureDetail("__RUNNER_EXIT__:1").cause, "Container failed to install dependencies or start.");
+});
+
+test("a sentinel glued onto an unterminated last line is stripped, not the line dropped", () => {
+  const log = [
+    "::seeding immutable baked dependencies::",
+    "cp: cannot create directory './node_modules/.pnpm/zone.js@0.16.2': File exists__RUNNER_EXIT__:1",
+  ].join("\n");
+  const { cause } = bootFailureDetail(log);
+  assert.equal(cause, "cp: cannot create directory './node_modules/.pnpm/zone.js@0.16.2': File exists");
+});
+
+test("a non-zero sentinel after an announced cause leaves the announced line as the cause", () => {
+  const log = [
+    "Progress: resolved 10, reused 10",
+    "ERR_PNPM_NO_MATCHING_VERSION No matching version found for left-pad@99",
+    "cp: cannot create directory './x': File exists",
+    "__RUNNER_EXIT__:1",
+  ].join("\n");
+  const { cause } = bootFailureDetail(log);
+  assert.match(cause, /ERR_PNPM_NO_MATCHING_VERSION/);
+});

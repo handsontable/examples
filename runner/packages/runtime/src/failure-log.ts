@@ -71,6 +71,10 @@ const ANSI_CSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
  *  builder raises it. */
 const DEFAULT_KEEP_LINES = 40;
 
+/** What the API Worker's boot wrapper appends when the boot script exits. Unanchored at
+ *  the start: when the script's last output lacks a newline it arrives glued to it. */
+const EXIT_SENTINEL = /__RUNNER_EXIT__:\d+\s*$/;
+
 const DEFAULT_FALLBACK = "The process failed with no output.";
 
 export interface FailureDetailOptions {
@@ -221,10 +225,15 @@ function describe(candidate: string | null, tail: string, fallback?: string): Fa
  */
 export function failureDetail(log: string, options: FailureDetailOptions = {}): FailureDetail {
   const lines = cleanLines(log, options.keepLines ?? DEFAULT_KEEP_LINES);
+  // The wrapper's exit sentinel stays in the tail but is stripped from candidates: as the
+  // last line it would otherwise win the fallback tier and title the issue with it.
+  const candidates = lines
+    .map((l) => l.replace(EXIT_SENTINEL, "").trim())
+    .filter((l) => l !== "");
   const candidate =
-    lineWithDetail(lines, findLastIndex(lines, announcesCause)) ??
-    lineWithDetail(lines, findLastIndex(lines, mentionsCause)) ??
-    lines[lines.length - 1] ??
+    lineWithDetail(candidates, findLastIndex(candidates, announcesCause)) ??
+    lineWithDetail(candidates, findLastIndex(candidates, mentionsCause)) ??
+    candidates[candidates.length - 1] ??
     null;
   return describe(candidate, boundedTail(lines, options.maxTailChars), options.fallback);
 }
