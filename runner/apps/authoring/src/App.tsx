@@ -313,6 +313,7 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
       causeMessage: e instanceof Error && e.cause instanceof Error ? e.cause.message : null,
       replay: e instanceof Error && (e as { replay?: boolean }).replay === true,
       online: navigator.onLine,
+      opaqueNetworkFailure: isOpaqueNetworkFailure(e),
       // Widened to the local leg (`dev:full`); the Sentry gate below stays keyed on `monitorDemos`.
       monitorDemos: previewMonitoring,
     });

@@ -40,6 +40,9 @@ export interface Tier1ErrorFacts {
   /** `navigator.onLine`. `false` is proof the visitor's network is down, so the failure is
    *  not ours; `true` proves nothing, so it is not treated as evidence either way. */
   online?: boolean;
+  /** `isOpaqueNetworkFailure(e)`: the browser's own transport failure, e.g. the mount's
+   *  `TypeError: Failed to fetch` when the bundler cannot be reached. */
+  opaqueNetworkFailure?: boolean;
   /** The DEV-2527 demo-monitoring flag. Deliberately an input, so the gate ORDER is tested. */
   monitorDemos: boolean;
 }
@@ -109,6 +112,9 @@ export function tier1Report(facts: Tier1ErrorFacts): Tier1Report | null {
     };
   }
   if (facts.name === "SandpackEvaluationError") return null;
+  // The bundler never loaded on the visitor's network: nothing about their source, and
+  // `sandpack.bundler_unreachable` already counts it.
+  if (facts.opaqueNetworkFailure) return null;
   if (!facts.monitorDemos) return null;
   return {
     tags: { surface: "demo-runtime", kind: "sandpack-compile", tier: "1" },

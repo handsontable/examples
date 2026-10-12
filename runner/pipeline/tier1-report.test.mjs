@@ -118,6 +118,25 @@ test("a compiler failure whose cause named no URL still reports", () => {
   assert.deepEqual(r.fingerprint, ["tier1-compiler-asset"]);
 });
 
+// Sentry DEMOS-15. The newest events are the mount rejecting with the browser's own
+// `TypeError: Failed to fetch` (the bundler never loaded on the visitor's network): not a
+// diagnostic about their code, and already counted by `sandpack.bundler_unreachable`.
+test("the mount's opaque transport failure is not a compile error report", () => {
+  assert.equal(
+    tier1Report(compile({ name: "TypeError", message: "Failed to fetch", opaqueNetworkFailure: true })),
+    null,
+  );
+});
+
+test("a visitor compile error is still reported when the transport flag is false or absent", () => {
+  assert.ok(tier1Report(compile({ opaqueNetworkFailure: false })));
+  assert.ok(tier1Report(compile()));
+});
+
+test("the transport stand-down does not cover the compiler-asset branch", () => {
+  assert.ok(tier1Report(compilerAsset({ opaqueNetworkFailure: true })));
+});
+
 test("every tag value is a non-empty string", () => {
   for (const facts of [compile(), compilerAsset()]) {
     const r = tier1Report(facts);
