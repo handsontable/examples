@@ -22,9 +22,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@handsontable/react-wrapper": "18.1.1",
+    "@handsontable/react-wrapper": "18.1.2",
     "antd": "^6.5.1",
-    "handsontable": "18.1.1",
+    "handsontable": "18.1.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

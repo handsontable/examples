@@ -4,8 +4,8 @@
   "private": true,
   "packageManager": "pnpm@10.34.5",
   "dependencies": {
-    "handsontable": "18.1.1",
-    "@handsontable/vue3": "18.1.1",
+    "handsontable": "18.1.2",
+    "@handsontable/vue3": "18.1.2",
     "vue": "3.x",
     "vite": "^5.4.0",
     "@vitejs/plugin-vue": "^5.0.0"

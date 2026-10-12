@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@handsontable/react-wrapper':
-        specifier: 18.1.1
-        version: 18.1.1(handsontable@18.1.1)
+        specifier: 18.1.2
+        version: 18.1.2(handsontable@18.1.2)
       '@tailwindcss/postcss':
         specifier: ^4.3.2
         version: 4.3.2
@@ -21,8 +21,8 @@ importers:
         specifier: ^2.1.1
         version: 2.1.1
       handsontable:
-        specifier: 18.1.1
-        version: 18.1.1
+        specifier: 18.1.2
+        version: 18.1.2
       lucide-react:
         specifier: ^1.24.0
         version: 1.24.0(react@19.2.7)
@@ -269,8 +269,8 @@ packages:
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
 
-  '@handsontable/react-wrapper@18.1.1':
-    resolution: {integrity: sha512-MT5Np9GBVOKgRbfukFxfaR0JE421xKXmUmyDLKjrOqfZ3/PHiTO2UfZZOz7b3ON0vsOOyTnfB9vEGZnnxNdvSQ==}
+  '@handsontable/react-wrapper@18.1.2':
+    resolution: {integrity: sha512-mlb5DpsXGSeFWCEnugD+q80b0qHPr5HGhRY9BCJB0sdYPLqiZmD2IJkpprMuCUb/NpJCcomUsA/z/AMhrpaE5A==}
     peerDependencies:
       handsontable: ^18.0.0
 
@@ -2323,8 +2323,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  handsontable@18.1.1:
-    resolution: {integrity: sha512-8vz/jp96m0aJQPRepOBoImsC/bLe9mE/O4nOB6mll9DCjN5nqXHX9LV4zu/XDpD89TKJwtA+TNhVUkFQxW+q7w==}
+  handsontable@18.1.2:
+    resolution: {integrity: sha512-iL4Cia0Fsl+md1oCqUS8PJqfft3583d5ptc5M7ewfp6JTUsNsrIcpF3GPYvZy57e7P5PACX8WboGlkwgHn0h9Q==}
 
   has-bigints@1.1.0:
     resolution: {integrity: sha512-R3pbpkcIqv2Pm3dUwgjclDRVmWpTJW2DcMzcIhEXEx1oh/CEMObMm3KLmRJOdvhM7o4uQBnwr8pzRK2sJWIqfg==}
@@ -3886,9 +3886,9 @@ snapshots:
 
   '@floating-ui/utils@0.2.12': {}
 
-  '@handsontable/react-wrapper@18.1.1(handsontable@18.1.1)':
+  '@handsontable/react-wrapper@18.1.2(handsontable@18.1.2)':
     dependencies:
-      handsontable: 18.1.1
+      handsontable: 18.1.2
 
   '@hono/node-server@1.19.14(hono@4.12.30)':
     dependencies:
@@ -6062,7 +6062,7 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  handsontable@18.1.1: {}
+  handsontable@18.1.2: {}
 
   has-bigints@1.1.0: {}
 
