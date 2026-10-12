@@ -2,6 +2,7 @@ import { test, expect, type Route, type Page } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
+import { gzipSync } from "node:zlib";
 import { activeEditor, flushFaro, previewReady, stubShell, abortSandpackHosts, workspaceFiles } from "./helpers.js";
 import { fingerprint } from "../packages/runtime/src/telemetry/fingerprint.js";
 import { stableBucketVersions } from "../packages/runtime/src/version.js";
@@ -950,6 +951,17 @@ test.describe("Faro in the authoring app", () => {
       await versionsHeld;
       await route.fulfill({ json: { latest, next: "19.0.0-next.1", versions: [latest, DEFAULT_VERSION] } });
     });
+    // `latest` is above the runtime's last verified version, so the mount downloads that
+    // version's registry tarball to scan it (`handsontableNeedsScan`). The version here is
+    // synthetic and not published, so serve an empty tarball: nothing to downlevel, and the
+    // order under test is the only thing left.
+    await page.route("**/registry.npmjs.org/handsontable/-/*.tgz", (route) =>
+      route.fulfill({
+        body: gzipSync(Buffer.alloc(1024)),
+        contentType: "application/octet-stream",
+        headers: { "access-control-allow-origin": "*" },
+      }),
+    );
     const captured = captureTelemetry(page);
     const bundlerNavigations: string[] = [];
     page.on("request", (r) => {
