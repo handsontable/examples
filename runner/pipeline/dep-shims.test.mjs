@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { Parser } from "acorn";
 import { applyDepShims, DEP_SHIMS, handsontableNeedsScan, isPkgPrNewHandsontable } from "../packages/runtime/dist/dep-shims.js";
@@ -280,9 +281,25 @@ test("a failed tarball download is not cached: the next mount retries", async ()
   assert.ok(out["/node_modules/handsontable/shortcuts/manager.js"]);
 });
 
+// The boundary is read from the shim's own constant, not typed here: the weekly re-pin moves it
+// (`scripts/sync-authoring-pin.mjs`), and a hardcoded list would fail the generated PR.
+const [GM, Gm, Gp] = /HOT_LAST_KNOWN_GOOD = \[(\d+), (\d+), (\d+)\]/
+  .exec(readFileSync(new URL("../packages/runtime/src/dep-shims.ts", import.meta.url), "utf8"))
+  .slice(1)
+  .map(Number);
+const KNOWN_GOOD = `${GM}.${Gm}.${Gp}`;
+
 test("scans prereleases and versions newer than the last verified stable, nothing else", () => {
-  const scanned = ["0.0.0-next-7f4330c-20260929", "18.1.3", "18.2.0", "19.0.0", "18.1.2-rc1"];
-  const clean = ["18.1.2", "18.1.1", "18.1.0", "18.0.0", "17.1.0", "16.2.0", "8.0.0-beta.2", "latest", "^18", "18"];
+  const scanned = [
+    "0.0.0-next-7f4330c-20260929",
+    `${GM}.${Gm}.${Gp + 1}`,
+    `${GM}.${Gm + 1}.0`,
+    `${GM + 1}.0.0`,
+    `${KNOWN_GOOD}-rc1`,
+  ];
+  const clean = [KNOWN_GOOD, `${GM - 1}.99.99`, "8.0.0-beta.2", "latest", `^${GM}`, `${GM}`];
+  if (Gp > 0) clean.push(`${GM}.${Gm}.${Gp - 1}`);
+  if (Gm > 0) clean.push(`${GM}.${Gm - 1}.99`);
   for (const v of scanned) assert.equal(handsontableNeedsScan(v), true, v);
   for (const v of clean) assert.equal(handsontableNeedsScan(v), false, v);
 });
@@ -291,7 +308,7 @@ test("does not download anything for a verified-clean stable version", async () 
   const fetchImpl = async () => {
     throw new Error("must not fetch");
   };
-  const files = filesWithDeps({ handsontable: "18.1.2" });
+  const files = filesWithDeps({ handsontable: KNOWN_GOOD });
   assert.deepEqual(await applyDepShims(files, { fetchImpl }), files);
 });
 
