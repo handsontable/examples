@@ -965,6 +965,15 @@ test("POST /telemetry/lite: the message column is scrubbed and truncated", async
   assert.ok(reason.length > 0 && reason.length <= 200, `length ${reason.length}`);
 });
 
+test("POST /telemetry/lite: redaction that expands the text cannot push the message column past its cap", async () => {
+  const { env, ae } = freshEnv();
+  await worker.fetch(liteRequest(litePayload({ n: "Error", m: "a@b.co ".repeat(60) })), env, ctx);
+  await ctx.drain();
+  const reason = ae.points.find((p) => p.indexes[0] === "error.uncaught").blobs[8];
+  assert.ok(!reason.includes("@"), reason);
+  assert.ok(reason.length <= 200, `length ${reason.length}`);
+});
+
 test("POST /telemetry/lite: a web_vital point keeps its own reason, unaffected by the error column", async () => {
   const { env, ae } = freshEnv();
   await worker.fetch(liteRequest(liteVitalPayload()), env, ctx);

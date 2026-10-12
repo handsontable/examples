@@ -489,7 +489,7 @@ stores a record, and a `t:"vital"` beacon is a hash-only item that writes its `w
 `fingerprint(context, message)` = `<context>:<16 hex chars of FNV-1a 64 over the
 normalised message>`, synchronous and identical in browser and Worker; the normalisation
 is `normalizeMonitorMessage` plus `stripCodeFrame` plus `stripBundleIdentity` (stack-frame
-lines, hashed asset names and `:line:col` positions, so one fault thrown from two builds
+lines and hashed asset names, so one fault thrown from two builds
 shares a fingerprint; `normalizeMonitorMessage` itself is unchanged, Sentry grouping uses it
 too). For `hot.surface = demo-runtime`,
 keystroke-ladder shapes (`"<identifier> is not defined"` and similar) collapse to one

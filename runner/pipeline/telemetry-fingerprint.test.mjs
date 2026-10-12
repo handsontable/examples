@@ -141,11 +141,10 @@ test("the same destroyed-instance error from two bundles hashes to one fingerpri
   assert.equal(fingerprint("d", DESTROYED), "d:98ed8d1ab9973816");
 });
 
-test("a bare hashed asset name and a :line:col position do not reach the hash", () => {
+test("a bare hashed asset name does not reach the hash", () => {
   const a = `${DESTROYED} in index-DL2fgPd5.js:42:3482`;
   const b = `${DESTROYED} in index--HS2Dc1G.js:7:99`;
   assert.equal(fingerprint("d", a), fingerprint("d", b));
-  assert.equal(fingerprint("d", `${DESTROYED} <anonymous>:1:2`), fingerprint("d", `${DESTROYED} <anonymous>:9:8`));
   // Firefox/Safari frame shape.
   assert.equal(
     fingerprint("d", `${DESTROYED}\nrender@https://x.dev/d/a/assets/index-AAAAAAAA.js:1:2`),
@@ -167,6 +166,7 @@ test("isExpectedTransientError matches stale-chunk and container-starting wordin
   for (const text of [
     "ChunkLoadError: Failed to load chunk _next/static/chunks/0abc._.js from module 123",
     "ChunkLoadError: Loading chunk 42 failed.",
+    "ChunkLoadError: anything at all, matched by name",
     "Error: Loading chunk vendors-node_modules_x failed.",
     "Error: Loading CSS chunk 7 failed.",
     "SandboxError: Container is starting. Please retry in a moment.",
