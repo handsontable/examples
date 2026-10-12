@@ -191,7 +191,7 @@ export async function aeOutboundDegradedRule(env: Env, queryFn: AeQueryFn = runA
   };
 }
 
-// ---- api.request 5xx rate: above 1% over 15 min ---------------------------
+// ---- api.request 5xx rate: above 1% over 1 h ------------------------------
 
 /** The API's deliberate 503s (at-capacity, container-starting, chat/theme
  *  refusals) are excluded from the 5xx ratio by their own exact counts. The
@@ -200,11 +200,11 @@ export async function aeOutboundDegradedRule(env: Env, queryFn: AeQueryFn = runA
  *  `reason`, and only the 503 is dropped. A build-failed 500 there still counts. */
 const FIVE_XX_STILL_BUILDING_ROUTE_CLASSES = ["d/:id", "embed/:id"];
 
-/** Requests (after the exclusions below) in the 15-minute window under which the rule is not evaluated: at a 1 % threshold one error only exceeds it when the total is under 100, so a floor of 100 means a single 500 can never page. */
+/** Requests (after the exclusions below) in the 1-hour window under which the rule is not evaluated: at a 1 % threshold one error only exceeds it when the total is under 100, so a floor of 100 means a single 500 can never page. The hour is long enough for typical traffic to clear the floor. */
 export const FIVE_XX_MIN_REQUESTS = 100;
 
 export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
-  const windowMs = 15 * 60 * 1000;
+  const windowMs = HOUR_MS;
   const routeClassCol = col("route_class");
   const outcomeCol = col("outcome");
   const reasonCol = col("reason");
@@ -240,25 +240,31 @@ export async function fiveXxRateRule(env: Env, queryFn: AeQueryFn = runAeQuery):
     rule: "api-5xx-rate",
     firing: enoughSamples && pct > 1,
     detail:
-      `${pct.toFixed(2)}% 5xx over the last 15 min (${adjustedFiveXx}/${adjustedTotal}, threshold 1%, ` +
+      `${pct.toFixed(2)}% 5xx over the last hour (${adjustedFiveXx}/${adjustedTotal}, threshold 1%, ` +
       `excludes at-capacity/container-starting/chat-theme-gateway refusals and still-building 503s)` +
       (enoughSamples ? "" : `; only ${adjustedTotal} request(s), below the ${FIVE_XX_MIN_REQUESTS} needed to evaluate the rate`),
   };
 }
 
-// ---- preview-ready rate: below 97% (tier 1) or 95% (tier 2) over 1h -------
+// ---- preview-ready rate: below 97% (tier 1) or 95% (tier 2) over 6 h ------
 
 const PREVIEW_READY_THRESHOLD_PCT: Record<string, number> = { "1": 97, "2": 95 };
 
-/** Non-abandoned previews per tier per hour below which the tier is not evaluated, because one failure in two previews (50 %) says nothing about reliability. */
+/** The window every preview rule reads: Tier-2 volume is a few previews an hour, so an hour rarely reaches the floors and only a failure burst did. */
+const PREVIEW_WINDOW_MS = 6 * HOUR_MS;
+
+/** Non-abandoned previews per tier in the window below which the tier is not evaluated, because one failure in two previews (50 %) says nothing about reliability. */
 export const PREVIEW_READY_MIN_SAMPLES = 10;
+
+/** Failed (error + timeout) previews a tier needs in the window to fire. `preview.ready_ms` carries no demo or session id (its blobs are surface, tier, framework, ht_major, outcome, bucket), so distinct sources cannot be counted; a count at least keeps one stray failure from paging. */
+export const PREVIEW_READY_MIN_FAILURES = 3;
 
 export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const tierCol = col("tier");
   const results: string[] = [];
   let anyFiring = false;
   for (const [tier, thresholdPct] of Object.entries(PREVIEW_READY_THRESHOLD_PCT)) {
-    const counts = await countByOutcome(env, "preview.ready_ms", HOUR_MS, `AND ${tierCol} = '${tier}'`, queryFn);
+    const counts = await countByOutcome(env, "preview.ready_ms", PREVIEW_WINDOW_MS, `AND ${tierCol} = '${tier}'`, queryFn);
     // `abandoned` (navigated away before the preview finished) is excluded
     // from both numerator and denominator — otherwise a burst of ordinary
     // navigation-aways would fire a false preview-reliability alert.
@@ -267,16 +273,71 @@ export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQ
       .reduce((sum, [, c]) => sum + c, 0);
     const ready = counts.get("ready") ?? 0;
     if (total < PREVIEW_READY_MIN_SAMPLES) continue;
+    const failed = (counts.get("error") ?? 0) + (counts.get("timeout") ?? 0);
+    if (failed < PREVIEW_READY_MIN_FAILURES) continue;
     const pct = ratio(ready, total) * 100;
     if (pct < thresholdPct) {
       anyFiring = true;
-      results.push(`tier ${tier}: ${pct.toFixed(1)}% ready (${ready}/${total}, threshold ${thresholdPct}%)`);
+      results.push(`tier ${tier}: ${pct.toFixed(1)}% ready over the last 6 h (${ready}/${total}, ${failed} failed, threshold ${thresholdPct}%)`);
     }
   }
   return {
     rule: "preview-ready-rate",
     firing: anyFiring,
     detail: results.join("; ") || "all tiers within threshold",
+  };
+}
+
+// ---- tier-2 liveness: no ready preview in 6 h despite attempts -------------
+
+/** Non-abandoned Tier-2 previews attempted in the window below which a lack of `ready` is just a quiet period. */
+export const TIER2_LIVENESS_MIN_ATTEMPTS = 5;
+
+export async function tier2LivenessRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
+  const tierCol = col("tier");
+  const counts = await countByOutcome(env, "preview.ready_ms", PREVIEW_WINDOW_MS, `AND ${tierCol} = '2'`, queryFn);
+  const attempts = [...counts.entries()]
+    .filter(([outcome]) => outcome !== "abandoned")
+    .reduce((sum, [, c]) => sum + c, 0);
+  const ready = counts.get("ready") ?? 0;
+  const firing = attempts >= TIER2_LIVENESS_MIN_ATTEMPTS && ready === 0;
+  return {
+    rule: "tier2-liveness",
+    firing,
+    detail: firing
+      ? `no Tier-2 preview reached ready in the last 6 h (${attempts} attempted)`
+      : `${ready} ready of ${attempts} non-abandoned Tier-2 preview(s) in the last 6 h (fires at 0 ready with at least ${TIER2_LIVENESS_MIN_ATTEMPTS} attempted)`,
+  };
+}
+
+// ---- tier-2 slow previews: ready p95 above 180 s over 6 h ------------------
+
+/** Ready Tier-2 previews in the window below which the p95 is not evaluated, because a p95 over a handful of previews is one slow preview. */
+export const PREVIEW_SLOW_MIN_SAMPLES = 10;
+
+/** Starting value, above today's worst per-framework p95 (167 s); tune from real traffic. */
+export const PREVIEW_SLOW_P95_MS = 180_000;
+
+export async function previewSlowRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
+  const tierCol = col("tier");
+  const outcomeCol = col("outcome");
+  // `ready` only: an error or timeout carries its own duration and would be counted by the reliability rules.
+  const where = `AND ${tierCol} = '2' AND ${outcomeCol} = 'ready'`;
+  const [p95, byOutcome] = await Promise.all([
+    weightedQuantile(env, "preview.ready_ms", PREVIEW_WINDOW_MS, 0.95, where, queryFn),
+    countByOutcome(env, "preview.ready_ms", PREVIEW_WINDOW_MS, where, queryFn),
+  ]);
+  const readyPreviews = byOutcome.get("ready") ?? 0;
+  const enoughSamples = readyPreviews >= PREVIEW_SLOW_MIN_SAMPLES;
+  const firing = enoughSamples && p95 !== null && p95 > PREVIEW_SLOW_P95_MS;
+  return {
+    rule: "preview-slow",
+    firing,
+    detail: p95 === null
+      ? "no ready Tier-2 preview samples in the last 6 h"
+      : !enoughSamples
+        ? `${readyPreviews} ready Tier-2 preview(s) in the last 6 h, below the ${PREVIEW_SLOW_MIN_SAMPLES} needed to evaluate the p95`
+        : `Tier-2 time-to-ready p95 ${(p95 / 1000).toFixed(1)}s over the last 6 h (threshold ${PREVIEW_SLOW_P95_MS / 1000}s, outcome=ready only)`,
   };
 }
 
@@ -311,10 +372,16 @@ export async function sessionStartP95Rule(env: Env, queryFn: AeQueryFn = runAeQu
   };
 }
 
-// ---- embed error rate: above 20% with more than 50 views in 24h, per demo -
+// ---- embed error rate: above 20% with at least 50 views in 7 days, per demo -
+
+/** Embed views are a trickle (about 114 for the busiest demo in 14 days), so a day never reaches the floor. */
+const EMBED_ERROR_WINDOW_MS = 7 * DAY_MS;
+
+/** Views per demo in the window below which the demo is not evaluated. */
+export const EMBED_ERROR_MIN_VIEWS = 50;
 
 export async function embedErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
-  const windowMs = DAY_MS;
+  const windowMs = EMBED_ERROR_WINDOW_MS;
   const surfaceCol = col("surface");
   const outcomeCol = col("outcome");
   const [errorsByDemo, viewsByDemo] = await Promise.all([
@@ -323,7 +390,7 @@ export async function embedErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQue
   ]);
   const offenders: string[] = [];
   for (const [demoId, views] of viewsByDemo) {
-    if (!demoId || views <= 50) continue;
+    if (!demoId || views < EMBED_ERROR_MIN_VIEWS) continue;
     const errors = errorsByDemo.get(demoId) ?? 0;
     const pct = ratio(errors, views) * 100;
     if (pct > 20) offenders.push(`${demoId}: ${pct.toFixed(1)}% (${errors}/${views} views)`);
@@ -331,14 +398,14 @@ export async function embedErrorRateRule(env: Env, queryFn: AeQueryFn = runAeQue
   return {
     rule: "embed-error-rate",
     firing: offenders.length > 0,
-    detail: offenders.join("; ") || "no demo over threshold",
+    detail: offenders.length > 0 ? `${offenders.join("; ")} over the last 7 days (threshold 20%)` : "no demo over threshold",
   };
 }
 
 // ---- compile-error rate per ht_major: doubling day over day (a floor of --
-// 5 today-count avoids "doubling" noise on tiny counts like 0->1) -----------
+// 20 today-count avoids "doubling" noise on small counts like 0->6) ---------
 
-const COMPILE_ERROR_DOUBLING_FLOOR = 5;
+export const COMPILE_ERROR_DOUBLING_FLOOR = 20;
 
 export async function compileErrorDoublingRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const [today, yesterday] = await Promise.all([

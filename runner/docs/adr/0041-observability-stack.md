@@ -592,20 +592,20 @@ state would not survive a sleep.
 |---|---|---|
 | Uncaught error, new issue, regression | Sentry | seconds |
 | Spend thresholds (200/500/800) | `reconcile.ts` `captureMessage` to Sentry, as today | nightly |
-| `at_capacity` rate, 5xx rate from `api.request`, preview-ready rate per tier, session start p95, embed error rate per demo id, compile-error rate per `ht_major` day over day, snapshot-build failed rate per framework, a wake or reload that ran without the `ae.internal` interception (`o11y.ae_degraded`), LiteLLM error rate (`chat.answer` + `theme.ai`), inbox backlog age, a `rejected` inbox key, the o11y spend cap | o11y worker `*/10` cron over Analytics Engine and `InboxWriter` → Slack | minutes |
+| `at_capacity` rate, 5xx rate from `api.request`, preview-ready rate per tier, Tier-2 liveness (no `ready` preview in 6 h), Tier-2 slow previews (ready p95), session start p95, embed error rate per demo id, compile-error rate per `ht_major` day over day, snapshot-build failed rate per framework, a wake or reload that ran without the `ae.internal` interception (`o11y.ae_degraded`), LiteLLM error rate (`chat.answer` + `theme.ai`), inbox backlog age, a `rejected` inbox key, the o11y spend cap | o11y worker `*/10` cron over Analytics Engine and `InboxWriter` → Slack | minutes |
 | New handled-error fingerprint | the exact first-seen registry in `InboxWriter` (not sampled data), excluding `surface = demo-runtime`, whose keystroke ladders are authored-code output. **Not a page**: the `*/10` cron writes one `o11y.new_fingerprint` point per new fingerprint and the Observability self dashboard lists them in a table; nothing goes to Slack | minutes, dashboard only |
 | The o11y stack itself stale (no cron tick or ingest for 30 min) | the API worker's `*/5` cron reads the o11y heartbeat over a service binding and sends `captureMessage` to Sentry | minutes |
 
 Alert state (firing, resolved, last notified) lives in Durable Object storage: a rule
 notifies once when it fires and once when it resolves, never on every tick. Thresholds are
 starting values, tuned after launch: preview-ready below 97 % (Tier-1) or 95 % (Tier-2)
-over 1 h, evaluated per tier only with at least 10 non-abandoned previews in that hour;
+over 6 h, evaluated per tier only with at least 10 non-abandoned previews and at least 3 failed (error or timeout) in that window (`preview.ready_ms` carries no demo or session id, so the failures cannot be required to span distinct sources); Tier-2 liveness fires when no Tier-2 preview reached `ready` in 6 h with at least 5 non-abandoned attempts; Tier-2 slow previews fire when the `ready` time-to-ready p95 is above 180 s over 6 h with at least 10 `ready` previews (a starting value above today's worst per-framework p95 of 167 s);
 session start p95 above 20 s, evaluated only with at least 20 `ready` starts in the hour
 (below either floor the rule is not firing, so a firing alert resolves through the normal path); `at_capacity` above 5/h; 5xx above 1 % over
-15 min, evaluated only with at least 100 requests after the exclusions (at 1 % one error exceeds the threshold only below 100 requests, so a single 500 cannot page);
+1 h, evaluated only with at least 100 requests after the exclusions (at 1 % one error exceeds the threshold only below 100 requests, so a single 500 cannot page);
 LiteLLM errors above 5 % over 1 h, evaluated only with at least 20 non-denied calls (same reasoning at 5 %); compile errors on one `ht_major` doubling day over
-day; any `o11y.ae_degraded` point in 2 h (written only at a wake or reload, so a short window would resolve before anyone read the page); snapshot builds failing above 50 % per framework over 30 min with at least 10
-failed; an embed above 20 % errors with more than 50 views in 24 h; backlog older
+day, with at least 20 today; any `o11y.ae_degraded` point in 2 h (written only at a wake or reload, so a short window would resolve before anyone read the page); snapshot builds failing above 50 % per framework over 30 min with at least 10
+failed; an embed above 20 % errors with at least 50 views in 7 days; backlog older
 than 2 h.
 
 ### G. Cost is its own number, with its own cap

@@ -20,9 +20,11 @@ import {
   newFingerprintRule,
   o11yCapRule,
   previewReadyRateRule,
+  previewSlowRule,
   rejectedKeyRule,
   sessionStartP95Rule,
   snapshotBuildFailedRateRule,
+  tier2LivenessRule,
   type RuleResult,
 } from "./rules.js";
 
@@ -68,6 +70,8 @@ const QUERY_RULES: { id: string; fn: RuleFn }[] = [
   { id: "ae-outbound-degraded", fn: aeOutboundDegradedRule },
   { id: "api-5xx-rate", fn: fiveXxRateRule },
   { id: "preview-ready-rate", fn: previewReadyRateRule },
+  { id: "tier2-liveness", fn: tier2LivenessRule },
+  { id: "preview-slow", fn: previewSlowRule },
   { id: "session-start-p95", fn: sessionStartP95Rule },
   { id: "embed-error-rate", fn: embedErrorRateRule },
   { id: "compile-error-doubling", fn: compileErrorDoublingRule },
