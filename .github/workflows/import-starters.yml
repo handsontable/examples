@@ -219,6 +219,16 @@ jobs:
           node pipeline/import.mjs --index
           node scripts/prepare-container.mjs
 
+      # The bucket re-pin moves `catalog.json` `bucketVersions`; two hand-held versions must follow
+      # or master goes red (#423 -> #424): the authoring app's own handsontable pin (+ its
+      # BUNDLED_VERSION and lockfile entry) and the runtime's HOT_LAST_KNOWN_GOOD, whose lag makes
+      # every default mount download a tarball. The script verifies the tarball before moving the latter.
+      - name: Sync authoring pin and known-good version
+        working-directory: runner
+        run: |
+          node scripts/sync-authoring-pin.mjs
+          pnpm install --lockfile-only
+
       - name: Create or update generated-content pull request
         # Pinned to an immutable SHA (v8.1.1): this job holds contents+PR
         # write permissions, so a retargeted upstream tag must not be able to
@@ -235,6 +245,8 @@ jobs:
             The workflow imported each starter bucket from its
             `prod-examples/<major>` branch (or `master` where no branch exists),
             pinned to concrete npm Handsontable versions, then rebuilt the
-            catalog index and the baked container contexts.
+            catalog index and the baked container contexts, and kept the authoring
+            app's handsontable pin and the runtime's last-known-good version in
+            step with the new bucket versions.
           labels: automated
           reviewers: ${{ vars.AUTO_PR_REVIEWERS }}

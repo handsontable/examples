@@ -180,7 +180,7 @@ test("rejects with the package name when the dist fetch fails", async () => {
 // bundler died on `/share` while the Vite build behind `/d` was fine. The shim
 // downloads the version's registry tarball and shadows only the files that use a
 // construct babel 6 cannot parse (`??=`/`||=`/`&&=`, regex lookbehind, named groups)
-// with their downleveled copy. `??` and `?.` are fine: stable 18.1.1 is full of them.
+// with their downleveled copy. `??` and `?.` are fine: stable 18.1.2 is full of them.
 
 /** Minimal ustar writer: enough for the reader in dep-shims to prove it parses real tarballs. */
 function tar(entries) {
@@ -281,8 +281,8 @@ test("a failed tarball download is not cached: the next mount retries", async ()
 });
 
 test("scans prereleases and versions newer than the last verified stable, nothing else", () => {
-  const scanned = ["0.0.0-next-7f4330c-20260929", "18.1.2", "18.2.0", "19.0.0", "18.1.1-rc1"];
-  const clean = ["18.1.1", "18.1.0", "18.0.0", "17.1.0", "16.2.0", "8.0.0-beta.2", "latest", "^18", "18"];
+  const scanned = ["0.0.0-next-7f4330c-20260929", "18.1.3", "18.2.0", "19.0.0", "18.1.2-rc1"];
+  const clean = ["18.1.2", "18.1.1", "18.1.0", "18.0.0", "17.1.0", "16.2.0", "8.0.0-beta.2", "latest", "^18", "18"];
   for (const v of scanned) assert.equal(handsontableNeedsScan(v), true, v);
   for (const v of clean) assert.equal(handsontableNeedsScan(v), false, v);
 });
@@ -291,7 +291,7 @@ test("does not download anything for a verified-clean stable version", async () 
   const fetchImpl = async () => {
     throw new Error("must not fetch");
   };
-  const files = filesWithDeps({ handsontable: "18.1.1" });
+  const files = filesWithDeps({ handsontable: "18.1.2" });
   assert.deepEqual(await applyDepShims(files, { fetchImpl }), files);
 });
 
