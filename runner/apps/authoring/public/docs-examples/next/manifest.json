@@ -3,7 +3,7 @@
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "0.0.0-next-b0dc2e1-20261002",
-  "count": 1579,
+  "count": 1589,
   "examples": [
     {
       "bucket": "next",
@@ -6173,6 +6173,86 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/cell-types/autocomplete-cell-type/angular/example10.ts",
+      "file": "guides__cell-types__autocomplete-cell-type__angular__example10.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example10",
+      "exampleTitle": "Object values",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/autocomplete-cell-type/javascript/example10.js",
+      "file": "guides__cell-types__autocomplete-cell-type__javascript__example10.js.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example10",
+      "exampleTitle": "Object values",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/autocomplete-cell-type/react/example10.tsx",
+      "file": "guides__cell-types__autocomplete-cell-type__react__example10.tsx.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example10",
+      "exampleTitle": "Object values",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/autocomplete-cell-type/javascript/example10.ts",
+      "file": "guides__cell-types__autocomplete-cell-type__javascript__example10.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example10",
+      "exampleTitle": "Object values",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/autocomplete-cell-type/vue/example10.vue",
+      "file": "guides__cell-types__autocomplete-cell-type__vue__example10.vue.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Autocomplete cell type"
+      ],
+      "guide": "guides/cell-types/autocomplete-cell-type/autocomplete-cell-type.md",
+      "guideTitle": "Autocomplete cell type",
+      "exampleId": "example10",
+      "exampleTitle": "Object values",
+      "docPermalink": "/autocomplete-cell-type",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/cell-types/autocomplete-cell-type/angular/example1.ts",
       "file": "guides__cell-types__autocomplete-cell-type__angular__example1.ts.json",
       "breadcrumb": [
@@ -8007,6 +8087,86 @@
       "guideTitle": "Dropdown cell type",
       "exampleId": "example5",
       "exampleTitle": "Set the dropdown height",
+      "docPermalink": "/dropdown-cell-type",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/dropdown-cell-type/angular/example6.ts",
+      "file": "guides__cell-types__dropdown-cell-type__angular__example6.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Dropdown cell type"
+      ],
+      "guide": "guides/cell-types/dropdown-cell-type/dropdown-cell-type.md",
+      "guideTitle": "Dropdown cell type",
+      "exampleId": "example6",
+      "exampleTitle": "Object values",
+      "docPermalink": "/dropdown-cell-type",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/dropdown-cell-type/javascript/example6.js",
+      "file": "guides__cell-types__dropdown-cell-type__javascript__example6.js.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Dropdown cell type"
+      ],
+      "guide": "guides/cell-types/dropdown-cell-type/dropdown-cell-type.md",
+      "guideTitle": "Dropdown cell type",
+      "exampleId": "example6",
+      "exampleTitle": "Object values",
+      "docPermalink": "/dropdown-cell-type",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/dropdown-cell-type/react/example6.tsx",
+      "file": "guides__cell-types__dropdown-cell-type__react__example6.tsx.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Dropdown cell type"
+      ],
+      "guide": "guides/cell-types/dropdown-cell-type/dropdown-cell-type.md",
+      "guideTitle": "Dropdown cell type",
+      "exampleId": "example6",
+      "exampleTitle": "Object values",
+      "docPermalink": "/dropdown-cell-type",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/dropdown-cell-type/javascript/example6.ts",
+      "file": "guides__cell-types__dropdown-cell-type__javascript__example6.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Dropdown cell type"
+      ],
+      "guide": "guides/cell-types/dropdown-cell-type/dropdown-cell-type.md",
+      "guideTitle": "Dropdown cell type",
+      "exampleId": "example6",
+      "exampleTitle": "Object values",
+      "docPermalink": "/dropdown-cell-type",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/dropdown-cell-type/vue/example6.vue",
+      "file": "guides__cell-types__dropdown-cell-type__vue__example6.vue.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Dropdown cell type"
+      ],
+      "guide": "guides/cell-types/dropdown-cell-type/dropdown-cell-type.md",
+      "guideTitle": "Dropdown cell type",
+      "exampleId": "example6",
+      "exampleTitle": "Object values",
       "docPermalink": "/dropdown-cell-type",
       "framework": "vue",
       "displayName": "Vue 3"
