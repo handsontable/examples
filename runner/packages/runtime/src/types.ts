@@ -168,6 +168,17 @@ export interface HmrRoundtripEvent {
   readonly durationMs: number;
 }
 
+/** The Tier-2 boot phases `preview.phase_ms` reports, in boot order. */
+export const BOOT_PHASES = ["container_up", "install", "dev_server", "first_render"] as const;
+export type BootPhase = (typeof BOOT_PHASES)[number];
+
+/** Where a Tier-2 boot spent its time, reported once when the preview becomes ready.
+ *  Install and dev-server phases are absent when no poll saw the boot script's
+ *  `starting` marker before the port answered. */
+export interface BootPhasesEvent {
+  readonly phases: readonly { readonly phase: BootPhase; readonly durationMs: number }[];
+}
+
 export interface DemoRuntime {
   mount(files: FilesMap): Promise<{ previewUrl: string }>;
   writeFile(path: string, contents: string, opts?: WriteFileOptions): void;
@@ -209,6 +220,8 @@ export interface DemoRuntime {
   onSessionStart?(cb: (e: SessionStartTimingEvent) => void): void;
   /** §5 `hmr.roundtrip_ms` (`ContainerRuntime` only). */
   onHmr?(cb: (e: HmrRoundtripEvent) => void): void;
+  /** §5 `preview.phase_ms` (`ContainerRuntime` only). */
+  onBootPhases?(cb: (e: BootPhasesEvent) => void): void;
   dispose(): void;
 }
 

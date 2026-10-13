@@ -248,6 +248,16 @@ export function wireRuntimeMetrics(
     );
   });
 
+  runtime.onBootPhases?.((event) => {
+    for (const { phase, durationMs } of event.phases) {
+      telemetry.metric(
+        "preview.phase_ms",
+        { duration_ms: durationMs },
+        { tier: "2", framework: ctx.framework, ht_major: htMajor, reason: phase },
+      );
+    }
+  });
+
   runtime.onHmr?.((event) => {
     telemetry.metric(
       "hmr.roundtrip_ms",

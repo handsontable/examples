@@ -29,6 +29,7 @@ import { editorVersionRef, fetchVersionCatalog, resolveHandsontableVersion } fro
 import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { classifyPreviewBootFailure, isPreviewPortUnreachable } from "./preview-boot.js";
+import { bootStatusCommand, splitBootStatus } from "./boot-phase.js";
 import {
   AT_CAPACITY_CODE,
   atCapacityMessage,
@@ -1332,16 +1333,17 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           try { ready = (await sandbox.exec(probe)).success === true; } catch { ready = false; }
         }
         let log = "";
+        let phase: string | undefined;
         try {
-          const r = await sandbox.exec(`sh -lc "tail -c 2500 ${BOOT_LOG} 2>/dev/null || true"`);
-          log = r.stdout ?? "";
+          const r = await sandbox.exec(bootStatusCommand(BOOT_LOG));
+          ({ phase, log } = splitBootStatus(r.stdout ?? ""));
         } catch { /* no log yet */ }
         // The boot script appends "__RUNNER_EXIT__:<code>" once it exits; a
         // nonzero code means install/boot failed and it'll never become ready.
         const exitMatch = /__RUNNER_EXIT__:(\d+)\s*$/.exec(log);
         const failed = exitMatch !== null && exitMatch[1] !== "0";
         if (exitMatch) log = log.slice(0, exitMatch.index).trimEnd();
-        return json({ ready, log, failed });
+        return json({ ready, log, failed, ...(phase ? { phase } : {}) });
       }
 
       // DELETE /api/session/:id -> destroy container. The client's own teardown

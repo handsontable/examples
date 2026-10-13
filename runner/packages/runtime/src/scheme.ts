@@ -49,10 +49,24 @@ export interface SchemeMessage {
 }
 
 /** Preview → shell, once per document. The iframe is recreated on every rebuild,
- *  so this is the only reliable moment to (re)send the mode. */
+ *  so this is the only reliable moment to (re)send the mode. `probesGrid` says the
+ *  document is also watching for its grid and will send a `SchemeGridMessage`. */
 export interface SchemeReadyMessage {
   source: typeof SCHEME_MESSAGE_TYPE;
   ready: true;
+  probesGrid?: true;
+}
+
+/** Preview → shell, once per document, when the first grid cell is in the DOM. */
+export interface SchemeGridMessage {
+  source: typeof SCHEME_MESSAGE_TYPE;
+  grid: true;
+}
+
+/** True when `message` is the preview reporting a mounted grid. */
+export function isSchemeGrid(message: unknown): message is SchemeGridMessage {
+  const value = message as Partial<SchemeGridMessage> | null;
+  return !!value && value.source === SCHEME_MESSAGE_TYPE && value.grid === true;
 }
 
 /** True when `message` is the preview announcing a fresh receiver. */
@@ -60,6 +74,9 @@ export function isSchemeReady(message: unknown): message is SchemeReadyMessage {
   const value = message as Partial<SchemeReadyMessage> | null;
   return !!value && value.source === SCHEME_MESSAGE_TYPE && value.ready === true;
 }
+
+/** The selector the receiver treats as "the grid is mounted": a rendered body cell. */
+export const GRID_CELL_SELECTOR = ".ht_master .htCore td";
 
 /** The element id the receiver owns on its fallback path, so the override can be
  *  found and replaced rather than accumulating one `<style>` per message. The
@@ -109,6 +126,9 @@ export const SCHEME_STYLE_ID = "hot-runner-scheme";
  * (older Safari, where `new CSSStyleSheet()` throws): there, the toggle keeps
  * working and a React 18 document hydrator keeps mismatching. A browser-gated
  * residue on the record, not a silent hole.
+ *
+ * It also reports the first rendered grid cell (`grid: true`), announced by
+ * `probesGrid` only where a `MutationObserver` exists; contract §5 `preview.ready_ms`.
  *
  * Written as ES5 by hand and never transpiled: on Tier 1 the parcel path runs babel
  * 6 over injected code, which will not parse anything newer. No timestamp, no id,
@@ -180,7 +200,23 @@ export const SCHEME_RECEIVER_SOURCE = `(function () {
     if (!data || data.source !== SOURCE || typeof data.mode !== 'string') { return; }
     apply(data.mode);
   });
-  window.parent.postMessage({ source: SOURCE, ready: true }, '*');
+  var GRID = ${JSON.stringify(GRID_CELL_SELECTOR)};
+  var gridSent = false;
+  function sendGrid() {
+    if (gridSent) { return true; }
+    if (!document.querySelector(GRID)) { return false; }
+    gridSent = true;
+    window.parent.postMessage({ source: SOURCE, grid: true }, '*');
+    return true;
+  }
+  var canWatch = typeof MutationObserver === 'function';
+  window.parent.postMessage(canWatch ? { source: SOURCE, ready: true, probesGrid: true } : { source: SOURCE, ready: true }, '*');
+  if (canWatch && !sendGrid()) {
+    var observer = new MutationObserver(function () {
+      if (sendGrid()) { observer.disconnect(); }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
 })();`;
 
 /**
