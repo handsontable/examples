@@ -167,7 +167,7 @@ jobs:
 
   e2e:
     needs: authoring
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The official Playwright image ships the browsers, so there is no
     # `playwright install` step. Keep this tag in lockstep with
     # `@playwright/test` in runner/package.json — bump the two together, never
