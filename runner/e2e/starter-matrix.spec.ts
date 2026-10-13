@@ -164,14 +164,18 @@ for (const entry of catalog.examples) {
           timeout: entry.engine === "container" ? 240_000 : 120_000,
         });
 
-        // Container "Live" only means the dev server responded — the frame may
-        // still be blank or mid-hydration (Next/Nuxt/Astro). The rendered grid
-        // is the real functional check.
+        // A container's `ready` is the first rendered grid cell (or the shell's
+        // 30 s ceiling), so the cells are already there when the attribute flips. Tier 1 keeps
+        // the poll, its ready being the bundler's.
         const frame = page.frameLocator('iframe[title="Demo preview"]');
         const cells = frame.locator(".handsontable .htCore td");
-        await expect
-          .poll(async () => cells.count().catch(() => 0), { timeout: 60_000, intervals: [1_000] })
-          .toBeGreaterThan(0);
+        if (entry.engine === "container") {
+          expect(await cells.count(), "grid cells at the moment the preview reports ready").toBeGreaterThan(0);
+        } else {
+          await expect
+            .poll(async () => cells.count().catch(() => 0), { timeout: 60_000, intervals: [1_000] })
+            .toBeGreaterThan(0);
+        }
 
         if (entry.framework === "example1") {
           // Assert over the SET of rendered cell text. A `filter({ hasText })`

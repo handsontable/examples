@@ -445,7 +445,14 @@ test("sandpack.bundler_unreachable: reports duration, ht_major only", () => {
 function fakeContainerRuntime() {
   const sessionStartCbs = [];
   const hmrCbs = [];
+  const phaseCbs = [];
   return {
+    onBootPhases(cb) {
+      phaseCbs.push(cb);
+    },
+    firePhases(e) {
+      for (const cb of phaseCbs) cb(e);
+    },
     onSessionStart(cb) {
       sessionStartCbs.push(cb);
     },
@@ -506,6 +513,43 @@ test("hmr.roundtrip_ms: reports the hook's own duration", () => {
   assert.equal(call.attrs.framework, "next");
   assert.equal(call.attrs.ht_major, "18");
   assertValidAgainstRegistry(telemetry);
+});
+
+test("preview.phase_ms: one point per phase, the phase in reason, each a valid registry point", () => {
+  const telemetry = recordingTelemetry();
+  const runtime = fakeContainerRuntime();
+  wireRuntimeMetrics(runtime, CONTAINER_CTX, telemetry);
+
+  runtime.firePhases({
+    phases: [
+      { phase: "container_up", durationMs: 1200 },
+      { phase: "install", durationMs: 9000 },
+      { phase: "dev_server", durationMs: 14000 },
+      { phase: "first_render", durationMs: 6000 },
+    ],
+  });
+
+  assert.deepEqual(
+    telemetry.metrics.map((m) => [m.name, m.attrs.reason, m.values.duration_ms]),
+    [
+      ["preview.phase_ms", "container_up", 1200],
+      ["preview.phase_ms", "install", 9000],
+      ["preview.phase_ms", "dev_server", 14000],
+      ["preview.phase_ms", "first_render", 6000],
+    ],
+  );
+  assert.ok(telemetry.metrics.every((m) => m.attrs.tier === "2" && m.attrs.framework === "next" && m.attrs.ht_major === "18"));
+  assertValidAgainstRegistry(telemetry);
+});
+
+test("preview.phase_ms: a phase outside the contract's set is refused by the registry", () => {
+  const telemetry = recordingTelemetry();
+  const runtime = fakeContainerRuntime();
+  wireRuntimeMetrics(runtime, CONTAINER_CTX, telemetry);
+
+  runtime.firePhases({ phases: [{ phase: "warmup", durationMs: 1 }] });
+
+  assert.throws(() => assertValidAgainstRegistry(telemetry), /reason/);
 });
 
 // ---- version.switch / bucket.resolve_ms ------------------------------------------

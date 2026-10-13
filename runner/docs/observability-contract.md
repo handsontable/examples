@@ -236,7 +236,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 
 | Metric | Emitted by | Blobs used | Doubles | Outcomes / reason |
 |---|---|---|---|---|
-| `preview.ready_ms` | browser | surface, tier, framework, ht_major, outcome, bucket | duration_ms | `ready`, `error`, `timeout`, `abandoned` |
+| `preview.ready_ms` | browser; a Tier-2 `ready` is the first rendered grid cell in the preview frame (the injected receiver reports it), falling back to frame load plus a grace for a document whose receiver cannot observe the DOM, and, for a document that announces the watch but mounts no cell within 30 s, ready once the status probe confirms the dev server (no grid) | surface, tier, framework, ht_major, outcome, bucket | duration_ms | `ready`, `error`, `timeout`, `abandoned` |
 | `sandpack.compile_ms` | browser; the settled (last) compile of each edit burst, closed by 2 s without a compile or compile error. The mount's compile is not sent (`preview.ready_ms` covers first load) | tier, framework, ht_major, outcome | duration_ms | `ok`, `error` |
 | `sandpack.compile_error` | browser | framework, ht_major, fingerprint, bucket | count | — |
 | `sandpack.bundler_unreachable` | browser | ht_major | count, duration_ms | — |
@@ -244,6 +244,7 @@ Outcome values are the only strings allowed in `blob8` for that metric.
 | `version.switch` | browser | framework, ht_major (to), reason (from), bucket | count | — |
 | `bucket.resolve_ms` | browser | bucket, outcome | duration_ms | `ok`, `error` |
 | `session.start_ms` | browser | framework, ht_major, outcome, reason | duration_ms | outcomes as `session.start`; reason `cold`, `warm` |
+| `preview.phase_ms` | browser; one point per boot phase, sent once when a Tier-2 preview reaches `ready`. `install` and `dev_server` are left out when no poll saw the boot script's `starting` marker before the port answered; boundaries are poll-granular (2.5 s); the phases are not additive with `preview.ready_ms` | tier, framework, ht_major, reason (the phase) | duration_ms (the phase's own span, not cumulative) | reason `container_up`, `install`, `dev_server`, `first_render` |
 | `hmr.roundtrip_ms` | browser | framework, ht_major | duration_ms | — |
 | `web_vital` | browser, beacon | surface, framework, ht_major, reason, device, demo_id | value | reason `LCP`, `INP`, `CLS`, `TTFB` |
 | `error.uncaught` | browser, beacon | surface, fingerprint, demo_id, reason (lite beacons: the message, §7) | count | — |

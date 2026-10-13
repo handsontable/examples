@@ -9,6 +9,8 @@
 // is never bundled into the (non-DOM) Worker itself.
 
 import type {
+  BootPhase,
+  BootPhasesEvent,
   CatalogEntry,
   DemoRuntime,
   FilesMap,
@@ -21,10 +23,11 @@ import type {
 // (`apps/authoring/src/telemetry/metrics.ts`) keep working — the interfaces
 // themselves live in `types.ts`, so `DemoRuntime` can name the hook methods
 // without a circular import.
-export type { HmrRoundtripEvent, SessionStartTimingEvent } from "./types.js";
+export type { BootPhasesEvent, HmrRoundtripEvent, SessionStartTimingEvent } from "./types.js";
 import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, postMonitorReset, truncateMessage } from "./monitor.js";
+import { isSchemeGrid, isSchemeReady } from "./scheme.js";
 import { failureDetail, RUNNER_PROGRESS_MARKER, STDERR_MARKERS } from "./failure-log.js";
 
 /**
@@ -331,6 +334,9 @@ const RELOAD_TIMEOUT_MS = 10_000;
  *  server that comes up in spite of the exit marker, not to keep probing a container
  *  that is never going to answer. 10s × 12 ≈ two minutes. */
 const FAILED_POLL_INTERVAL_MS = 10_000;
+/** Longest a watching document gets to mount a grid before the status probe decides, so an
+ *  empty or failed demo cannot keep the boot overlay up for good. */
+const GRID_WAIT_MS = 30_000;
 const FAILED_POLLS_MAX = 12;
 
 // Observability contract §5 timing hooks: `SessionStartTimingEvent`,
@@ -398,6 +404,9 @@ export interface ContainerRuntimeOptions {
   writeDebounceMs?: number;
   /** Grace after the preview iframe loads, for the SPA to render (ms). */
   renderGraceMs?: number;
+  /** How long after the frame's `load` a document that watches for its grid may
+   *  take to mount one before the preview is confirmed ready anyway (ms). */
+  gridWaitMs?: number;
   /** Keepalive ping interval to keep the container warm while open (ms). */
   keepaliveMs?: number;
   /** Broker token of the signed-in user, when there is one. Sent with the
@@ -434,6 +443,15 @@ export class ContainerRuntime implements DemoRuntime {
   // ---- Timing hooks ---------------------------------------------------
   private readonly sessionStartCbs = new Set<(e: SessionStartTimingEvent) => void>();
   private readonly hmrCbs = new Set<(e: HmrRoundtripEvent) => void>();
+  private readonly bootPhaseCbs = new Set<(e: BootPhasesEvent) => void>();
+  /** `performance.now()` when the create request resolved, and how long it took: the
+   *  start of the install phase and the whole of `container_up`. */
+  private createDoneAt: number | null = null;
+  private containerUpMs = 0;
+  /** When a status poll first reported the boot script past its install step, and
+   *  when the dev server's port first answered. Poll-granular (2.5 s). */
+  private installDoneAt: number | null = null;
+  private portReadyAt: number | null = null;
   /** Set true for the span of an explicit `reload()` navigation, so `onFrameLoad`
    *  does not mistake it for an HMR-driven full-page reload. */
   private reloadInFlight = false;
@@ -502,6 +520,12 @@ export class ContainerRuntime implements DemoRuntime {
   /** Frame navigations seen since the iframe was pointed. Gates the hard readiness
    *  fallback, whose only job is "the `load` event never fired at all". */
   private frameLoads = 0;
+  /** The current document announced it will report its grid (`probesGrid`), so the
+   *  grid message, not load plus grace, decides readiness for it. */
+  private watchingGrid = false;
+  /** A document announced the grid watch and its `load` has not fired yet. */
+  private helloPending = false;
+  private gridWaitTimer: ReturnType<typeof setTimeout> | null = null;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private readyFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   /** One error per session for a preview that died — the terminal page is served
@@ -524,17 +548,25 @@ export class ContainerRuntime implements DemoRuntime {
     // rather than about what happens after it (see the block near the end).
     const wasReadyBeforeThisLoad = this.didReady;
     this.frameLoads += 1;
+    this.watchingGrid = this.helloPending;
+    this.helloPending = false;
     const state = this.pendingFrameState;
     this.pendingFrameState = "unknown";
     if (this.graceTimer) {
       clearTimeout(this.graceTimer);
       this.graceTimer = null;
     }
+    if (this.gridWaitTimer) {
+      clearTimeout(this.gridWaitTimer);
+      this.gridWaitTimer = null;
+    }
     if (state === "dead") {
+      this.watchingGrid = false;
       this.reportPreviewDead();
       return;
     }
     if (state === "booting") {
+      this.watchingGrid = false;
       // Honest and recoverable: the pane keeps the boot overlay, and the page's own
       // meta-refresh gives us another `load` to judge.
       this.emitProgress("Dev server not answering yet — retrying…");
@@ -556,6 +588,13 @@ export class ContainerRuntime implements DemoRuntime {
         for (const cb of this.hmrCbs) cb({ durationMs });
       }
     }
+    if (this.watchingGrid) {
+      if (!this.didReady) {
+        this.emitProgress("Dev server answered — waiting for the grid to render…");
+        this.armGridWait();
+      }
+      return;
+    }
     this.graceTimer = setTimeout(() => {
       this.graceTimer = null;
       void this.confirmAndEmitReady();
@@ -575,6 +614,25 @@ export class ContainerRuntime implements DemoRuntime {
       return;
     }
     if (event.origin !== previewOrigin) return;
+    const raw: unknown = event.data;
+    if (isSchemeReady(raw) || isSchemeGrid(raw)) {
+      // The receiver lives in the demo's own document, so only the preview frame may speak for it.
+      if (event.source !== this.opts.iframe.contentWindow) return;
+      if (isSchemeGrid(raw)) {
+        this.onGridMounted();
+      } else if (raw.probesGrid) {
+        // Held for the `load` of the document that sent it, so a hello that lands while the
+        // previous document's grace runs still reaches the right navigation.
+        this.helloPending = true;
+        if (this.graceTimer) {
+          clearTimeout(this.graceTimer);
+          this.graceTimer = null;
+          this.watchingGrid = true;
+        }
+        if (!this.didReady) this.armGridWait();
+      }
+      return;
+    }
     const data = event.data as { source?: unknown; state?: unknown } | null;
     if (!data || typeof data !== "object" || data.source !== "demo-preview") return;
     if (data.state !== "booting" && data.state !== "dead") return;
@@ -599,6 +657,24 @@ export class ContainerRuntime implements DemoRuntime {
     }
     if (data.state === "dead") this.reportPreviewDead();
   };
+  /** A grid cell is in the preview document: the demo is up, whatever else the frame says. */
+  private onGridMounted(): void {
+    if (this.disposed || this.didReady) return;
+    for (const timer of [this.graceTimer, this.readyFallbackTimer, this.gridWaitTimer]) if (timer) clearTimeout(timer);
+    this.graceTimer = null;
+    this.readyFallbackTimer = null;
+    this.gridWaitTimer = null;
+    this.emitReady();
+  }
+  /** Bounds the grid wait: a demo with no body cell (empty data, an error before mount)
+   *  would otherwise keep the boot overlay up for good. */
+  private armGridWait(): void {
+    if (this.gridWaitTimer) clearTimeout(this.gridWaitTimer);
+    this.gridWaitTimer = setTimeout(() => {
+      this.gridWaitTimer = null;
+      void this.confirmAndEmitReady();
+    }, this.opts.gridWaitMs ?? GRID_WAIT_MS);
+  }
   // Tear the session down when the page goes away (tab close, navigation) —
   // otherwise the container squats one of the few live-preview instance slots
   // until sleepAfter expires. pagehide is the reliable end-of-page signal
@@ -654,6 +730,10 @@ export class ContainerRuntime implements DemoRuntime {
   onHmr(cb: (e: HmrRoundtripEvent) => void): void {
     this.hmrCbs.add(cb);
   }
+  /** §5 `preview.phase_ms` — once, when the preview becomes ready. */
+  onBootPhases(cb: (e: BootPhasesEvent) => void): void {
+    this.bootPhaseCbs.add(cb);
+  }
   private emitSessionStart(elapsedMs: number, outcome: SessionStartTimingEvent["outcome"]): void {
     for (const cb of this.sessionStartCbs) cb({ elapsedMs, outcome });
   }
@@ -661,6 +741,24 @@ export class ContainerRuntime implements DemoRuntime {
     if (this.didReady) return;
     this.didReady = true;
     for (const cb of this.readyCbs) cb();
+    const phases = this.bootPhases(performance.now());
+    if (phases.length > 0) for (const cb of this.bootPhaseCbs) cb({ phases });
+  }
+  /** The boot split up to `readyAt`. A boundary the status route never reported is
+   *  left out with the phases on either side of it, not guessed. */
+  private bootPhases(readyAt: number): BootPhasesEvent["phases"] {
+    if (this.createDoneAt === null) return [];
+    const span = (from: number, to: number) => Math.max(0, Math.round(to - from));
+    const phases: { phase: BootPhase; durationMs: number }[] = [
+      { phase: "container_up", durationMs: this.containerUpMs },
+    ];
+    if (this.portReadyAt === null) return phases;
+    if (this.installDoneAt !== null) {
+      phases.push({ phase: "install", durationMs: span(this.createDoneAt, this.installDoneAt) });
+      phases.push({ phase: "dev_server", durationMs: span(this.installDoneAt, this.portReadyAt) });
+    }
+    phases.push({ phase: "first_render", durationMs: span(this.portReadyAt, readyAt) });
+    return phases;
   }
   private emitError(e: Error) {
     for (const cb of this.errorCbs) cb(e);
@@ -811,6 +909,8 @@ export class ContainerRuntime implements DemoRuntime {
       // here, inside the try, so a later `disposed` check (the mid-flight-dispose
       // race just below) cannot suppress a measurement that already happened.
       this.emitSessionStart(elapsedMs, "ready");
+      this.createDoneAt = performance.now();
+      this.containerUpMs = elapsedMs;
     } catch (err) {
       // §5 `session.start_ms` for the failure path, emitted BEFORE `dispose()`
       // below clears `sessionStartCbs` — a listener added after dispose would never
@@ -896,8 +996,14 @@ export class ContainerRuntime implements DemoRuntime {
           return;
         }
         if (r.ok) {
-          const { ready, log, failed } = (await r.json()) as { ready: boolean; log: string; failed?: boolean };
+          const { ready, log, failed, phase } = (await r.json()) as {
+            ready: boolean;
+            log: string;
+            failed?: boolean;
+            phase?: string;
+          };
           if (log && !this.pointed) this.emitProgress(log);
+          if (phase === "starting" && this.installDoneAt === null) this.installDoneAt = performance.now();
           if (failed && !this.disposed && !this.pointed) {
             // Report once, then keep polling rather than returning. Returning made the
             // failure a one-way door: the shell stopped asking the container anything,
@@ -926,6 +1032,9 @@ export class ContainerRuntime implements DemoRuntime {
             // cross-origin iframe, so: on load, wait a short grace, then ready.
             this.pointed = true;
             this.frameEverPointed = true;
+            this.watchingGrid = false;
+            this.helloPending = false;
+            if (this.portReadyAt === null) this.portReadyAt = performance.now();
             this.emitProgress("Dev server ready — rendering the demo…");
             // The port answered, but a port is not a page: the request the frame is
             // about to make can still land on the Worker's boot page. `onFrameLoad`
@@ -942,7 +1051,7 @@ export class ContainerRuntime implements DemoRuntime {
             if (this.readyFallbackTimer) clearTimeout(this.readyFallbackTimer);
             this.readyFallbackTimer = setTimeout(() => {
               this.readyFallbackTimer = null;
-              if (this.frameLoads === 0) void this.confirmAndEmitReady();
+              if (this.frameLoads === 0 && !this.helloPending) void this.confirmAndEmitReady();
             }, 20000);
             // Keep the container awake while the demo is open so it never has to
             // cold-boot again mid-session. Any request resets sleepAfter; we ping
@@ -1189,6 +1298,7 @@ export class ContainerRuntime implements DemoRuntime {
     if (this.flushTimer) clearTimeout(this.flushTimer);
     if (this.pollTimer) clearTimeout(this.pollTimer);
     if (this.graceTimer) clearTimeout(this.graceTimer);
+    if (this.gridWaitTimer) clearTimeout(this.gridWaitTimer);
     if (this.readyFallbackTimer) clearTimeout(this.readyFallbackTimer);
     if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
     // Point the preview away from the dead session. Preview traffic proxies

@@ -14,6 +14,8 @@ export type {
   SandpackBundlerUnreachableEvent,
   SessionStartTimingEvent,
   HmrRoundtripEvent,
+  BootPhase,
+  BootPhasesEvent,
 } from "./types.js";
 
 export {

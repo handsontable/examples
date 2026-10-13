@@ -15,6 +15,7 @@ import {
   type CommonResourceAttrs,
   type HotAttrs,
 } from "./attrs.js";
+import { BOOT_PHASES } from "../types.js";
 
 // ---- §4: Analytics Engine layout (`runner_events`) -----------------------------
 
@@ -154,6 +155,12 @@ const REGISTRY_DATA = {
     blobs: ["framework", "ht_major", "outcome", "reason"],
     doubles: ["duration_ms"],
     values: { outcome: SESSION_START_OUTCOMES, reason: ["cold", "warm"] },
+  },
+  "preview.phase_ms": {
+    emittedBy: "browser",
+    blobs: ["tier", "framework", "ht_major", "reason"],
+    doubles: ["duration_ms"],
+    values: { reason: BOOT_PHASES },
   },
   "hmr.roundtrip_ms": {
     emittedBy: "browser",
