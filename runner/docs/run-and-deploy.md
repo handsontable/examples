@@ -1330,7 +1330,7 @@ place and redeployed/rebuilt: `SENTRY_SCOPE` is the `"full"` var in
 `workers/api/wrangler.jsonc`, flipped to `"uncaught"` and deployed with the API worker;
 `VITE_SENTRY_SCOPE` is the `full` build-env value in `.github/workflows/master.yml`'s
 authoring build step, flipped to `uncaught` and shipped on the next authoring deploy. Both
-currently read `full`/`"full"` in those two committed files.
+read `uncaught` in those two committed files since DEV-3099 (the flip); rollback is setting both back to `full`.
 
 ### Rollback
 
@@ -1375,11 +1375,11 @@ keeps working.
 **`SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` — full vs. uncaught (contract §11, ADR
 §E.3).** Sentry now sits beside the o11y stack described in "Observability"
 above, not in front of it, and this switch controls how much overlap the two
-keep. `full` (the default — both vars are set to `full` in every committed config
-today: `SENTRY_SCOPE` in `workers/api/wrangler.jsonc`, `VITE_SENTRY_SCOPE` in
-`.github/workflows/master.yml`'s authoring build env; `resolveSentryScope`/the API
-worker's own fallback also treat an absent var as `full`, for a build/deploy that
-predates either being set) sends every explicit diagnostic
+keep. `full` (the default — an absent var also means `full`: `resolveSentryScope`/the API
+worker's own fallback treat it so, for a build/deploy that predates either being set;
+both committed values were `full` until the DEV-3099 flip: `SENTRY_SCOPE` in
+`workers/api/wrangler.jsonc`, `VITE_SENTRY_SCOPE` in `.github/workflows/master.yml`'s
+authoring build env, and both now read `uncaught`) sends every explicit diagnostic
 report — `reportError`, the Tier-1/Tier-2 branches of `reportRuntimeError`, the
 Worker's own handled-error lines — to **both** Sentry and the o11y facade, so
 today's dashboards, saved searches and on-call habits keep working unchanged.

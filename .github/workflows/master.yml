@@ -152,8 +152,9 @@ jobs:
       # it targets prod. SENTRY_* are only set on this deploying build; PR CI
       # (ci.yml) gets no token, so PR builds neither emit source maps nor
       # upload a release — see apps/authoring/vite.config.ts. VITE_SENTRY_SCOPE
-      # (contract §11) is pinned to "full" explicitly here, rather than relying
-      # on the code's own absent-means-full default.
+      # (contract §11) is pinned explicitly here, rather than relying on the
+      # code's own absent-means-full default. `uncaught` since DEV-3099; set it
+      # back to `full` to roll back.
       - name: Build authoring (skipped when only the api/o11y deploys)
         if: needs.changes.outputs.authoring == 'true'
         run: pnpm --filter @handsontable/demo-authoring build
@@ -162,7 +163,7 @@ jobs:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
           GITHUB_SHA: ${{ github.sha }}
-          VITE_SENTRY_SCOPE: full
+          VITE_SENTRY_SCOPE: uncaught
 
       # ADR §C.3: the Sentry plugin above already uploaded these maps to
       # Sentry for stack-trace symbolication there; here they're removed from
