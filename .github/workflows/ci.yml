@@ -59,6 +59,36 @@ jobs:
       - name: Test-presence gate (source change ⇒ test change)
         run: node runner/scripts/check-test-presence.mjs "${{ github.base_ref }}"
 
+  # Cached-examples PRs (import-docs.yml) only touch generated data, which the
+  # local telemetry path never reads. `telemetry` is false when every changed
+  # file is such data; anything else, and every non-PR run, keeps it true.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      telemetry: ${{ steps.diff.outputs.telemetry }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "telemetry=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          other=$(git diff --name-only "$BASE...$HEAD" \
+            | grep -v -E '^runner/apps/authoring/public/docs-examples/|^runner/workers/api/src/docs-taxonomy\.generated\.ts$' || true)
+          if [ -n "$other" ]; then
+            echo "telemetry=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "telemetry=false" >> "$GITHUB_OUTPUT"
+          fi
+
   unit:
     runs-on: ubuntu-latest
     defaults:
@@ -224,7 +254,8 @@ jobs:
   # e2e/o11y-local.spec.ts, which need a live worker/compose stack and run
   # instead in `.github/workflows/e2e-o11y-local.yml`, off the per-PR gate.
   e2e-telemetry:
-    needs: build
+    needs: [build, changes]
+    if: needs.changes.outputs.telemetry == 'true'
     runs-on: ubuntu-latest
     container:
       image: mcr.microsoft.com/playwright:v1.61.1-noble
