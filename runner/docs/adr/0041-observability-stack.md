@@ -117,7 +117,7 @@ Alternatives considered and rejected:
   ingests while the box sleeps.
 - **Tempo, and exporting traces at all, in the first release** — no browser join exists,
   span attributes carry URLs, user agents, geo and preview tokens, and spans compete with
-  logs for the same 20 M pool. Deferred (§C.4).
+  logs for the same 20 M pool. Dropped (§C.4).
 - **A Queue in front of the inbox** — billed per message operation and a second write
   path next to the inbox Durable Object, which already batches.
 - **Self-hosted Sentry or GlitchTip**; **`@microlabs/otel-cf-workers`** — not the Grafana
@@ -434,32 +434,28 @@ fixed memory budget; frames from the Babel compiler chunk and third-party files 
 as they are. Maps expire with the browser tenant (30 days). Symbolication never runs on
 the public ingest route. Exit criterion L.5 bounds its cost.
 
-**C.4 Traces are deferred, and not exported.** No trace destination is configured.
+**C.4 Traces are not exported, and Tempo is not built.** No trace destination is configured.
 Worker traces are sampled at 1 % into Cloudflare's own dashboard for the 7-day view while
-`persist: true` holds (§H). Tempo, and a trace export with a span-attribute allowlist
-that removes URLs, user agents, geo and preview hosts, were to return together once
-`spanContext()` made the browser join real.
+`persist: true` holds (§H).
 
 `Span.spanContext()` shipped in workerd 1.20261009.1 (wrangler 4.151.0 bundles 1.20261012.1) with
 no compatibility flag. It is read-only, and an untraced span returns an all-zero context, so
 at 1 % sampling most requests have no usable id. The browser join is therefore a correlation,
 not a parent/child link: the API worker puts the active span's trace id, when real, on its
-`api.request` line as `trace.id`, next to `session.id`. Tempo, the trace export and its
-attribute allowlist stay deferred behind the gate below. The correlation itself is verified: a
-sandbox Worker with traces at 100 % returned a distinct, non-zero trace id per request, and the
-same id after an `await` inside `ctx.waitUntil`.
+`api.request` line as `trace.id`, next to `session.id`. That is the whole feature. A sandbox
+Worker with traces at 100 % returned a distinct, non-zero trace id per request, and the same id
+after an `await` inside `ctx.waitUntil`.
 
-*Gate for building Tempo and the export.* Cloudflare's native export sends OTLP straight to the
-destination, so the span-attribute allowlist cannot run in a Worker on the way out. It belongs
-in a new traces ingest route on the o11y worker, and ships with that route. Spans bill from
-the same 20 M pool as log lines, and §D's projection already puts the exported-logs allotment
-over its half at 10x (about 6.6 M against 5 M), so spans are not assumed to fit. The projection
-is the only volume figure on record: no production measurement of Workers Logs events or span
-counts has been taken. Build the export only after someone with production access records, in
-this section, the last 30 days of Workers Logs events and the exported-log count, and the
-projected span count (1 % of requests times spans per request) keeps the pool under half. If
-it does not fit, or no one needs traces beyond Cloudflare's 7-day dashboard, this stays closed
-and `trace.id` on `api.request` is the whole feature.
+*Decision: Tempo and trace export are dropped.* Cloudflare's dashboard already covers the
+7-day trace view, and the `trace.id` / `session.id` pair in Loki already joins a browser
+session to a Worker trace. Tempo would add a container and a new traces ingest route on the
+o11y worker (the span-attribute allowlist could not run on Cloudflare's native export path,
+which bypasses our Workers), and spans bill from the same 20 M pool as log lines, whose
+exported-logs half §D already projects as exceeded at 10x (about 6.6 M against 5 M). No
+production measurement of span volume exists, and the gain does not justify the cost and
+risk. `traceparent` propagation from the authoring app is dropped too: `spanContext()` is
+read-only, so the browser cannot parent a Worker span. Reopen this only with a concrete need
+for trace retention beyond 7 days, and then with measured production volumes.
 
 **C.5 Lite beacon for `/d` and `/embed`.** The existing ES5 reporter in `monitor.ts` gains
 a standalone mode: with no parent runner frame, it sends uncaught errors (up to the
