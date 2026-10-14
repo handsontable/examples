@@ -440,6 +440,14 @@ Worker traces are sampled at 1 % into Cloudflare's own dashboard for the 7-day v
 that removes URLs, user agents, geo and preview hosts, return together when
 `spanContext()` makes the browser join real.
 
+`Span.spanContext()` shipped in workerd 1.20261009.1 (wrangler 4.151.0 bundles 1.20261012.1) with
+no compatibility flag. It is read-only, and an untraced span returns an all-zero context, so
+at 1 % sampling most requests have no usable id. The browser join is therefore a correlation,
+not a parent/child link: the API worker puts the active span's trace id, when real, on its
+`api.request` line as `trace.id`, next to `session.id`. Tempo, the trace export and its
+attribute allowlist stay deferred until that correlation is verified on a deployed Worker and
+the shared 20 M-event budget is re-checked.
+
 **C.5 Lite beacon for `/d` and `/embed`.** The existing ES5 reporter in `monitor.ts` gains
 a standalone mode: with no parent runner frame, it sends uncaught errors (up to the
 existing ceiling) and sampled web vitals (10 % of page views) with `navigator.sendBeacon`

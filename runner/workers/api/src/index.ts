@@ -85,6 +85,7 @@ import {
   cronStep,
   demoIdFromPath,
   emitBudgetGauge,
+  activeTraceId,
   emitPoint,
   emitPoolGauge,
   exampleSavedAttrs,
@@ -845,6 +846,7 @@ async function recordRequestSignal(
     // Loki structured metadata.
     session_id: validSessionId(request.headers.get("x-hot-session")),
     demo_id: demoIdFromPath(pathname),
+    trace_id: await activeTraceId(),
   });
   ctx.waitUntil(
     emitPoint(env, "api.request", { count: 1, duration_ms: durationMs }, {

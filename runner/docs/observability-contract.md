@@ -44,6 +44,9 @@ in its deploy script (ADR-0020), never in `wrangler.jsonc`:
 | `GET /grafana/_o11y/admin/<name>` | ADR-0043 read forwarder (after launch) | session cookie, name allowlist, GET only |
 
 There is no trace route: traces are not exported (ADR-0041 §C.4).
+The API worker's `api.request` line carries the active span's `trace.id` (a 32-hex W3C trace
+id, `null` when the request is not traced, which is most of them at 1 % sampling) in the
+line body only: it is not structured metadata and is not used by any Loki query yet.
 
 Ports inside the Grafana box, reached only through `GrafanaBox.containerFetch`:
 

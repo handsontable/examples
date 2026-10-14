@@ -21,6 +21,8 @@ export interface RequestLineFields {
   cf_ray: string;
   session_id: string;
   demo_id: string;
+  /** `Span.spanContext()` trace id; `""` when the request is not traced. */
+  trace_id: string;
 }
 
 export function logRequestLine(env: Env, fields: RequestLineFields): void {
@@ -33,6 +35,7 @@ export function logRequestLine(env: Env, fields: RequestLineFields): void {
       "cf.ray": fields.cf_ray || null,
       "session.id": fields.session_id || null,
       "hot.demo_id": fields.demo_id || null,
+      "trace.id": fields.trace_id || null,
       "service.version": serviceVersion(env),
     }),
   );

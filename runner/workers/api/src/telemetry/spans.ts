@@ -13,8 +13,11 @@
 // route"; `wrangler.jsonc`'s `observability.traces` sets no `destinations`) —
 // this only feeds Cloudflare's own 1%-sampled dashboard view (ADR §F.2).
 
+import { traceIdOf } from "./trace-id.js";
+
 interface WorkersTracing {
   enterSpan<T>(name: string, callback: () => T): T;
+  getActiveSpan?(): { spanContext?(): unknown } | undefined;
 }
 
 const tracingApi: Promise<WorkersTracing | null> = (async () => {
@@ -36,4 +39,18 @@ export async function withSpan<T>(name: string, fn: () => Promise<T> | T): Promi
   const tracing = await tracingApi;
   if (!tracing) return fn();
   return tracing.enterSpan(name, () => fn());
+}
+
+/**
+ * The active span's trace id, or `""` when the runtime has no `spanContext()`
+ * (older workerd, plain Node) or the request is not traced. Read-only: it
+ * correlates a log line with a Cloudflare trace, it does not link spans.
+ */
+export async function activeTraceId(): Promise<string> {
+  try {
+    const tracing = await tracingApi;
+    return traceIdOf(tracing?.getActiveSpan?.()?.spanContext?.());
+  } catch {
+    return "";
+  }
 }
