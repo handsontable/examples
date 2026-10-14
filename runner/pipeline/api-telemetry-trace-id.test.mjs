@@ -27,3 +27,13 @@ test("traceIdOf: a malformed or missing context yields nothing", () => {
   assert.equal(traceIdOf({ traceId: REAL.toUpperCase() }), "");
   assert.equal(traceIdOf({ traceId: 123 }), "");
 });
+
+// Build prerequisite: `pnpm --filter @handsontable/demo-runtime build`.
+// The contract says `trace.id` stays in the line body: the o11y ingest only
+// hoists allowlisted keys to structured metadata, so it must stay unlisted.
+test("trace.id is not hoisted to structured metadata", async () => {
+  const { hoistAttributes } = await import("../packages/runtime/dist/telemetry/index.js");
+  const { attributes } = hoistAttributes({ "trace.id": REAL, "session.id": "s" });
+  assert.equal(attributes["trace.id"], undefined);
+  assert.equal(attributes["session.id"], "s");
+});

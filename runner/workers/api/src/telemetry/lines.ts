@@ -9,7 +9,8 @@
 // line ... with every field") — optional data is `null`, never an absent key,
 // so a Loki query never has to guard a missing field. Per §E.4's operational-
 // log rule, only a page-load id, a demo id and a cf-ray may identify a
-// request; nothing else request-shaped is added here.
+// request; the one other request-shaped field is `trace.id`, a random id that
+// names no person or content and is not an allowlisted structured-metadata key.
 
 import type { Env } from "../env.js";
 import { serviceVersion } from "./resource.js";
