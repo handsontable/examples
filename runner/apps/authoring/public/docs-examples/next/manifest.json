@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-f0a47b1-20261014",
-  "count": 1594,
+  "hotVersion": "0.0.0-next-a26137c-20261014",
+  "count": 1599,
   "examples": [
     {
       "bucket": "next",
@@ -16015,6 +16015,86 @@
       "guideTitle": "Formula calculation",
       "exampleId": "example-data-grid",
       "exampleTitle": "Data grid example",
+      "docPermalink": "/formula-calculation",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-calculation/angular/example-hyperlinks.ts",
+      "file": "guides__formulas__formula-calculation__angular__example-hyperlinks.ts.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula calculation"
+      ],
+      "guide": "guides/formulas/formula-calculation/formula-calculation.md",
+      "guideTitle": "Formula calculation",
+      "exampleId": "example-hyperlinks",
+      "exampleTitle": "Render HYPERLINK formulas as links",
+      "docPermalink": "/formula-calculation",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-calculation/javascript/example-hyperlinks.js",
+      "file": "guides__formulas__formula-calculation__javascript__example-hyperlinks.js.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula calculation"
+      ],
+      "guide": "guides/formulas/formula-calculation/formula-calculation.md",
+      "guideTitle": "Formula calculation",
+      "exampleId": "example-hyperlinks",
+      "exampleTitle": "Render HYPERLINK formulas as links",
+      "docPermalink": "/formula-calculation",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-calculation/react/example-hyperlinks.tsx",
+      "file": "guides__formulas__formula-calculation__react__example-hyperlinks.tsx.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula calculation"
+      ],
+      "guide": "guides/formulas/formula-calculation/formula-calculation.md",
+      "guideTitle": "Formula calculation",
+      "exampleId": "example-hyperlinks",
+      "exampleTitle": "Render HYPERLINK formulas as links",
+      "docPermalink": "/formula-calculation",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-calculation/javascript/example-hyperlinks.ts",
+      "file": "guides__formulas__formula-calculation__javascript__example-hyperlinks.ts.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula calculation"
+      ],
+      "guide": "guides/formulas/formula-calculation/formula-calculation.md",
+      "guideTitle": "Formula calculation",
+      "exampleId": "example-hyperlinks",
+      "exampleTitle": "Render HYPERLINK formulas as links",
+      "docPermalink": "/formula-calculation",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-calculation/vue/example-hyperlinks.vue",
+      "file": "guides__formulas__formula-calculation__vue__example-hyperlinks.vue.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula calculation"
+      ],
+      "guide": "guides/formulas/formula-calculation/formula-calculation.md",
+      "guideTitle": "Formula calculation",
+      "exampleId": "example-hyperlinks",
+      "exampleTitle": "Render HYPERLINK formulas as links",
       "docPermalink": "/formula-calculation",
       "framework": "vue",
       "displayName": "Vue 3"
