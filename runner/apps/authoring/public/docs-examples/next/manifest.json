@@ -3,7 +3,7 @@
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "0.0.0-next-f0a47b1-20261014",
-  "count": 1589,
+  "count": 1594,
   "examples": [
     {
       "bucket": "next",
@@ -2188,6 +2188,86 @@
       "guideTitle": "Autofill values",
       "exampleId": "example3",
       "exampleTitle": "Altering and tracking autofilled values",
+      "docPermalink": "/autofill-values",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/autofill-values/angular/example4.ts",
+      "file": "guides__cell-features__autofill-values__angular__example4.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example4",
+      "exampleTitle": "Autofill and formulas",
+      "docPermalink": "/autofill-values",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/autofill-values/javascript/example4.js",
+      "file": "guides__cell-features__autofill-values__javascript__example4.js.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example4",
+      "exampleTitle": "Autofill and formulas",
+      "docPermalink": "/autofill-values",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/autofill-values/react/example4.tsx",
+      "file": "guides__cell-features__autofill-values__react__example4.tsx.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example4",
+      "exampleTitle": "Autofill and formulas",
+      "docPermalink": "/autofill-values",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/autofill-values/javascript/example4.ts",
+      "file": "guides__cell-features__autofill-values__javascript__example4.ts.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example4",
+      "exampleTitle": "Autofill and formulas",
+      "docPermalink": "/autofill-values",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-features/autofill-values/vue/example4.vue",
+      "file": "guides__cell-features__autofill-values__vue__example4.vue.json",
+      "breadcrumb": [
+        "Cell Features",
+        "Autofill values"
+      ],
+      "guide": "guides/cell-features/autofill-values/autofill-values.md",
+      "guideTitle": "Autofill values",
+      "exampleId": "example4",
+      "exampleTitle": "Autofill and formulas",
       "docPermalink": "/autofill-values",
       "framework": "vue",
       "displayName": "Vue 3"
