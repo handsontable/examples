@@ -58,7 +58,7 @@ and Faro source):
   handlers, RPC; custom spans via `tracing.enterSpan`; OTLP export of traces and logs to
   any endpoint with custom headers. From 2026-10-01 spans are billed as events **in the
   same 20 M/month Workers Logs pool** as log lines, and export includes **10 M events per
-  signal**. No `spanContext()`, so no browser-to-worker `traceparent` join. No metrics
+  signal**. No `spanContext()` at the time of writing (it landed later, see §C.4), so no browser-to-worker `traceparent` join. No metrics
   export. Sampling is per invocation and per Worker, never per route. Export retry
   semantics are undocumented. Fetch-handler spans carry `url.full`,
   `user_agent.original`, city and ASN; preview hostnames carry the sandbox token.
@@ -437,8 +437,16 @@ the public ingest route. Exit criterion L.5 bounds its cost.
 **C.4 Traces are deferred, and not exported.** No trace destination is configured.
 Worker traces are sampled at 1 % into Cloudflare's own dashboard for the 7-day view while
 `persist: true` holds (§H). Tempo, and a trace export with a span-attribute allowlist
-that removes URLs, user agents, geo and preview hosts, return together when
-`spanContext()` makes the browser join real.
+that removes URLs, user agents, geo and preview hosts, were to return together once
+`spanContext()` made the browser join real.
+
+`Span.spanContext()` shipped in workerd 1.20261009.1 (wrangler 4.151.0 bundles 1.20261012.1) with
+no compatibility flag. It is read-only, and an untraced span returns an all-zero context, so
+at 1 % sampling most requests have no usable id. The browser join is therefore a correlation,
+not a parent/child link: the API worker puts the active span's trace id, when real, on its
+`api.request` line as `trace.id`, next to `session.id`. Tempo, the trace export and its
+attribute allowlist stay deferred until that correlation is verified on a deployed Worker and
+the shared 20 M-event budget is re-checked.
 
 **C.5 Lite beacon for `/d` and `/embed`.** The existing ES5 reporter in `monitor.ts` gains
 a standalone mode: with no parent runner frame, it sends uncaught errors (up to the
