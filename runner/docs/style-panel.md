@@ -16,7 +16,10 @@ The **Style** panel restyles the example you have open with the same controls as
 | Copy for my app | the same module source, to paste into a real project |
 | Reset | removes the module and the wiring |
 
-The theme survives a reload (`localStorage`), and **Reset** clears it.
+The theme survives a reload (`localStorage`), and **Reset** clears it. The panel
+writes it again whenever the workspace is replaced (`workspaceKey`, the app's
+`mountGen`): a load swaps every file, so a theme applied while the example was
+still being fetched, or to the example before it, would otherwise be lost.
 
 ## The token catalogue
 

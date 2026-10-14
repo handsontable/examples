@@ -345,6 +345,70 @@ test("the theme survives a reload", async ({ page }) => {
   await expect(page.locator(".hot-file-row", { hasText: "handsontable-theme" })).toBeVisible();
 });
 
+/** Hold the starter artifact until `release()`, so the panel can be driven while
+ *  the workspace is still the empty placeholder that stands in for it. */
+async function holdStarter(page: Page) {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/starter-examples/*/react.json", async (route) => {
+    await held;
+    await route.continue();
+  });
+  return release;
+}
+
+/** The theme is in the example's own files: the module, and the grid wired to it. */
+async function expectThemedWorkspace(page: Page) {
+  await expect(async () => {
+    const files = await workspaceFiles(page);
+    expect(Object.keys(files).some((path) => path.includes("handsontable-theme"))).toBe(true);
+    expect(Object.values(files).some((contents) => contents.includes("theme={customTheme}"))).toBe(true);
+  }).toPass();
+}
+
+const UNRECOGNISED = "builds its grid in a shape the panel does not recognise";
+
+test("a theme picked before the example loads lands in the example", async ({ page }) => {
+  const release = await holdStarter(page);
+  const drawer = await openPanel(page);
+
+  const tokensSection = drawer.locator("section").filter({ hasText: "Token mapping" }).first();
+  await tokensSection.getByRole("button", { name: "horizon" }).click();
+  // Precondition: the edit really did land on the placeholder, which has no grid.
+  await expect(drawer.getByText(UNRECOGNISED)).toBeVisible();
+
+  release();
+  // The placeholder's tree holds nothing but the module, so wait for the example.
+  await expect(page.locator(".hot-file-row", { hasText: "index.tsx" })).toBeVisible();
+
+  await expect(page.locator(".hot-file-row", { hasText: "handsontable-theme" })).toBeVisible();
+  await expectThemedWorkspace(page);
+  await expect(drawer.getByText(UNRECOGNISED)).toBeHidden();
+});
+
+test("a saved theme reopened before the example loads lands in the example", async ({ page }) => {
+  let drawer = await openPanel(page);
+  await drawer.locator("section").filter({ hasText: "Token mapping" }).first()
+    .getByRole("button", { name: "horizon" }).click();
+  await expect(async () => {
+    expect((await state(page))?.tokens).toBe("horizon");
+  }).toPass();
+
+  const release = await holdStarter(page);
+  await page.reload();
+  await page.getByRole("button", { name: "Style", exact: true }).click();
+  drawer = page.locator(STYLE);
+  // Precondition: the mount reconcile ran against the placeholder.
+  await expect(drawer.getByText(UNRECOGNISED)).toBeVisible();
+
+  release();
+  // The placeholder's tree holds nothing but the module, so wait for the example.
+  await expect(page.locator(".hot-file-row", { hasText: "index.tsx" })).toBeVisible();
+
+  await expect(page.locator(".hot-file-row", { hasText: "handsontable-theme" })).toBeVisible();
+  await expectThemedWorkspace(page);
+});
+
 test("the generated module quotes every key", async ({ page }) => {
   const drawer = await openPanel(page);
 

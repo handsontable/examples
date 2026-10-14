@@ -129,6 +129,9 @@ export interface StylePanelProps {
    *  (DEV-2560) — see `theme/presetsFor.ts`. */
   htVersion: string;
   getFiles: () => FilesMap;
+  /** Changes whenever the whole workspace is replaced, which takes the theme
+   *  module and its wiring with it — the panel applies the theme again. */
+  workspaceKey: number;
   /** Write a file into the editor + running preview. `{ quiet: true }` keeps the
    *  file and skips the rebuild, for a change the bridge has already applied. */
   applyEdit: (path: string, contents: string, opts?: WriteFileOptions) => void;
@@ -147,6 +150,7 @@ export function StylePanel({
   token,
   htVersion,
   getFiles,
+  workspaceKey,
   applyEdit,
   postToPreview,
   onPreviewMessage,
@@ -261,12 +265,15 @@ export function StylePanel({
 
   // A theme restored from a previous session describes files this demo may not
   // have — reopening the panel, or opening a different example, must reconcile
-  // the two rather than wait for the next edit to notice.
+  // the two rather than wait for the next edit to notice. Keyed on the workspace,
+  // not just the mount: a load replaces every file, so a theme applied to the one
+  // before it — including the empty placeholder that stands in while the example
+  // is still being fetched — is gone from the one that arrives.
   useEffect(() => {
-    if (!isPristine(state)) apply(state);
-    // Mount only: later changes go through update(), which applies as it goes.
+    if (!isPristine(stateRef.current)) apply(stateRef.current);
+    // Edits between loads go through update(), which applies as it goes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [workspaceKey]);
 
   // The snippet has to be in the demo's own language (DEV-2216), which is a
   // property of the files it sits next to — and those can be replaced while

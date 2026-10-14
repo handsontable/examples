@@ -3643,6 +3643,7 @@ function Authoring({
           token={getToken()}
           htVersion={version}
           getFiles={() => filesRef.current}
+          workspaceKey={mountGen}
           applyEdit={onEditFromStyle}
           postToPreview={postToPreview}
           onPreviewMessage={onPreviewMessage}
