@@ -1044,8 +1044,8 @@ where they add information beyond what §A–§L already say:
   Object classes, provisioning in git, a fixture set, one Slack webhook, one
   `O11Y_SESSION_SECRET` (no Access application; `/grafana/*` gates through the
   existing login broker instead).
-- **Accepted limits**: no browser-to-worker trace join and no traces in Grafana until
-  `spanContext()`; no alert rules or durable UI state in Grafana; the first visit after a
+- **Accepted limits**: no traces in Grafana (dropped, §C.4; `trace.id` on `api.request`
+  is the browser-to-worker correlation); no alert rules or durable UI state in Grafana; the first visit after a
   sleep waits behind the waking page; an unclean stop costs a replay and duplicate storage
   until lifecycle; embeds have no docs page attribution; handled errors have no issue
   grouping; the non-EU items listed in §H.
