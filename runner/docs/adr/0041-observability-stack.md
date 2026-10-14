@@ -445,8 +445,21 @@ no compatibility flag. It is read-only, and an untraced span returns an all-zero
 at 1 % sampling most requests have no usable id. The browser join is therefore a correlation,
 not a parent/child link: the API worker puts the active span's trace id, when real, on its
 `api.request` line as `trace.id`, next to `session.id`. Tempo, the trace export and its
-attribute allowlist stay deferred until that correlation is verified on a deployed Worker and
-the shared 20 M-event budget is re-checked.
+attribute allowlist stay deferred behind the gate below. The correlation itself is verified: a
+sandbox Worker with traces at 100 % returned a distinct, non-zero trace id per request, and the
+same id after an `await` inside `ctx.waitUntil`.
+
+*Gate for building Tempo and the export.* Cloudflare's native export sends OTLP straight to the
+destination, so the span-attribute allowlist cannot run in a Worker on the way out. It belongs
+in a new traces ingest route on the o11y worker, and ships with that route. Spans bill from
+the same 20 M pool as log lines, and §D's projection already puts the exported-logs allotment
+over its half at 10x (about 6.6 M against 5 M), so spans are not assumed to fit. The projection
+is the only volume figure on record: no production measurement of Workers Logs events or span
+counts has been taken. Build the export only after someone with production access records, in
+this section, the last 30 days of Workers Logs events and the exported-log count, and the
+projected span count (1 % of requests times spans per request) keeps the pool under half. If
+it does not fit, or no one needs traces beyond Cloudflare's 7-day dashboard, this stays closed
+and `trace.id` on `api.request` is the whole feature.
 
 **C.5 Lite beacon for `/d` and `/embed`.** The existing ES5 reporter in `monitor.ts` gains
 a standalone mode: with no parent runner frame, it sends uncaught errors (up to the
