@@ -117,7 +117,7 @@ Alternatives considered and rejected:
   ingests while the box sleeps.
 - **Tempo, and exporting traces at all, in the first release** — no browser join exists,
   span attributes carry URLs, user agents, geo and preview tokens, and spans compete with
-  logs for the same 20 M pool. Deferred (§C.4).
+  logs for the same 20 M pool. Dropped (§C.4).
 - **A Queue in front of the inbox** — billed per message operation and a second write
   path next to the inbox Durable Object, which already batches.
 - **Self-hosted Sentry or GlitchTip**; **`@microlabs/otel-cf-workers`** — not the Grafana
@@ -434,19 +434,28 @@ fixed memory budget; frames from the Babel compiler chunk and third-party files 
 as they are. Maps expire with the browser tenant (30 days). Symbolication never runs on
 the public ingest route. Exit criterion L.5 bounds its cost.
 
-**C.4 Traces are deferred, and not exported.** No trace destination is configured.
+**C.4 Traces are not exported, and Tempo is not built.** No trace destination is configured.
 Worker traces are sampled at 1 % into Cloudflare's own dashboard for the 7-day view while
-`persist: true` holds (§H). Tempo, and a trace export with a span-attribute allowlist
-that removes URLs, user agents, geo and preview hosts, were to return together once
-`spanContext()` made the browser join real.
+`persist: true` holds (§H).
 
 `Span.spanContext()` shipped in workerd 1.20261009.1 (wrangler 4.151.0 bundles 1.20261012.1) with
 no compatibility flag. It is read-only, and an untraced span returns an all-zero context, so
 at 1 % sampling most requests have no usable id. The browser join is therefore a correlation,
 not a parent/child link: the API worker puts the active span's trace id, when real, on its
-`api.request` line as `trace.id`, next to `session.id`. Tempo, the trace export and its
-attribute allowlist stay deferred until that correlation is verified on a deployed Worker and
-the shared 20 M-event budget is re-checked.
+`api.request` line as `trace.id`, next to `session.id`. That is the whole feature. A sandbox
+Worker with traces at 100 % returned a distinct, non-zero trace id per request, and the same id
+after an `await` inside `ctx.waitUntil`.
+
+*Decision: Tempo and trace export are dropped.* Cloudflare's dashboard already covers the
+7-day trace view, and the `trace.id` / `session.id` pair in Loki already joins a browser
+session to a Worker trace. Tempo would add a container and a new traces ingest route on the
+o11y worker (the span-attribute allowlist could not run on Cloudflare's native export path,
+which bypasses our Workers), and spans bill from the same 20 M pool as log lines, whose
+exported-logs half §D already projects as exceeded at 10x (about 6.6 M against 5 M). No
+production measurement of span volume exists, and the gain does not justify the cost and
+risk. `traceparent` propagation from the authoring app is dropped too: `spanContext()` is
+read-only, so the browser cannot parent a Worker span. Reopen this only with a concrete need
+for trace retention beyond 7 days, and then with measured production volumes.
 
 **C.5 Lite beacon for `/d` and `/embed`.** The existing ES5 reporter in `monitor.ts` gains
 a standalone mode: with no parent runner frame, it sends uncaught errors (up to the
@@ -1035,8 +1044,8 @@ where they add information beyond what §A–§L already say:
   Object classes, provisioning in git, a fixture set, one Slack webhook, one
   `O11Y_SESSION_SECRET` (no Access application; `/grafana/*` gates through the
   existing login broker instead).
-- **Accepted limits**: no browser-to-worker trace join and no traces in Grafana until
-  `spanContext()`; no alert rules or durable UI state in Grafana; the first visit after a
+- **Accepted limits**: no traces in Grafana (dropped, §C.4; `trace.id` on `api.request`
+  is the browser-to-worker correlation); no alert rules or durable UI state in Grafana; the first visit after a
   sleep waits behind the waking page; an unclean stop costs a replay and duplicate storage
   until lifecycle; embeds have no docs page attribution; handled errors have no issue
   grouping; the non-EU items listed in §H.
