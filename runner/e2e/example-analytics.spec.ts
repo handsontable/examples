@@ -513,3 +513,34 @@ test("a ?example= deep-link visit, then a picker pick of a different starter, fi
   expect(pick.attributes?.["hot.reason"]).toBe("picker");
   expect(pick.attributes?.["hot.ref"]).toBe("react");
 });
+
+test("re-applying a saved Style theme to the example that loads is not an example.engaged", async ({ page }) => {
+  await stubShell(page);
+  await page.route("**/api/versions/exists**", (route) => route.fulfill({ json: { exists: true } }));
+  await page.addInitScript(() => localStorage.setItem("hot-runner-theme", JSON.stringify({ tokens: "horizon" })));
+  // Hold the starter so the panel is open on the placeholder when the example lands.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/starter-examples/*/react.json", async (route) => {
+    await held;
+    await route.continue();
+  });
+  const events = captureTelemetryEvents(page);
+  const engaged = () => events.filter((e) => e.name === "example.engaged");
+
+  await page.goto(`${BASE_URL}/?example=react&v=18.0.0`);
+  await page.getByRole("button", { name: "Style", exact: true }).click();
+  release();
+  await expect(page.locator(".hot-file-row", { hasText: "index.tsx" })).toBeVisible();
+  // Precondition: the panel did write the theme into the example that arrived.
+  await expect(page.locator(".hot-file-row", { hasText: "handsontable-theme" })).toBeVisible();
+
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  expect(engaged()).toHaveLength(0);
+
+  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await page.locator('[data-pane-active="true"] .cm-content').click();
+  await page.keyboard.type("// edit");
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  expect(engaged()).toHaveLength(1);
+});

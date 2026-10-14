@@ -386,6 +386,23 @@ test("a theme picked before the example loads lands in the example", async ({ pa
   await expect(drawer.getByText(UNRECOGNISED)).toBeHidden();
 });
 
+test("a theme picked before the example loads lands in it after the panel is closed", async ({ page }) => {
+  const release = await holdStarter(page);
+  const drawer = await openPanel(page);
+
+  await drawer.locator("section").filter({ hasText: "Token mapping" }).first()
+    .getByRole("button", { name: "horizon" }).click();
+  await expect(drawer.getByText(UNRECOGNISED)).toBeVisible();
+  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await expect(drawer).toBeHidden();
+
+  release();
+  await expect(page.locator(".hot-file-row", { hasText: "index.tsx" })).toBeVisible();
+
+  await expect(page.locator(".hot-file-row", { hasText: "handsontable-theme" })).toBeVisible();
+  await expectThemedWorkspace(page);
+});
+
 test("a saved theme reopened before the example loads lands in the example", async ({ page }) => {
   let drawer = await openPanel(page);
   await drawer.locator("section").filter({ hasText: "Token mapping" }).first()
