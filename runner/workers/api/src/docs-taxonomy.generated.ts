@@ -554,12 +554,20 @@ export const DOCS_GUIDES: readonly (readonly [guide: string, area: string])[] = 
   "Configuration"
  ],
  [
+  "guides/getting-started/server-side-data-row-selection/server-side-data-row-selection.md",
+  "Getting Started"
+ ],
+ [
   "recipes/performance/expensive-cell-renderer/expensive-cell-renderer.md",
   "Recipes"
  ],
  [
   "recipes/themes/tabler-icons/tabler-icons.md",
   "Recipes"
+ ],
+ [
+  "guides/rows/row-selection/row-selection.md",
+  "Rows"
  ]
 ];
 
@@ -1049,6 +1057,7 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/cell-types/checkbox-cell-type/angular/example2.ts": 23,
  "guides/cell-types/checkbox-cell-type/angular/example3.ts": 23,
  "guides/cell-types/checkbox-cell-type/angular/example4.ts": 23,
+ "guides/cell-types/checkbox-cell-type/angular/example5.ts": 23,
  "guides/cell-types/checkbox-cell-type/javascript/example1.js": 23,
  "guides/cell-types/checkbox-cell-type/javascript/example1.ts": 23,
  "guides/cell-types/checkbox-cell-type/javascript/example2.js": 23,
@@ -1057,14 +1066,18 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/cell-types/checkbox-cell-type/javascript/example3.ts": 23,
  "guides/cell-types/checkbox-cell-type/javascript/example4.js": 23,
  "guides/cell-types/checkbox-cell-type/javascript/example4.ts": 23,
+ "guides/cell-types/checkbox-cell-type/javascript/example5.js": 23,
+ "guides/cell-types/checkbox-cell-type/javascript/example5.ts": 23,
  "guides/cell-types/checkbox-cell-type/react/example1.tsx": 23,
  "guides/cell-types/checkbox-cell-type/react/example2.tsx": 23,
  "guides/cell-types/checkbox-cell-type/react/example3.tsx": 23,
  "guides/cell-types/checkbox-cell-type/react/example4.tsx": 23,
+ "guides/cell-types/checkbox-cell-type/react/example5.tsx": 23,
  "guides/cell-types/checkbox-cell-type/vue/example1.vue": 23,
  "guides/cell-types/checkbox-cell-type/vue/example2.vue": 23,
  "guides/cell-types/checkbox-cell-type/vue/example3.vue": 23,
  "guides/cell-types/checkbox-cell-type/vue/example4.vue": 23,
+ "guides/cell-types/checkbox-cell-type/vue/example5.vue": 23,
  "guides/cell-types/date-cell-type/angular/example1.ts": 24,
  "guides/cell-types/date-cell-type/javascript/example1.js": 24,
  "guides/cell-types/date-cell-type/javascript/example1.ts": 24,
@@ -1753,6 +1766,11 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/getting-started/saving-data/javascript/example1.ts": 60,
  "guides/getting-started/saving-data/react/example1.tsx": 60,
  "guides/getting-started/saving-data/vue/example1.vue": 60,
+ "guides/getting-started/server-side-data-row-selection/angular/example1.ts": 137,
+ "guides/getting-started/server-side-data-row-selection/javascript/example1.js": 137,
+ "guides/getting-started/server-side-data-row-selection/javascript/example1.ts": 137,
+ "guides/getting-started/server-side-data-row-selection/react/example1.tsx": 137,
+ "guides/getting-started/server-side-data-row-selection/vue/example1.vue": 137,
  "guides/getting-started/server-side-data/angular/example1.ts": 61,
  "guides/getting-started/server-side-data/javascript/example1.js": 61,
  "guides/getting-started/server-side-data/javascript/example1.ts": 61,
@@ -1956,6 +1974,31 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/rows/row-prepopulating/vue/example1.vue": 115,
  "guides/rows/row-prepopulating/vue/example2.vue": 115,
  "guides/rows/row-prepopulating/vue/example3.vue": 115,
+ "guides/rows/row-selection/angular/example1.ts": 140,
+ "guides/rows/row-selection/angular/example2.ts": 140,
+ "guides/rows/row-selection/angular/example3.ts": 140,
+ "guides/rows/row-selection/angular/example4.ts": 140,
+ "guides/rows/row-selection/angular/example5.ts": 140,
+ "guides/rows/row-selection/javascript/example1.js": 140,
+ "guides/rows/row-selection/javascript/example1.ts": 140,
+ "guides/rows/row-selection/javascript/example2.js": 140,
+ "guides/rows/row-selection/javascript/example2.ts": 140,
+ "guides/rows/row-selection/javascript/example3.js": 140,
+ "guides/rows/row-selection/javascript/example3.ts": 140,
+ "guides/rows/row-selection/javascript/example4.js": 140,
+ "guides/rows/row-selection/javascript/example4.ts": 140,
+ "guides/rows/row-selection/javascript/example5.js": 140,
+ "guides/rows/row-selection/javascript/example5.ts": 140,
+ "guides/rows/row-selection/react/example1.tsx": 140,
+ "guides/rows/row-selection/react/example2.tsx": 140,
+ "guides/rows/row-selection/react/example3.tsx": 140,
+ "guides/rows/row-selection/react/example4.tsx": 140,
+ "guides/rows/row-selection/react/example5.tsx": 140,
+ "guides/rows/row-selection/vue/example1.vue": 140,
+ "guides/rows/row-selection/vue/example2.vue": 140,
+ "guides/rows/row-selection/vue/example3.vue": 140,
+ "guides/rows/row-selection/vue/example4.vue": 140,
+ "guides/rows/row-selection/vue/example5.vue": 140,
  "guides/rows/row-trimming/angular/example1.ts": 116,
  "guides/rows/row-trimming/javascript/example1.js": 116,
  "guides/rows/row-trimming/javascript/example1.ts": 116,
@@ -2199,10 +2242,10 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "recipes/import-export/import-csv-excel/javascript/example1.ts": 101,
  "recipes/import-export/import-csv-excel/react/example1.tsx": 101,
  "recipes/import-export/import-csv-excel/vue/example1.vue": 101,
- "recipes/performance/expensive-cell-renderer/angular/example1.ts": 137,
- "recipes/performance/expensive-cell-renderer/javascript/example1.js": 137,
- "recipes/performance/expensive-cell-renderer/javascript/example1.ts": 137,
- "recipes/performance/expensive-cell-renderer/react/example1.tsx": 137,
+ "recipes/performance/expensive-cell-renderer/angular/example1.ts": 138,
+ "recipes/performance/expensive-cell-renderer/javascript/example1.js": 138,
+ "recipes/performance/expensive-cell-renderer/javascript/example1.ts": 138,
+ "recipes/performance/expensive-cell-renderer/react/example1.tsx": 138,
  "recipes/performance/lazy-loading/angular/example1.ts": 102,
  "recipes/performance/lazy-loading/javascript/example1.js": 102,
  "recipes/performance/lazy-loading/react/example1.tsx": 102,
@@ -2230,11 +2273,11 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "recipes/rendering-styling/sparkline-cell-renderer/javascript/example1.js": 108,
  "recipes/rendering-styling/sparkline-cell-renderer/javascript/example1.ts": 108,
  "recipes/rendering-styling/sparkline-cell-renderer/react/example1.tsx": 108,
- "recipes/themes/tabler-icons/angular/example1.ts": 138,
- "recipes/themes/tabler-icons/javascript/example1.js": 138,
- "recipes/themes/tabler-icons/javascript/example1.ts": 138,
- "recipes/themes/tabler-icons/react/example1.tsx": 138,
- "recipes/themes/tabler-icons/vue/example1.vue": 138
+ "recipes/themes/tabler-icons/angular/example1.ts": 139,
+ "recipes/themes/tabler-icons/javascript/example1.js": 139,
+ "recipes/themes/tabler-icons/javascript/example1.ts": 139,
+ "recipes/themes/tabler-icons/react/example1.tsx": 139,
+ "recipes/themes/tabler-icons/vue/example1.vue": 139
 };
 
 export const DOCS_BUCKET_OVERRIDES: Readonly<Record<string, Readonly<Record<string, number>>>> = {};

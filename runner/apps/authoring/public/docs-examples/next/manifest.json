@@ -3,7 +3,7 @@
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "0.0.0-next-0b0a5f5-20261015",
-  "count": 1609,
+  "count": 1644,
   "examples": [
     {
       "bucket": "next",
@@ -7607,6 +7607,86 @@
       "guideTitle": "Checkbox cell type",
       "exampleId": "example4",
       "exampleTitle": "Label value as a function",
+      "docPermalink": "/checkbox-cell-type",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/checkbox-cell-type/angular/example5.ts",
+      "file": "guides__cell-types__checkbox-cell-type__angular__example5.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Checkbox cell type"
+      ],
+      "guide": "guides/cell-types/checkbox-cell-type/checkbox-cell-type.md",
+      "guideTitle": "Checkbox cell type",
+      "exampleId": "example5",
+      "exampleTitle": "Check all in the column header",
+      "docPermalink": "/checkbox-cell-type",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/checkbox-cell-type/javascript/example5.js",
+      "file": "guides__cell-types__checkbox-cell-type__javascript__example5.js.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Checkbox cell type"
+      ],
+      "guide": "guides/cell-types/checkbox-cell-type/checkbox-cell-type.md",
+      "guideTitle": "Checkbox cell type",
+      "exampleId": "example5",
+      "exampleTitle": "Check all in the column header",
+      "docPermalink": "/checkbox-cell-type",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/checkbox-cell-type/react/example5.tsx",
+      "file": "guides__cell-types__checkbox-cell-type__react__example5.tsx.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Checkbox cell type"
+      ],
+      "guide": "guides/cell-types/checkbox-cell-type/checkbox-cell-type.md",
+      "guideTitle": "Checkbox cell type",
+      "exampleId": "example5",
+      "exampleTitle": "Check all in the column header",
+      "docPermalink": "/checkbox-cell-type",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/checkbox-cell-type/javascript/example5.ts",
+      "file": "guides__cell-types__checkbox-cell-type__javascript__example5.ts.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Checkbox cell type"
+      ],
+      "guide": "guides/cell-types/checkbox-cell-type/checkbox-cell-type.md",
+      "guideTitle": "Checkbox cell type",
+      "exampleId": "example5",
+      "exampleTitle": "Check all in the column header",
+      "docPermalink": "/checkbox-cell-type",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/cell-types/checkbox-cell-type/vue/example5.vue",
+      "file": "guides__cell-types__checkbox-cell-type__vue__example5.vue.json",
+      "breadcrumb": [
+        "Cell Types",
+        "Checkbox cell type"
+      ],
+      "guide": "guides/cell-types/checkbox-cell-type/checkbox-cell-type.md",
+      "guideTitle": "Checkbox cell type",
+      "exampleId": "example5",
+      "exampleTitle": "Check all in the column header",
       "docPermalink": "/checkbox-cell-type",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -18181,6 +18261,86 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/getting-started/server-side-data-row-selection/angular/example1.ts",
+      "file": "guides__getting-started__server-side-data-row-selection__angular__example1.ts.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Server-side row selection"
+      ],
+      "guide": "guides/getting-started/server-side-data-row-selection/server-side-data-row-selection.md",
+      "guideTitle": "Server-side row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/server-side-data-row-selection",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/getting-started/server-side-data-row-selection/javascript/example1.js",
+      "file": "guides__getting-started__server-side-data-row-selection__javascript__example1.js.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Server-side row selection"
+      ],
+      "guide": "guides/getting-started/server-side-data-row-selection/server-side-data-row-selection.md",
+      "guideTitle": "Server-side row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/server-side-data-row-selection",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/getting-started/server-side-data-row-selection/react/example1.tsx",
+      "file": "guides__getting-started__server-side-data-row-selection__react__example1.tsx.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Server-side row selection"
+      ],
+      "guide": "guides/getting-started/server-side-data-row-selection/server-side-data-row-selection.md",
+      "guideTitle": "Server-side row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/server-side-data-row-selection",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/getting-started/server-side-data-row-selection/javascript/example1.ts",
+      "file": "guides__getting-started__server-side-data-row-selection__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Server-side row selection"
+      ],
+      "guide": "guides/getting-started/server-side-data-row-selection/server-side-data-row-selection.md",
+      "guideTitle": "Server-side row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/server-side-data-row-selection",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/getting-started/server-side-data-row-selection/vue/example1.vue",
+      "file": "guides__getting-started__server-side-data-row-selection__vue__example1.vue.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Server-side row selection"
+      ],
+      "guide": "guides/getting-started/server-side-data-row-selection/server-side-data-row-selection.md",
+      "guideTitle": "Server-side row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/server-side-data-row-selection",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/getting-started/vue3-vuex/vue/example1.vue",
       "file": "guides__getting-started__vue3-vuex__vue__example1.vue.json",
       "breadcrumb": [
@@ -24020,6 +24180,406 @@
       "exampleId": "example3",
       "exampleTitle": "Auto-populating with template values",
       "docPermalink": "/row-prepopulating",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/angular/example1.ts",
+      "file": "guides__rows__row-selection__angular__example1.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/row-selection",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example1.js",
+      "file": "guides__rows__row-selection__javascript__example1.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/row-selection",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/react/example1.tsx",
+      "file": "guides__rows__row-selection__react__example1.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/row-selection",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example1.ts",
+      "file": "guides__rows__row-selection__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/row-selection",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/vue/example1.vue",
+      "file": "guides__rows__row-selection__vue__example1.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/row-selection",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/angular/example2.ts",
+      "file": "guides__rows__row-selection__angular__example2.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example2",
+      "exampleTitle": "Without row numbers",
+      "docPermalink": "/row-selection",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example2.js",
+      "file": "guides__rows__row-selection__javascript__example2.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example2",
+      "exampleTitle": "Without row numbers",
+      "docPermalink": "/row-selection",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/react/example2.tsx",
+      "file": "guides__rows__row-selection__react__example2.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example2",
+      "exampleTitle": "Without row numbers",
+      "docPermalink": "/row-selection",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example2.ts",
+      "file": "guides__rows__row-selection__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example2",
+      "exampleTitle": "Without row numbers",
+      "docPermalink": "/row-selection",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/vue/example2.vue",
+      "file": "guides__rows__row-selection__vue__example2.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example2",
+      "exampleTitle": "Without row numbers",
+      "docPermalink": "/row-selection",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/angular/example3.ts",
+      "file": "guides__rows__row-selection__angular__example3.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example3",
+      "exampleTitle": "In the first column",
+      "docPermalink": "/row-selection",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example3.js",
+      "file": "guides__rows__row-selection__javascript__example3.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example3",
+      "exampleTitle": "In the first column",
+      "docPermalink": "/row-selection",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/react/example3.tsx",
+      "file": "guides__rows__row-selection__react__example3.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example3",
+      "exampleTitle": "In the first column",
+      "docPermalink": "/row-selection",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example3.ts",
+      "file": "guides__rows__row-selection__javascript__example3.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example3",
+      "exampleTitle": "In the first column",
+      "docPermalink": "/row-selection",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/vue/example3.vue",
+      "file": "guides__rows__row-selection__vue__example3.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example3",
+      "exampleTitle": "In the first column",
+      "docPermalink": "/row-selection",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/angular/example4.ts",
+      "file": "guides__rows__row-selection__angular__example4.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example4",
+      "exampleTitle": "In a checkbox column of your data",
+      "docPermalink": "/row-selection",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example4.js",
+      "file": "guides__rows__row-selection__javascript__example4.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example4",
+      "exampleTitle": "In a checkbox column of your data",
+      "docPermalink": "/row-selection",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/react/example4.tsx",
+      "file": "guides__rows__row-selection__react__example4.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example4",
+      "exampleTitle": "In a checkbox column of your data",
+      "docPermalink": "/row-selection",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example4.ts",
+      "file": "guides__rows__row-selection__javascript__example4.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example4",
+      "exampleTitle": "In a checkbox column of your data",
+      "docPermalink": "/row-selection",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/vue/example4.vue",
+      "file": "guides__rows__row-selection__vue__example4.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example4",
+      "exampleTitle": "In a checkbox column of your data",
+      "docPermalink": "/row-selection",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/angular/example5.ts",
+      "file": "guides__rows__row-selection__angular__example5.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example5",
+      "exampleTitle": "Select rows with nested rows",
+      "docPermalink": "/row-selection",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example5.js",
+      "file": "guides__rows__row-selection__javascript__example5.js.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example5",
+      "exampleTitle": "Select rows with nested rows",
+      "docPermalink": "/row-selection",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/react/example5.tsx",
+      "file": "guides__rows__row-selection__react__example5.tsx.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example5",
+      "exampleTitle": "Select rows with nested rows",
+      "docPermalink": "/row-selection",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/javascript/example5.ts",
+      "file": "guides__rows__row-selection__javascript__example5.ts.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example5",
+      "exampleTitle": "Select rows with nested rows",
+      "docPermalink": "/row-selection",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/rows/row-selection/vue/example5.vue",
+      "file": "guides__rows__row-selection__vue__example5.vue.json",
+      "breadcrumb": [
+        "Rows",
+        "Row selection"
+      ],
+      "guide": "guides/rows/row-selection/row-selection.md",
+      "guideTitle": "Row selection",
+      "exampleId": "example5",
+      "exampleTitle": "Select rows with nested rows",
+      "docPermalink": "/row-selection",
       "framework": "vue",
       "displayName": "Vue 3"
     },
