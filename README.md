@@ -2,9 +2,9 @@
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/handsontable/handsontable/develop/resources/handsontable-logo-black.svg"/>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/handsontable/handsontable/develop/resources/handsontable-logo-white.svg"/>
-    <img width="280" alt="Logo of Handsontable data grid" src="https://raw.githubusercontent.com/handsontable/handsontable/develop/resources/handsontable-logo-black.svg"/>
+    <img width="280" alt="Logo of Handsontable DataGrid" src="https://raw.githubusercontent.com/handsontable/handsontable/develop/resources/handsontable-logo-black.svg"/>
   </picture>
-  <h3>Runnable code examples for the Handsontable JavaScript data grid.</h3>
+  <h3>Runnable code examples for the Handsontable DataGrid JavaScript component.</h3>
 
   <a href="https://handsontable.com">Website</a>
   &nbsp;•&nbsp;
@@ -21,9 +21,9 @@ Every example here is a real, self-contained project you can clone, run,
 and copy into your own codebase.
 
 The same examples power the live demos in the
-[Handsontable documentation](https://handsontable.com/docs) and at
+[Handsontable DataGrid documentation](https://handsontable.com/docs) and at
 **[demos.handsontable.com](https://demos.handsontable.com)**, where you can open any
-of them in the browser, edit the code, switch the Handsontable version, and share a
+of them in the browser, edit the code, switch the Handsontable DataGrid version, and share a
 permanent link. No install needed.
 
 ## Client examples
@@ -46,15 +46,15 @@ install step.
 | [`nuxt`](./examples/nuxt) | Nuxt 3 | [Open](https://demos.handsontable.com/?example=nuxt) |
 | [`astro`](./examples/astro) | Astro | [Open](https://demos.handsontable.com/?example=astro) |
 | [`remix`](./examples/remix) | Remix | [Open](https://demos.handsontable.com/?example=remix) |
-| [`ant-design`](./examples/ant-design) | Handsontable themed to match Ant Design | [Open](https://demos.handsontable.com/?example=ant-design) |
-| [`mui`](./examples/mui) | Handsontable themed to match MUI | [Open](https://demos.handsontable.com/?example=mui) |
-| [`base-web`](./examples/base-web) | Handsontable themed to match Base Web | [Open](https://demos.handsontable.com/?example=base-web) |
-| [`fluent-ui`](./examples/fluent-ui) | Handsontable themed to match Fluent UI | [Open](https://demos.handsontable.com/?example=fluent-ui) |
+| [`ant-design`](./examples/ant-design) | Handsontable DataGrid themed to match Ant Design | [Open](https://demos.handsontable.com/?example=ant-design) |
+| [`mui`](./examples/mui) | Handsontable DataGrid themed to match MUI | [Open](https://demos.handsontable.com/?example=mui) |
+| [`base-web`](./examples/base-web) | Handsontable DataGrid themed to match Base Web | [Open](https://demos.handsontable.com/?example=base-web) |
+| [`fluent-ui`](./examples/fluent-ui) | Handsontable DataGrid themed to match Fluent UI | [Open](https://demos.handsontable.com/?example=fluent-ui) |
 
 ## Server examples
 
 Each folder in [`server-examples/`](./server-examples) is a full stack: a backend
-plus a Handsontable frontend, demonstrating server-side **pagination, sorting,
+plus a Handsontable DataGrid frontend, demonstrating server-side **pagination, sorting,
 filtering and CRUD** through the `dataProvider` plugin. Useful when your dataset is
 too large to send to the browser at once.
 
@@ -114,14 +114,14 @@ with it.
 **[demos.handsontable.com](https://demos.handsontable.com)** runs every example in
 this repository live, in the browser:
 
-- **Any Handsontable version**: switch versions and watch the same code re-render.
+- **Any Handsontable DataGrid version**: switch versions and watch the same code re-render.
 - **Two runtimes behind one editor**: simple examples bundle in the browser with
   the open-source [Sandpack](https://sandpack.codesandbox.io/) bundler; the
   meta-framework examples (Next.js, Nuxt, Astro, Remix, Angular) run a real dev
   server in a container, so SSR behaves the way it does locally.
 - **Permanent share links**: save an edited demo and link to it.
 
-It also renders every code example from the Handsontable documentation guides. The
+It also renders every code example from the Handsontable DataGrid documentation guides. The
 system is self-hosted and lives in [`runner/`](./runner); its
 [README](./runner/README.md) and [`docs/`](./runner/docs) cover the design.
 
@@ -144,13 +144,13 @@ There's a registration step that's easy to miss and fails silently if skipped.
 The example code in this repository is MIT-licensed, see [LICENSE](./LICENSE). Copy
 it, change it, ship it.
 
-Handsontable itself is separate, commercial software, dual-licensed:
+Handsontable DataGrid itself is separate, commercial software, dual-licensed:
 
 - **Free** for non-commercial use such as teaching, academic research and
   evaluation: [read the license](https://github.com/handsontable/handsontable/blob/master/handsontable-non-commercial-license.pdf).
 - **Commercial**, with support and maintenance: see [pricing](https://handsontable.com/pricing).
 
-The examples install Handsontable under the non-commercial evaluation terms. Using
+The examples install Handsontable DataGrid under the non-commercial evaluation terms. Using
 one as the basis for a commercial product means buying a license.
 
 ## Get help
