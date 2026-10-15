@@ -341,7 +341,11 @@ Demos must be embeddable as an iframe on docs pages such as
 - `GET /embed/:id` serves the read-only rendered preview (no editor chrome),
   prebuilt-static from R2 — same cheap artifact as `/d/:id`.
 - Embedding is restricted with a response header:
-  `Content-Security-Policy: frame-ancestors https://handsontable.com https://*.handsontable.com http://localhost:*`.
+  `Content-Security-Policy: frame-ancestors https://handsontable.com https://*.handsontable.com https://*.handsontable-docs-staging.pages.dev https://*.handsoncode.workers.dev http://localhost:*`.
+  The two staging entries are the docs staging site and the handsontable.com
+  PR previews (`<branch>-handsontable-com-v3-staging.handsoncode.workers.dev`),
+  so embeds render before a page ships. The value is `EMBED_ALLOWED_ANCESTORS`
+  in `workers/api/wrangler.jsonc`.
   `frame-ancestors` is the authoritative, cross-origin-capable control (it
   supersedes `X-Frame-Options`, which can't allow a specific third-party origin).
 - Defense in depth: reject when `Sec-Fetch-Dest: iframe` is present with a
