@@ -806,6 +806,14 @@ export function themeModulePath(files: Record<string, string>): string {
  *  module, or clear one, has to consider both (DEV-2571). */
 const THEME_MODULE_PATHS = [`/${THEME_MODULE_BASENAME}.ts`, `/${THEME_MODULE_BASENAME}.js`];
 
+/** Does this workspace hold the theme module and nothing else? That is the empty
+ *  placeholder that stands in while an example is fetched, after the panel wrote
+ *  into it. */
+export function holdsOnlyThemeModule(files: Record<string, string>): boolean {
+  const paths = Object.keys(files);
+  return paths.length > 0 && paths.every((path) => THEME_MODULE_PATHS.includes(path));
+}
+
 /**
  * Is a *live* theme module wired into these files?
  *

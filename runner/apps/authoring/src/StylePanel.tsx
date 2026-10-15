@@ -96,6 +96,16 @@ const BRIDGE_ACK_TIMEOUT_MS = 300;
  *  drag into one rebuild, short enough to read as immediate on a single click. */
 const FLUSH_DELAY_MS = 250;
 
+/** The theme saved by the last session, or the default when there is none. */
+export function readStoredTheme(): ThemeState {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? migrateThemeState(JSON.parse(saved)) : DEFAULT_THEME;
+  } catch {
+    return DEFAULT_THEME;
+  }
+}
+
 function writeStorage(state: ThemeState) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -129,9 +139,13 @@ export interface StylePanelProps {
    *  (DEV-2560) — see `theme/presetsFor.ts`. */
   htVersion: string;
   getFiles: () => FilesMap;
+  /** Changes whenever the whole workspace is replaced, which takes the theme
+   *  module and its wiring with it — the panel applies the theme again. */
+  workspaceKey: number;
   /** Write a file into the editor + running preview. `{ quiet: true }` keeps the
-   *  file and skips the rebuild, for a change the bridge has already applied. */
-  applyEdit: (path: string, contents: string, opts?: WriteFileOptions) => void;
+   *  file and skips the rebuild, for a change the bridge has already applied.
+   *  `reconcile` marks a stored theme re-applied, which is not the visitor's edit. */
+  applyEdit: (path: string, contents: string, opts?: WriteFileOptions, reconcile?: boolean) => void;
   /** Send a message into the preview frame (the live theme patch). */
   postToPreview: (message: unknown) => void;
   /** Subscribe to messages coming back out of it; returns an unsubscribe. */
@@ -147,6 +161,7 @@ export function StylePanel({
   token,
   htVersion,
   getFiles,
+  workspaceKey,
   applyEdit,
   postToPreview,
   onPreviewMessage,
@@ -155,14 +170,7 @@ export function StylePanel({
 }: StylePanelProps) {
   // Restored across reloads, as theme-builder does — a theme is worth several
   // minutes of fiddling and losing it to a refresh is its own small tragedy.
-  const [state, setState] = useState<ThemeState>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      return saved ? migrateThemeState(JSON.parse(saved)) : DEFAULT_THEME;
-    } catch {
-      return DEFAULT_THEME;
-    }
-  });
+  const [state, setState] = useState<ThemeState>(readStoredTheme);
   const [prompt, setPrompt] = useState("");
   // The AI tab's composer grows with the prompt, as the chat panel's does.
   const promptRef = useAutoGrow(prompt);
@@ -261,12 +269,13 @@ export function StylePanel({
 
   // A theme restored from a previous session describes files this demo may not
   // have — reopening the panel, or opening a different example, must reconcile
-  // the two rather than wait for the next edit to notice.
+  // the two rather than wait for the next edit to notice. A load replaces every
+  // file, so this runs again on each new workspace.
   useEffect(() => {
-    if (!isPristine(state)) apply(state);
-    // Mount only: later changes go through update(), which applies as it goes.
+    if (!isPristine(stateRef.current)) apply(stateRef.current);
+    // Edits between loads go through update(), which applies as it goes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [workspaceKey]);
 
   // The snippet has to be in the demo's own language (DEV-2216), which is a
   // property of the files it sits next to — and those can be replaced while
@@ -370,7 +379,7 @@ export function StylePanel({
    */
   function apply(next: ThemeState, prev?: ThemeState) {
     const { changes, linked } = buildThemeChanges(getFiles(), next);
-    for (const change of changes) applyEdit(change.path, change.contents, { quiet: true });
+    for (const change of changes) applyEdit(change.path, change.contents, { quiet: true }, prev === undefined);
     setApplied({ linked });
 
     const live = linked && bridgeReady.current && prev !== undefined && !needsRebuild(prev, next);

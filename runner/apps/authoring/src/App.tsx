@@ -55,8 +55,15 @@ import { formFooter, ghostButton, primaryButton } from "./formStyles.js";
 import { AdminPanel } from "./Admin.js";
 import { applyDroppedFiles } from "./addFiles.js";
 import { AskAiButton, ChatPanel } from "./Chat.js";
-import { StyleButton, StylePanel } from "./StylePanel.js";
-import { buildResetChanges, hasWiredTheme, THEME_MODULE_BASENAME } from "./theme/codegen.js";
+import { readStoredTheme, StyleButton, StylePanel } from "./StylePanel.js";
+import {
+  buildResetChanges,
+  buildThemeChanges,
+  hasWiredTheme,
+  holdsOnlyThemeModule,
+  isPristine,
+  THEME_MODULE_BASENAME,
+} from "./theme/codegen.js";
 import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { GuidePage } from "./Guide.js";
@@ -1441,7 +1448,7 @@ function Authoring({
   /** `example.engaged` — "first code edit, or preview ready plus 30s"
    *  (ADR-0042 §2), whichever comes first; fires once per workspace
    *  (`exampleEngagedRef`, reset on every `loadWorkspace`). Called from
-   *  `markDirty` (first edit) and from the preview-ready timer below. */
+   *  `markDirtyAs` (first edit) and from the preview-ready timer below. */
   const noteExampleEngaged = useCallback(() => {
     if (exampleEngagedRef.current) return;
     exampleEngagedRef.current = true;
@@ -1482,11 +1489,11 @@ function Authoring({
    *  The no-paths call is still accepted — it means "unsaved, but no tab to dot" —
    *  but nothing uses it since DEV-2495: the Edit info dialog, its only caller, now
    *  writes its own PATCH instead of staging an edit for the workspace save. */
-  const markDirty = useCallback((...touched: string[]) => {
-    // ADR-0042 §2 `example.engaged`'s "first code edit" half — BEFORE
-    // `dirtyRef.current` flips, so this only ever fires on the transition
-    // from clean to dirty, not on every subsequent keystroke.
-    if (!dirtyRef.current) noteExampleEngaged();
+  const markDirtyAs = useCallback((engaged: boolean, touched: string[]) => {
+    // ADR-0042 §2 `example.engaged`'s "first code edit" half. Not gated on the
+    // clean-to-dirty transition: a re-applied theme dirties the workspace with no
+    // edit, and `noteExampleEngaged` fires once per workspace on its own.
+    if (engaged) noteExampleEngaged();
     setDirty(true);
     dirtyRef.current = true;
     if (!touched.length) return;
@@ -1496,6 +1503,7 @@ function Authoring({
       return next;
     });
   }, [noteExampleEngaged]);
+  const markDirty = useCallback((...touched: string[]) => markDirtyAs(true, touched), [markDirtyAs]);
 
   /** Saved or replaced — nothing is outstanding. */
   const clearDirty = useCallback(() => {
@@ -1503,6 +1511,27 @@ function Authoring({
     dirtyRef.current = false;
     setDirtyPaths((prev) => (prev.size ? new Set() : prev));
   }, []);
+
+  // A theme the Style panel wrote while the example was still being fetched sits
+  // in the placeholder that `loadWorkspace` replaces. The open panel carries it
+  // over itself; a closed one cannot, so this does. Declared above the
+  // runtime-mount effect for the same reason as the floor strip above.
+  const carryThemeRef = useRef(false);
+  useEffect(() => {
+    if (!carryThemeRef.current) return;
+    carryThemeRef.current = false;
+    if (styleOpen || !themingSupported) return;
+    const theme = readStoredTheme();
+    if (isPristine(theme)) return;
+    const { changes } = buildThemeChanges(filesRef.current, theme);
+    const next = { ...filesRef.current };
+    for (const change of changes) next[change.path] = change.contents;
+    filesRef.current = next;
+    setFiles(next);
+    markDirtyAs(false, changes.map((change) => change.path));
+    // Once per installed workspace; the other values are read as they stand.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mountGen]);
 
   // ADR-0042 §2 `example.engaged`'s "preview ready plus 30s" half. Restarts
   // on every `status === "ready"` transition; `noteExampleEngaged`'s own
@@ -1568,6 +1597,7 @@ function Authoring({
         setImportedTitle(null);
         setImportSkipped([]);
       }
+      carryThemeRef.current = holdsOnlyThemeModule(filesRef.current);
       filesRef.current = nextFiles; // ensure the mount effect reads the new files
       // A new workspace has not had anything taken out of it. Cleared here rather
       // than in each picker because every install lands here — starter, docs,
@@ -2769,11 +2799,11 @@ function Authoring({
   // triggered the write, not by this shared writer — which is why the
   // recording lives at each App-owned callsite and this one stays undecorated.
   const writeFile = useCallback(
-    (path: string, contents: string, opts?: WriteFileOptions) => {
+    (path: string, contents: string, opts?: WriteFileOptions, engaged = true) => {
       const next = { ...filesRef.current, [path]: contents };
       filesRef.current = next;
       setFiles(next);
-      markDirty(path);
+      markDirtyAs(engaged, [path]);
       try {
         runtimeRef.current?.writeFile(path, contents, opts);
       } catch {
@@ -2786,7 +2816,7 @@ function Authoring({
       noteDemoEdit();
       showSyncing();
     },
-    [markDirty, showSyncing],
+    [markDirtyAs, showSyncing],
   );
 
   /** Bound straight to `EditorShell`'s `onEdit` — a keystroke in the code
@@ -2814,7 +2844,7 @@ function Authoring({
    *  does not — so this wrapper reuses that existing signal rather than
    *  requiring a StylePanel.tsx change to carry a new one. */
   const onEditFromStyle = useCallback(
-    (path: string, contents: string, opts?: WriteFileOptions) => {
+    (path: string, contents: string, opts?: WriteFileOptions, reconcile?: boolean) => {
       recordEditorEvent({
         kind: "edit",
         source: opts?.quiet ? "style" : "style-reset",
@@ -2822,7 +2852,7 @@ function Authoring({
         quiet: Boolean(opts?.quiet),
         size: contents.length,
       });
-      writeFile(path, contents, opts);
+      writeFile(path, contents, opts, !reconcile);
     },
     [writeFile],
   );
@@ -3643,6 +3673,7 @@ function Authoring({
           token={getToken()}
           htVersion={version}
           getFiles={() => filesRef.current}
+          workspaceKey={mountGen}
           applyEdit={onEditFromStyle}
           postToPreview={postToPreview}
           onPreviewMessage={onPreviewMessage}
