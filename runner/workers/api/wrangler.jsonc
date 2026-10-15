@@ -67,7 +67,12 @@
     // requires SENTRY_ENVIRONMENT, which exists only as a `--var` on the `deploy`
     // script. Nothing in this file, on its own, can turn reporting on.
     "ERROR_REPORTING_DSN": "https://da4d7c549a5ac69c61bfe44be68873bd@o95873.ingest.us.sentry.io/4511806997135360",
-    "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com https://*.handsontable-docs-staging.pages.dev http://localhost:*",
+    // Who may iframe /embed/:id. Besides handsontable.com: docs staging (Pages)
+    // and the handsontable.com site's PR preview URLs, which Cloudflare serves
+    // only on workers.dev (<branch>-handsontable-com-v3-staging.handsoncode.workers.dev).
+    // CSP can't wildcard part of a label, so that entry covers every Worker on
+    // the account that owns the handsoncode subdomain.
+    "EMBED_ALLOWED_ANCESTORS": "https://handsontable.com https://*.handsontable.com https://*.handsontable-docs-staging.pages.dev https://*.handsoncode.workers.dev http://localhost:*",
     // Wildcard base host for Tier-2 container preview URLs
     // (<port>-<sandboxId>-<token>.demos.handsontable.com).
     "PREVIEW_HOST": "demos.handsontable.com",
