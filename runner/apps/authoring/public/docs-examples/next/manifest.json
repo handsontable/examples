@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-b65a4e0-20261014",
-  "count": 1604,
+  "hotVersion": "0.0.0-next-fa6f901-20261014",
+  "count": 1609,
   "examples": [
     {
       "bucket": "next",
@@ -11399,6 +11399,86 @@
       "guideTitle": "Column freezing",
       "exampleId": "example5",
       "exampleTitle": "Restore the column position on unfreeze",
+      "docPermalink": "/column-freezing",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/angular/example6.ts",
+      "file": "guides__columns__column-freezing__angular__example6.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example6",
+      "exampleTitle": "Freeze columns by dragging",
+      "docPermalink": "/column-freezing",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/javascript/example6.js",
+      "file": "guides__columns__column-freezing__javascript__example6.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example6",
+      "exampleTitle": "Freeze columns by dragging",
+      "docPermalink": "/column-freezing",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/react/example6.tsx",
+      "file": "guides__columns__column-freezing__react__example6.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example6",
+      "exampleTitle": "Freeze columns by dragging",
+      "docPermalink": "/column-freezing",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/javascript/example6.ts",
+      "file": "guides__columns__column-freezing__javascript__example6.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example6",
+      "exampleTitle": "Freeze columns by dragging",
+      "docPermalink": "/column-freezing",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-freezing/vue/example6.vue",
+      "file": "guides__columns__column-freezing__vue__example6.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column freezing"
+      ],
+      "guide": "guides/columns/column-freezing/column-freezing.md",
+      "guideTitle": "Column freezing",
+      "exampleId": "example6",
+      "exampleTitle": "Freeze columns by dragging",
       "docPermalink": "/column-freezing",
       "framework": "vue",
       "displayName": "Vue 3"
