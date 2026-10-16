@@ -1,6 +1,6 @@
 # AGENTS.md, handsontable/examples
 
-This repository holds runnable Handsontable example projects (`examples/`,
+This repository holds runnable Handsontable DataGrid example projects (`examples/`,
 `server-examples/`) and the self-hosted demo runner behind
 demos.handsontable.com (`runner/`, see [`runner/AGENTS.md`](./runner/AGENTS.md)
 for that subsystem specifically).
