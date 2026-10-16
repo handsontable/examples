@@ -10,6 +10,8 @@ WORKDIR /app
 RUN node /usr/local/lib/node_modules/corepack/dist/corepack.js enable --install-directory /usr/local/bin \
   && node /usr/local/lib/node_modules/corepack/dist/corepack.js prepare pnpm@10.34.5 --activate
 
+COPY prime-dev-cache.sh /usr/local/bin/prime-dev-cache.sh
+
 # react-js (bucket 18)
 COPY baked/react-js-18/package.json baked/react-js-18/pnpm-lock.yaml /baked/react-js-18/
 RUN cd /baked/react-js-18 && pnpm install --frozen-lockfile
@@ -37,10 +39,14 @@ RUN cd /baked/angular-18 && pnpm install --frozen-lockfile
 # next.js (bucket 18)
 COPY baked/next-js-18/package.json baked/next-js-18/pnpm-lock.yaml /baked/next-js-18/
 RUN cd /baked/next-js-18 && pnpm install --frozen-lockfile
+COPY baked/next-js-18/prime/ /prime/next-js-18/
+RUN prime-dev-cache.sh next-js-18 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0" && rm -rf /prime/next-js-18
 
 # next-shadcn.js (bucket 18)
 COPY baked/next-shadcn-js-18/package.json baked/next-shadcn-js-18/pnpm-lock.yaml /baked/next-shadcn-js-18/
 RUN cd /baked/next-shadcn-js-18 && pnpm install --frozen-lockfile
+COPY baked/next-shadcn-js-18/prime/ /prime/next-shadcn-js-18/
+RUN prime-dev-cache.sh next-shadcn-js-18 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0" && rm -rf /prime/next-shadcn-js-18
 
 # astro (bucket 18)
 COPY baked/astro-18/package.json baked/astro-18/pnpm-lock.yaml /baked/astro-18/
