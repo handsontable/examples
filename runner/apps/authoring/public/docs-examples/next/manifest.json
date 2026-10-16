@@ -2,7 +2,7 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-7e99df7-20261016",
+  "hotVersion": "0.0.0-next-7801196-20261016",
   "count": 1644,
   "examples": [
     {
@@ -22185,10 +22185,10 @@
       "breadcrumb": [
         "Recipes",
         "Themes",
-        "Handsontable with Tabler Icons"
+        "Handsontable DataGrid with Tabler Icons"
       ],
       "guide": "recipes/themes/tabler-icons/tabler-icons.md",
-      "guideTitle": "Handsontable with Tabler Icons",
+      "guideTitle": "Handsontable DataGrid with Tabler Icons",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/recipes/themes/tabler-icons",
@@ -22202,10 +22202,10 @@
       "breadcrumb": [
         "Recipes",
         "Themes",
-        "Handsontable with Tabler Icons"
+        "Handsontable DataGrid with Tabler Icons"
       ],
       "guide": "recipes/themes/tabler-icons/tabler-icons.md",
-      "guideTitle": "Handsontable with Tabler Icons",
+      "guideTitle": "Handsontable DataGrid with Tabler Icons",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/recipes/themes/tabler-icons",
@@ -22219,10 +22219,10 @@
       "breadcrumb": [
         "Recipes",
         "Themes",
-        "Handsontable with Tabler Icons"
+        "Handsontable DataGrid with Tabler Icons"
       ],
       "guide": "recipes/themes/tabler-icons/tabler-icons.md",
-      "guideTitle": "Handsontable with Tabler Icons",
+      "guideTitle": "Handsontable DataGrid with Tabler Icons",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/recipes/themes/tabler-icons",
@@ -22236,10 +22236,10 @@
       "breadcrumb": [
         "Recipes",
         "Themes",
-        "Handsontable with Tabler Icons"
+        "Handsontable DataGrid with Tabler Icons"
       ],
       "guide": "recipes/themes/tabler-icons/tabler-icons.md",
-      "guideTitle": "Handsontable with Tabler Icons",
+      "guideTitle": "Handsontable DataGrid with Tabler Icons",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/recipes/themes/tabler-icons",
@@ -22253,10 +22253,10 @@
       "breadcrumb": [
         "Recipes",
         "Themes",
-        "Handsontable with Tabler Icons"
+        "Handsontable DataGrid with Tabler Icons"
       ],
       "guide": "recipes/themes/tabler-icons/tabler-icons.md",
-      "guideTitle": "Handsontable with Tabler Icons",
+      "guideTitle": "Handsontable DataGrid with Tabler Icons",
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/recipes/themes/tabler-icons",
