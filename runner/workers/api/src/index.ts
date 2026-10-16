@@ -30,7 +30,7 @@ import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { classifyPreviewBootFailure, isPreviewPortUnreachable } from "./preview-boot.js";
 import { bootStatusCommand, splitBootStatus } from "./boot-phase.js";
-import { bootScript } from "./boot-script.js";
+import { bootScript, matchesPrimedContext } from "./boot-script.js";
 import {
   AT_CAPACITY_CODE,
   atCapacityMessage,
@@ -1072,7 +1072,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             bakedKey,
             installLines: installDependencies,
             devCmd: dev.cmd,
-            pristine: !metadataDiffersFromStarter,
+            restoreDevCache: matchesPrimedContext(bakedKey, bakedContext),
           });
           // Append the boot script's own exit code as a sentinel line so /status
           // can detect a failed install/boot (e.g. pnpm can't resolve the pinned

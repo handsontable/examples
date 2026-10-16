@@ -23,7 +23,7 @@ const deadline = Date.now() + 240000;
 (function probe() {
   const q = http.get({ host: '127.0.0.1', port: ${port}, path: '/', headers: { host: 'localhost:${port}' }, timeout: 240000 }, (s) => {
     s.resume();
-    process.exit(s.statusCode < 500 ? 0 : 1);
+    process.exit(s.statusCode < 400 ? 0 : 1);
   });
   q.on('timeout', () => { q.destroy(); process.exit(1); });
   q.on('error', () => (Date.now() < deadline ? setTimeout(probe, 500) : process.exit(1)));
@@ -33,19 +33,34 @@ const deadline = Date.now() + 240000;
 # Turbopack persists its cache in the background after the compile, and a stop
 # before that loses it. Wait until the cache stops growing, then stop gracefully
 # so the final flush runs.
+cache=.next/dev/cache/turbopack
 last=-1
 stable=0
 for _ in $(seq 1 60); do
-  size=$(du -sk .next 2> /dev/null | cut -f1)
+  size=$(du -sk "$cache" 2> /dev/null | cut -f1)
   if [ "$size" = "$last" ]; then stable=$((stable + 1)); else stable=0; fi
   [ "$stable" -ge 3 ] && break
   last=$size
   sleep 2
 done
-kill -INT "$dev"
-wait "$dev" || true
+[ "$stable" -ge 3 ] || { echo "prime-dev-cache: cache never settled" >&2; exit 1; }
 
-test -d .next
+kill -INT "$dev" 2> /dev/null || true
+for _ in $(seq 1 30); do
+  kill -0 "$dev" 2> /dev/null || break
+  sleep 1
+done
+kill -KILL "$dev" 2> /dev/null || true
+wait "$dev" 2> /dev/null || true
+# pnpm may exit before the server it spawned; the cache is complete only once that is gone too.
+for _ in $(seq 1 30); do
+  pgrep -f "[n]ext-server" > /dev/null || break
+  sleep 1
+done
+
+# A cache that is only a skeleton would ship silently and buy nothing.
+[ "$(du -sk "$cache" | cut -f1)" -gt 1024 ] || { echo "prime-dev-cache: cache is empty" >&2; exit 1; }
+rm -f .next/dev/lock
 mv .next "/baked/$key/.next"
 cd /
 find /app -mindepth 1 -delete

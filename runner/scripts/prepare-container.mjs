@@ -212,7 +212,9 @@ function writeBakedContexts() {
         if (file === "/package.json" || file === "/pnpm-lock.yaml") continue;
         const target = path.join(primeDir, file);
         fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.writeFileSync(target, typeof content === "string" ? content : content.code);
+        const text = typeof content === "string" ? content : content?.code;
+        if (typeof text !== "string") throw new Error(`prime source ${file} of ${e.framework} has no text content`);
+        fs.writeFileSync(target, text);
       }
       step += `\nCOPY baked/${key}/prime/ /prime/${key}/\nRUN prime-dev-cache.sh ${key} ${DEV[e.framework].port} ${JSON.stringify(DEV[e.framework].cmd)} && rm -rf /prime/${key}`;
     }
