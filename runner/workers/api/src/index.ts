@@ -30,6 +30,7 @@ import { demoListQuery, parseDemoScope } from "./demos-list.js";
 import { errorPageResponse, wantsHtmlError } from "./error-page.js";
 import { classifyPreviewBootFailure, isPreviewPortUnreachable } from "./preview-boot.js";
 import { bootStatusCommand, splitBootStatus } from "./boot-phase.js";
+import { bootScript } from "./boot-script.js";
 import {
   AT_CAPACITY_CODE,
   atCapacityMessage,
@@ -1066,17 +1067,13 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             : metadataDiffersFromStarter
               ? [`echo '::no lockfile for custom metadata; installing non-frozen::'; pnpm install --no-frozen-lockfile`]
               : [`echo '::error::generated starter is missing its lockfile; refusing non-frozen install' >&2; exit 1`];
-          const script = [
-            `set -e`,
-            `cd ${CONTAINER_ROOT}`,
-            `echo '::seeding immutable baked dependencies::'`,
-            `rm -rf ./node_modules`,
-            `cp -al /baked/${bakedKey}/node_modules ./node_modules`,
-            `echo '::reconciling dependencies with pnpm::'`,
-            ...installDependencies,
-            `echo '::starting dev server::'`,
-            dev.cmd,
-          ].join("\n");
+          const script = bootScript({
+            root: CONTAINER_ROOT,
+            bakedKey,
+            installLines: installDependencies,
+            devCmd: dev.cmd,
+            pristine: !metadataDiffersFromStarter,
+          });
           // Append the boot script's own exit code as a sentinel line so /status
           // can detect a failed install/boot (e.g. pnpm can't resolve the pinned
           // Handsontable version) instead of polling "not ready yet" forever.
