@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-7a840b4-20261019",
-  "count": 1644,
+  "hotVersion": "0.0.0-next-22a2aba-20261019",
+  "count": 1649,
   "examples": [
     {
       "bucket": "next",
@@ -18096,6 +18096,86 @@
       "exampleId": "example1",
       "exampleTitle": "Standard example",
       "docPermalink": "/vue-pinia",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/getting-started/view-state/angular/example1.ts",
+      "file": "guides__getting-started__view-state__angular__example1.ts.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Save and restore the view state"
+      ],
+      "guide": "guides/getting-started/view-state/view-state.md",
+      "guideTitle": "Save and restore the view state",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/view-state",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/getting-started/view-state/javascript/example1.js",
+      "file": "guides__getting-started__view-state__javascript__example1.js.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Save and restore the view state"
+      ],
+      "guide": "guides/getting-started/view-state/view-state.md",
+      "guideTitle": "Save and restore the view state",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/view-state",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/getting-started/view-state/react/example1.tsx",
+      "file": "guides__getting-started__view-state__react__example1.tsx.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Save and restore the view state"
+      ],
+      "guide": "guides/getting-started/view-state/view-state.md",
+      "guideTitle": "Save and restore the view state",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/view-state",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/getting-started/view-state/javascript/example1.ts",
+      "file": "guides__getting-started__view-state__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Save and restore the view state"
+      ],
+      "guide": "guides/getting-started/view-state/view-state.md",
+      "guideTitle": "Save and restore the view state",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/view-state",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/getting-started/view-state/vue/example1.vue",
+      "file": "guides__getting-started__view-state__vue__example1.vue.json",
+      "breadcrumb": [
+        "Getting Started",
+        "Save and restore the view state"
+      ],
+      "guide": "guides/getting-started/view-state/view-state.md",
+      "guideTitle": "Save and restore the view state",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/view-state",
       "framework": "vue",
       "displayName": "Vue 3"
     },
