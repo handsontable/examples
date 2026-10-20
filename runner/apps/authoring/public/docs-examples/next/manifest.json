@@ -3,7 +3,7 @@
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "0.0.0-next-d4c3c26-20261020",
-  "count": 1659,
+  "count": 1654,
   "examples": [
     {
       "bucket": "next",
@@ -1003,7 +1003,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example2",
-      "exampleTitle": "Export as a JavaScript Blob object",
+      "exampleTitle": "2. Export as a Blob or a string",
       "docPermalink": "/export-to-csv",
       "framework": "angular",
       "displayName": "Angular"
@@ -1019,7 +1019,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example2",
-      "exampleTitle": "Export as a JavaScript Blob object",
+      "exampleTitle": "2. Export as a Blob or a string",
       "docPermalink": "/export-to-csv",
       "framework": "javascript",
       "displayName": "JavaScript"
@@ -1035,7 +1035,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example2",
-      "exampleTitle": "Export as a JavaScript Blob object",
+      "exampleTitle": "2. Export as a Blob or a string",
       "docPermalink": "/export-to-csv",
       "framework": "react",
       "displayName": "React (TS)"
@@ -1051,7 +1051,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example2",
-      "exampleTitle": "Export as a JavaScript Blob object",
+      "exampleTitle": "2. Export as a Blob or a string",
       "docPermalink": "/export-to-csv",
       "framework": "typescript",
       "displayName": "TypeScript"
@@ -1067,7 +1067,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example2",
-      "exampleTitle": "Export as a JavaScript Blob object",
+      "exampleTitle": "2. Export as a Blob or a string",
       "docPermalink": "/export-to-csv",
       "framework": "vue",
       "displayName": "Vue 3"
@@ -1083,7 +1083,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example3",
-      "exampleTitle": "Export as a string",
+      "exampleTitle": "3. Prevent CSV injection",
       "docPermalink": "/export-to-csv",
       "framework": "angular",
       "displayName": "Angular"
@@ -1099,7 +1099,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example3",
-      "exampleTitle": "Export as a string",
+      "exampleTitle": "3. Prevent CSV injection",
       "docPermalink": "/export-to-csv",
       "framework": "javascript",
       "displayName": "JavaScript"
@@ -1115,7 +1115,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example3",
-      "exampleTitle": "Export as a string",
+      "exampleTitle": "3. Prevent CSV injection",
       "docPermalink": "/export-to-csv",
       "framework": "react",
       "displayName": "React (TS)"
@@ -1131,7 +1131,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example3",
-      "exampleTitle": "Export as a string",
+      "exampleTitle": "3. Prevent CSV injection",
       "docPermalink": "/export-to-csv",
       "framework": "typescript",
       "displayName": "TypeScript"
@@ -1147,87 +1147,7 @@
       "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
       "guideTitle": "Export to CSV",
       "exampleId": "example3",
-      "exampleTitle": "Export as a string",
-      "docPermalink": "/export-to-csv",
-      "framework": "vue",
-      "displayName": "Vue 3"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/accessories-and-menus/export-to-csv/angular/example4.ts",
-      "file": "guides__accessories-and-menus__export-to-csv__angular__example4.ts.json",
-      "breadcrumb": [
-        "Accessories And Menus",
-        "Export to CSV"
-      ],
-      "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
-      "guideTitle": "Export to CSV",
-      "exampleId": "example4",
-      "exampleTitle": "Prevent CSV injection attack",
-      "docPermalink": "/export-to-csv",
-      "framework": "angular",
-      "displayName": "Angular"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/accessories-and-menus/export-to-csv/javascript/example4.js",
-      "file": "guides__accessories-and-menus__export-to-csv__javascript__example4.js.json",
-      "breadcrumb": [
-        "Accessories And Menus",
-        "Export to CSV"
-      ],
-      "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
-      "guideTitle": "Export to CSV",
-      "exampleId": "example4",
-      "exampleTitle": "Prevent CSV injection attack",
-      "docPermalink": "/export-to-csv",
-      "framework": "javascript",
-      "displayName": "JavaScript"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/accessories-and-menus/export-to-csv/react/example4.tsx",
-      "file": "guides__accessories-and-menus__export-to-csv__react__example4.tsx.json",
-      "breadcrumb": [
-        "Accessories And Menus",
-        "Export to CSV"
-      ],
-      "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
-      "guideTitle": "Export to CSV",
-      "exampleId": "example4",
-      "exampleTitle": "Prevent CSV injection attack",
-      "docPermalink": "/export-to-csv",
-      "framework": "react",
-      "displayName": "React (TS)"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/accessories-and-menus/export-to-csv/javascript/example4.ts",
-      "file": "guides__accessories-and-menus__export-to-csv__javascript__example4.ts.json",
-      "breadcrumb": [
-        "Accessories And Menus",
-        "Export to CSV"
-      ],
-      "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
-      "guideTitle": "Export to CSV",
-      "exampleId": "example4",
-      "exampleTitle": "Prevent CSV injection attack",
-      "docPermalink": "/export-to-csv",
-      "framework": "typescript",
-      "displayName": "TypeScript"
-    },
-    {
-      "bucket": "next",
-      "docsPath": "guides/accessories-and-menus/export-to-csv/vue/example4.vue",
-      "file": "guides__accessories-and-menus__export-to-csv__vue__example4.vue.json",
-      "breadcrumb": [
-        "Accessories And Menus",
-        "Export to CSV"
-      ],
-      "guide": "guides/accessories-and-menus/export-to-csv/export-to-csv.md",
-      "guideTitle": "Export to CSV",
-      "exampleId": "example4",
-      "exampleTitle": "Prevent CSV injection attack",
+      "exampleTitle": "3. Prevent CSV injection",
       "docPermalink": "/export-to-csv",
       "framework": "vue",
       "displayName": "Vue 3"
