@@ -22,15 +22,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        context: [head, pre-455]
+        context: [head, master]
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Use the containers/live context from before the cache prime
-        if: matrix.context == 'pre-455'
-        run: git checkout 8da88ed96 -- runner/containers/live
+      - name: Use the containers/live context from master
+        if: matrix.context == 'master'
+        run: git checkout origin/master -- runner/containers/live
+
+      - name: Switch Docker to the containerd image store
+        run: |
+          cat /etc/docker/daemon.json 2>/dev/null || echo "{}"
+          { cat /etc/docker/daemon.json 2>/dev/null || echo "{}"; } \
+            | jq '.features["containerd-snapshotter"] = true' | sudo tee /etc/docker/daemon.json.new > /dev/null
+          sudo mv /etc/docker/daemon.json.new /etc/docker/daemon.json
+          sudo systemctl restart docker
 
       - name: Docker setup
         run: |
@@ -45,7 +53,7 @@ jobs:
       - name: Build containers/live
         run: |
           ( while sleep 10; do
-              echo "mon: $(df -h / | awk 'NR==2 {print "disk used " $3 " avail " $4}'), $(free -m | awk '/^Mem:/ {print "mem used " $3 " / " $2 " MB"}'), dockerd rss $(ps -C dockerd -o rss= | awk '{s+=$1} END {print int(s/1024)}') MB"
+              echo "mon: $(df -h / | awk 'NR==2 {print "disk used " $3 " avail " $4}'), $(free -m | awk '/^Mem:/ {print "mem used " $3 " / " $2 " MB"}'), dockerd rss $(ps -C dockerd -o rss= | awk '{s+=$1} END {print int(s/1024)}') MB, containerd rss $(ps -C containerd -o rss= | awk '{s+=$1} END {print int(s/1024)}') MB"
             done ) &
           monitor=$!
           docker build --platform linux/amd64 -t live-image-check runner/containers/live
