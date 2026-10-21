@@ -42,6 +42,15 @@ const RUNNER_DIR = path.resolve(__dirname, "..");
 // Base image tag MUST match the installed @cloudflare/sandbox version.
 const SANDBOX_IMAGE = "docker.io/cloudflare/sandbox:0.12.3";
 const PNPM_VERSION = "10.34.5";
+// The sandbox base image trails Node security releases, so both sandbox-based
+// images (live and builder) replace its Node with the official linux-x64
+// tarball. The sha256 comes from
+// https://nodejs.org/dist/v<version>/SHASUMS256.txt. Keep
+// containers/builder/Dockerfile in sync; pipeline/container-node-pin.test.mjs
+// fails when it drifts.
+const NODE_VERSION = "22.23.4";
+const NODE_SHA256 = "b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406";
+const NODE_TARBALL = `node-v${NODE_VERSION}-linux-x64.tar.gz`;
 // sandbox:0.12.3 bundles Corepack but omits its command shim.
 const COREPACK_BIN = "node /usr/local/lib/node_modules/corepack/dist/corepack.js";
 
@@ -229,6 +238,13 @@ function writeBakedContexts() {
 FROM ${SANDBOX_IMAGE}
 
 WORKDIR /app
+
+RUN curl -fsSL -o /tmp/${NODE_TARBALL} https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL} \\
+  && echo "${NODE_SHA256}  /tmp/${NODE_TARBALL}" | sha256sum -c - \\
+  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \\
+  && tar -xzf /tmp/${NODE_TARBALL} -C /usr/local --strip-components=1 --no-same-owner \\
+  && rm /tmp/${NODE_TARBALL} \\
+  && test "$(node -v)" = v${NODE_VERSION}
 
 RUN ${COREPACK_BIN} enable --install-directory /usr/local/bin \\
   && ${COREPACK_BIN} prepare pnpm@${PNPM_VERSION} --activate
