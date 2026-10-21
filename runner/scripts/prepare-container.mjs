@@ -198,6 +198,7 @@ function writeBakedContexts() {
   fs.rmSync(bakedRoot, { recursive: true, force: true });
 
   const steps = [];
+  const primeStages = [];
   for (const { bucket, example: e, key } of bakeEntries) {
     if (!DEV[e.framework]) throw new Error(`no DEV command for container framework: ${e.framework}`);
     const dir = path.join(bakedRoot, key);
@@ -216,7 +217,10 @@ function writeBakedContexts() {
         if (typeof text !== "string") throw new Error(`prime source ${file} of ${e.framework} has no text content`);
         fs.writeFileSync(target, text);
       }
-      step += `\nCOPY baked/${key}/prime/ /prime/${key}/\nRUN prime-dev-cache.sh ${key} ${DEV[e.framework].port} ${JSON.stringify(DEV[e.framework].cmd)} && rm -rf /prime/${key}`;
+      primeStages.push({
+        key,
+        stage: `FROM installs AS prime-${key}\nCOPY prime-dev-cache.sh /usr/local/bin/prime-dev-cache.sh\nCOPY baked/${key}/prime/ /prime/${key}/\nRUN prime-dev-cache.sh ${key} ${DEV[e.framework].port} ${JSON.stringify(DEV[e.framework].cmd)}`,
+      });
     }
     steps.push(step);
   }
@@ -226,17 +230,21 @@ function writeBakedContexts() {
 # /baked/<key>; the Worker hardlink-copies the right one into /app at session
 # start, then runs fast frozen pnpm reconciliation. proxyToSandbox requires
 # a single \`Sandbox\` namespace, hence one shared image.
-FROM ${SANDBOX_IMAGE}
+#
+# Dev caches are primed in throwaway stages and only their .next is copied into
+# the final image: exporting the prime RUN layers themselves exhausts the build
+# runner's memory.
+FROM ${SANDBOX_IMAGE} AS installs
 
 WORKDIR /app
 
 RUN ${COREPACK_BIN} enable --install-directory /usr/local/bin \\
   && ${COREPACK_BIN} prepare pnpm@${PNPM_VERSION} --activate
 
-COPY prime-dev-cache.sh /usr/local/bin/prime-dev-cache.sh
-
 ${steps.join("\n\n")}
-
+${primeStages.map((p) => `\n${p.stage}\n`).join("")}
+FROM installs
+${primeStages.map((p) => `COPY --from=prime-${p.key} /baked/${p.key}/.next /baked/${p.key}/.next\n`).join("")}
 EXPOSE ${EXPOSE_PORTS.join(" ")}
 `;
   fs.writeFileSync(path.join(liveDir, "Dockerfile"), dockerfile);

@@ -13,12 +13,7 @@ cmd=$3
 cd /app
 cp -a "/prime/$key/." .
 cp /baked/"$key"/package.json /baked/"$key"/pnpm-lock.yaml .
-# A real copy, not `cp -al` like the session boot: hard-linking a file from an
-# earlier image layer copies it up into this layer on overlayfs, so the layer
-# would carry a second node_modules that the `find -delete` below cannot remove,
-# and exporting it exhausts the build runner's memory. A copy made and deleted
-# in this same layer never reaches it.
-cp -a /baked/"$key"/node_modules ./node_modules
+cp -al /baked/"$key"/node_modules ./node_modules
 
 sh -c "exec $cmd" > /tmp/prime-dev.log 2>&1 &
 dev=$!

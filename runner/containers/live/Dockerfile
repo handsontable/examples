@@ -3,14 +3,16 @@
 # /baked/<key>; the Worker hardlink-copies the right one into /app at session
 # start, then runs fast frozen pnpm reconciliation. proxyToSandbox requires
 # a single `Sandbox` namespace, hence one shared image.
-FROM docker.io/cloudflare/sandbox:0.12.3
+#
+# Dev caches are primed in throwaway stages and only their .next is copied into
+# the final image: exporting the prime RUN layers themselves exhausts the build
+# runner's memory.
+FROM docker.io/cloudflare/sandbox:0.12.3 AS installs
 
 WORKDIR /app
 
 RUN node /usr/local/lib/node_modules/corepack/dist/corepack.js enable --install-directory /usr/local/bin \
   && node /usr/local/lib/node_modules/corepack/dist/corepack.js prepare pnpm@10.34.5 --activate
-
-COPY prime-dev-cache.sh /usr/local/bin/prime-dev-cache.sh
 
 # react-js (bucket 18)
 COPY baked/react-js-18/package.json baked/react-js-18/pnpm-lock.yaml /baked/react-js-18/
@@ -39,14 +41,10 @@ RUN cd /baked/angular-18 && pnpm install --frozen-lockfile
 # next.js (bucket 18)
 COPY baked/next-js-18/package.json baked/next-js-18/pnpm-lock.yaml /baked/next-js-18/
 RUN cd /baked/next-js-18 && pnpm install --frozen-lockfile
-COPY baked/next-js-18/prime/ /prime/next-js-18/
-RUN prime-dev-cache.sh next-js-18 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0" && rm -rf /prime/next-js-18
 
 # next-shadcn.js (bucket 18)
 COPY baked/next-shadcn-js-18/package.json baked/next-shadcn-js-18/pnpm-lock.yaml /baked/next-shadcn-js-18/
 RUN cd /baked/next-shadcn-js-18 && pnpm install --frozen-lockfile
-COPY baked/next-shadcn-js-18/prime/ /prime/next-shadcn-js-18/
-RUN prime-dev-cache.sh next-shadcn-js-18 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0" && rm -rf /prime/next-shadcn-js-18
 
 # astro (bucket 18)
 COPY baked/astro-18/package.json baked/astro-18/pnpm-lock.yaml /baked/astro-18/
@@ -63,5 +61,19 @@ RUN cd /baked/remix-18 && pnpm install --frozen-lockfile
 # vue (bucket 18)
 COPY baked/vue-18/package.json baked/vue-18/pnpm-lock.yaml /baked/vue-18/
 RUN cd /baked/vue-18 && pnpm install --frozen-lockfile
+
+FROM installs AS prime-next-js-18
+COPY prime-dev-cache.sh /usr/local/bin/prime-dev-cache.sh
+COPY baked/next-js-18/prime/ /prime/next-js-18/
+RUN prime-dev-cache.sh next-js-18 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0"
+
+FROM installs AS prime-next-shadcn-js-18
+COPY prime-dev-cache.sh /usr/local/bin/prime-dev-cache.sh
+COPY baked/next-shadcn-js-18/prime/ /prime/next-shadcn-js-18/
+RUN prime-dev-cache.sh next-shadcn-js-18 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0"
+
+FROM installs
+COPY --from=prime-next-js-18 /baked/next-js-18/.next /baked/next-js-18/.next
+COPY --from=prime-next-shadcn-js-18 /baked/next-shadcn-js-18/.next /baked/next-shadcn-js-18/.next
 
 EXPOSE 3001 4200 4321 5173

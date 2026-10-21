@@ -9,6 +9,7 @@ on:
   pull_request:
     paths:
       - runner/containers/live/**
+      - runner/scripts/prepare-container.mjs
       - .github/workflows/live-image.yml
 
 concurrency:
@@ -18,22 +19,33 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        context: [head, pre-455]
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
-      - name: Disk before the build
-        run: df -h /
+      - name: Use the containers/live context from before the cache prime
+        if: matrix.context == 'pre-455'
+        run: git checkout 8da88ed96 -- runner/containers/live
 
-      # Same platform wrangler builds for. The background loop logs free disk
-      # and memory every 10 s, so a runner that dies mid-build still leaves the
-      # numbers.
+      - name: Docker setup
+        run: |
+          docker version --format 'server {{.Server.Version}}'
+          docker info --format 'driver {{.Driver}}, images {{.DriverStatus}}'
+          df -h /
+          free -m
+
+      # Same platform wrangler builds for. The background loop logs free disk,
+      # memory and dockerd's resident size every 10 s, so a runner that dies
+      # mid-build still leaves the numbers.
       - name: Build containers/live
         run: |
-          free -m
           ( while sleep 10; do
-              echo "disk: $(df -h / | tail -1)"
-              echo "mem: $(free -m | awk '/^Mem:/ {print "used " $3 " / " $2 " MB, available " $7}') swap: $(free -m | awk '/^Swap:/ {print $3 " / " $2}')"
-              ps -eo rss,comm --sort=-rss | head -4 | tail -3 | awk '{printf "  rss %d MB %s\n", $1/1024, $2}'
+              echo "mon: $(df -h / | awk 'NR==2 {print "disk used " $3 " avail " $4}'), $(free -m | awk '/^Mem:/ {print "mem used " $3 " / " $2 " MB"}'), dockerd rss $(ps -C dockerd -o rss= | awk '{s+=$1} END {print int(s/1024)}') MB"
             done ) &
           monitor=$!
           docker build --platform linux/amd64 -t live-image-check runner/containers/live
@@ -42,4 +54,5 @@ jobs:
       - name: Image size and disk after the build
         run: |
           docker image ls live-image-check
+          docker history --format '{{.Size}}\t{{.CreatedBy}}' live-image-check | head -40
           df -h /
