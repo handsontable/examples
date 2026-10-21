@@ -15,4 +15,9 @@ runs:
           | jq '.features["containerd-snapshotter"] = true' > /tmp/daemon.json
         sudo mv /tmp/daemon.json /etc/docker/daemon.json
         sudo systemctl restart docker
-        docker info --format 'docker image store: {{.DriverStatus}}'
+        store=$(docker info --format '{{.DriverStatus}}')
+        echo "docker image store: $store"
+        case "$store" in
+          *io.containerd.snapshotter*) ;;
+          *) echo "::error::Docker did not switch to the containerd image store" >&2; exit 1 ;;
+        esac
