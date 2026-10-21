@@ -121,13 +121,7 @@
     // DocSearch app id + index for the docs page lookup. The app id is public
     // by construction — DocSearch ships it in every docs page bundle.
     "ALGOLIA_APP_ID": "MMN6OTJMGX",
-    "ALGOLIA_INDEX": "handsontable",
-
-    // ---- Observability (ADR-0041) -----------------------------------------
-    // `full` | `uncaught` (contract §11): which handled-error reports also go
-    // to Sentry; read by `telemetry/scope.ts`. `uncaught` keeps only errors
-    // that escape a handler in Sentry (DEV-3099); roll back by setting `full`.
-    "SENTRY_SCOPE": "uncaught"
+    "ALGOLIA_INDEX": "handsontable"
   },
 
   // Analytics Engine sink for runner events (contract §10), written by

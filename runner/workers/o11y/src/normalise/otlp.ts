@@ -190,8 +190,8 @@ function tryParseJsonBodyAttrs(body: string): Record<string, string> {
 
 /**
  * Feeds the API worker's own `error.handled`/diagnostic reports into
- * `InboxWriter`'s first-seen registry, so a server-side failure class
- * notifies too once `SENTRY_SCOPE` flips to `uncaught`.
+ * `InboxWriter`'s first-seen registry — the only new-class signal for a
+ * server-side handled failure, since Sentry never receives those.
  *
  * All four conditions must hold: the REAL resource `service.name` is
  * `demos-api` (never a body-JSON key); `log.kind` is `"error"`; the value

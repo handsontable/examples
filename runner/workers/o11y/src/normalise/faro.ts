@@ -76,8 +76,8 @@ const LITE_VITAL_KEYS: Readonly<Record<string, string>> = {
  * Server-side backstop for a client that skips the shared noise gates in
  * Faro's `beforeSend` (`eventGate.ts#isUnhandledNoise`/
  * `isOfficeScannerRejection`). Duplicated, not imported: keep in sync by
- * hand. `isForeignUnhandled`/`isEdgelessForeignSessionStart` stay
- * browser-gate-only — both need browser-only context this path never gets.
+ * hand. `isForeignUnhandled` stays browser-gate-only — it needs
+ * browser-only context this path never gets.
  */
 const SERVER_SIDE_UNHANDLED_NOISE: readonly RegExp[] = [
   /^ResizeObserver loop/i,
