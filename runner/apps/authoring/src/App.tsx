@@ -68,7 +68,6 @@ import { ShareLinks } from "./ShareLinks.js";
 import { EditInfoDialog } from "./EditInfoDialog.js";
 import { GuidePage } from "./Guide.js";
 import { guideTrack, parseGuideRoute } from "./guideTracks.js";
-import { elapsedBucket, responseOrigin } from "./sessionDiagnostics.js";
 import { Markdown } from "./markdown.js";
 import { MyDemosPage } from "./MyDemos.js";
 import { SettingsPage } from "./Settings.js";
@@ -76,8 +75,6 @@ import { ApiTokensPage } from "./ApiTokens.js";
 import { useProfile } from "./useProfile.js";
 import { DEMO_EDIT_SETTLE_MS } from "./demoEventCollapse.js";
 import {
-  diagnosticsGoToSentry,
-  monitorDemos,
   previewMonitoring,
   reportDemoEvent,
   noteDemoEdit,
@@ -116,7 +113,6 @@ import {
   readFetchDiagnostics,
   apiBaseOrigin,
   diagnosticTags,
-  diagnosticExtras,
   netEffectiveType,
 } from "./fetchDiagnostics.js";
 import { recordEditorEvent } from "./editorTrail.js";
@@ -130,43 +126,6 @@ const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8787";
 // remount must not reset an allowance that already told the operator "this
 // visitor's session tried, and both attempts failed".
 let versionsFetchEventSent = false;
-
-/**
- * DEMOS-7D (DEV-2859 ruling): instrument, don't suppress. `App.tsx`'s two
- * `fetchDocsJson` catches already report *every* failure with no
- * `isOpaqueNetworkFailure` gate, so this only adds tags to the event that was
- * always going to be sent — no re-promotion, no fingerprint change, no new
- * issue. `Sentry.captureException` inside `run()` picks up whatever tags this
- * scope carries, which is what makes wrapping the existing call enough.
- *
- * `docs-catalog.ts`'s `fetchDocsJson` has no retry of its own to report: it
- * cannot import `fetchDiagnostics.ts` and stay importable by
- * `pipeline/docs-catalog.test.mjs` under `--experimental-strip-types`, which
- * cannot resolve a sibling `./x.js` specifier (verified empirically against a
- * throwaway probe file — the same constraint `fetchDiagnostics.ts`'s header
- * documents). So this diagnostics bundle is deliberately thinner than the
- * versions-fetch one: online state and the API-base classification, no
- * attempt count or outcome (`diagnosticTags`/`diagnosticExtras` both treat
- * those as optional for exactly this caller).
- */
-function withDocsFetchDiagnostics(context: string, run: () => void): void {
-  Sentry.withScope((scope) => {
-    const { context: _population, ...tags } = diagnosticTags({
-      context,
-      onlineAtStart: typeof navigator !== "undefined" ? navigator.onLine : undefined,
-      apiBaseOrigin: apiBaseOrigin(API_BASE, location.origin),
-    });
-    // `context` is dropped on purpose. `run()` is a `reportError` call, and that
-    // captures with `{ tags: { context } }` of its own — an event-level tag beats
-    // a scope one, so setting `context` here would be silently overwritten and
-    // this wrapper would look like it tagged something it did not. The population
-    // is still identifiable two ways that do NOT collide: `reportError`'s own
-    // `docs-example-load:fetch` / `docs-bucket-resolve:fetch` value, and the
-    // `docs_fetch_*` tag names `prefixFor` derives from the context passed above.
-    scope.setTags(tags);
-    run();
-  });
-}
 
 // Framework preference (used to auto-pick a variant when an example is chosen and
 // the current one isn't available) + short labels for the framework picker.
@@ -291,64 +250,39 @@ function describeRuntimeError(
  * client had already navigated away and the server tore the session down, which
  * is the designed outcome, not a failure.
  *
- * Fingerprinted by error class, not by message: one boot failure is one issue no
- * matter which example or framework hit it, and the grouping stays stable as the
- * message text improves (DEV-2533 replaced the raw log with a one-line cause). The
- * log travels as `extra.bootLog` instead — extras take no part in grouping, titling
- * or stack parsing, which is exactly what putting it in the message got wrong.
+ * Every report here is a handled diagnostic (ADR-0041 §E.1): it goes to the
+ * telemetry facade only, never to Sentry.
  */
 function reportRuntimeError(e: unknown, engine: string, framework: string): void {
-  // No blanket gate: each branch reaches Sentry only when `diagnosticsGoToSentry` (§11/ADR §E.3).
   // Tier-1 compile and runtime errors are the "product output" case above — dropped
-  // by default, reported while demo monitoring is on (DEV-2527). They arrive as
-  // ordinary app-surface events rather than through `reportDemoEvent`, because this
-  // channel is the shell's own view of the failure, not something the preview
-  // relayed: `Sentry.captureException` below keeps the engine tag and the fingerprint
-  // rules that follow.
+  // by default, reported while demo monitoring is on (DEV-2527).
   if (engine !== "container") {
-    // Every rule for this branch — which failures are reported at all, how they group, and
-    // what the issue is titled — lives in `tier1Report.ts` so it can be unit-tested; this
-    // file cannot be imported by `node --test`. Two of those rules used to be inline here
-    // and are worth naming: the DEV-2552 stand-down for a throw the in-preview reporter
-    // already owns, and the DEV-2527 `monitorDemos` gate, which the compiler-asset branch
-    // deliberately sits ahead of (DEV-2569).
+    // Every rule for this branch — which failures are reported at all and what the
+    // record is titled — lives in `tier1Report.ts` so it can be unit-tested; this
+    // file cannot be imported by `node --test`. Two of those rules are worth naming:
+    // the DEV-2552 stand-down for a throw the in-preview reporter already owns, and
+    // the DEV-2527 `monitorDemos` gate, which the compiler-asset branch deliberately
+    // sits ahead of (DEV-2569).
     const report = tier1Report({
       name: e instanceof Error ? e.name : "",
       message: e instanceof Error ? e.message : String(e),
       compilerUnavailable: isCompilerUnavailable(e),
-      assetUrl: e instanceof Error ? (e as { assetUrl?: string | null }).assetUrl ?? null : null,
-      causeMessage: e instanceof Error && e.cause instanceof Error ? e.cause.message : null,
       replay: e instanceof Error && (e as { replay?: boolean }).replay === true,
       online: navigator.onLine,
       opaqueNetworkFailure: isOpaqueNetworkFailure(e),
-      // Widened to the local leg (`dev:full`); the Sentry gate below stays keyed on `monitorDemos`.
+      // Widened to the local leg (`dev:full`).
       monitorDemos: previewMonitoring,
     });
     if (!report) return;
-    // Captured as a fresh error rather than `e`, and this is the whole of DEMOS-15's second
-    // defect: a Sentry issue takes its title from `name: message` and re-derives it on every
-    // new event, so a per-event message on a flat fingerprint means the issue is titled after
-    // whichever sample arrived last — a visitor's typo, or one deploy's hashed chunk name.
-    // The real text goes to `extra`, which takes no part in grouping or titling. The stack
-    // being dropped costs nothing: it was `SandpackRuntime.onMessage`, which points at us
-    // rather than at the failure.
+    // Reported as a fresh error titled by class rather than `e`, so a visitor's typo
+    // or one deploy's hashed chunk name never becomes the record's title (DEMOS-15).
     const titled = new Error(report.synthesizeAs.message, { cause: e });
     titled.name = report.synthesizeAs.name;
-    // Facade first — its context/title pair matches `report.fingerprint` below.
     telemetry.error(titled, report.tags.context ?? "tier1-runtime", {
       surface: (report.tags.surface as Surface | undefined) ?? "authoring",
       tier: (report.tags.tier as Tier | undefined) ?? "1",
       framework,
     });
-    // Reachable locally via `previewMonitoring` above, so this Sentry call needs `monitorDemos` too.
-    if (diagnosticsGoToSentry && (report.tags.surface !== "demo-runtime" || monitorDemos)) {
-      Sentry.captureException(titled, {
-        tags: report.tags,
-        fingerprint: report.fingerprint,
-        level: report.level,
-        extra: report.extra,
-      });
-    }
     return;
   }
   // The budget guardrail refusing a session is the guardrail working. It would
@@ -357,105 +291,26 @@ function reportRuntimeError(e: unknown, engine: string, framework: string): void
   if (isBudgetRefusal(e)) return;
   if (e instanceof SessionStartError) {
     if (e.status === 410) return;
-    // The server's machine-readable reason joins the fingerprint when it sent
-    // one (DEV-2556). Status alone is too coarse now that the Worker refuses at
-    // capacity with its own 503: `at_capacity` — every container slot taken,
-    // which is a spend decision — would otherwise land in the same issue as an
-    // envelope-less platform 503 ("The sandbox service is unavailable right
-    // now"), which is a gateway fault and has nothing to do with our pool. That
-    // grouping is the only capacity evidence the create side has left, since the
-    // refusal is now a returned 503 rather than a throw the outer catch reports.
-    //
-    // Appended rather than substituted so uncoded failures keep the exact
-    // fingerprint they have today: no live issue regroups, and only the coded
-    // refusals split off. `budget_*` codes never reach here (suppressed above).
+    // The server's machine-readable reason (DEV-2556) when it sent one, else the
+    // status: `at_capacity` — every container slot taken, a spend decision — must
+    // not read the same as an envelope-less platform 503, which is a gateway fault.
+    // `budget_*` codes never reach here (suppressed above).
     const code = typeof e.code === "string" && e.code.length > 0 ? e.code : null;
-    // DEV-2559. Three facets that make DEMOS-9's 83 events answerable, all of them
-    // TAGS beside the fingerprint and never inside it: the fingerprint below stays
-    // byte-identical, because sharding one continuous signal by framework would
-    // destroy the only trend the issue has.
-    //
-    // `framework` uses the key `reportDemoEvent` already tags with, so both sides of
-    // the preview boundary facet together. Deliberately added to this branch alone —
-    // the boot and compile branches have no question pending on them, and tag churn
-    // there would only muddy their own histories.
-    //
-    // `session_elapsed_bucket` over a raw-ms tag: see sessionDiagnostics.ts. The exact
-    // count rides in `extra`, which is not searchable but is readable per event.
-    //
-    // `cf_ray` is a tag rather than an extra precisely because it IS searchable, which
-    // makes the reverse join work — spot a slow invocation in Cloudflare's Workers
-    // Logs, search the ray here, and find out whether it was one of these. That gives
-    // it ~one value per event, which is only acceptable because this path fires a
-    // handful of times a day; it would be the wrong call on a hot one.
-    //
-    // DEMOS-9 facet analysis adds two more tags and three extras, still beside the
-    // fingerprint and never inside it (same reasoning as above — this is instrumentation,
-    // not a regroup). `session_response_origin` is the one-click answer
-    // (`sessionDiagnostics.ts`'s `responseOrigin`); `session_response_type` is the raw
-    // `res.type` input it was derived from, kept alongside so the derivation stays
-    // auditable. Header NAMES are bounded (`HEADER_NAMES_MAX` in container.ts) and go to
-    // `extra` rather than a tag — still not a tag, because an open set of names is not a
-    // useful facet even though it is a bounded one. Header VALUES (`sessionResponseServer`)
-    // are unbounded and extra-only for the same reason `sessionElapsedMs` is: Sentry tag
-    // values are meant to be faceted, not read as free text.
-    const diagnostics = e.diagnostics;
     telemetry.error(e, "tier2-session-start", {
       surface: "authoring",
       tier: "2",
       framework,
       reason: code ?? String(e.status),
     });
-    if (diagnosticsGoToSentry) {
-      Sentry.captureException(e, {
-        tags: {
-          context: "tier2-session-start",
-          session_status: String(e.status),
-          framework,
-          ...(code ? { session_refusal: code } : {}),
-          ...(diagnostics
-            ? {
-                session_elapsed_bucket: elapsedBucket(diagnostics.elapsedMs),
-                ...(diagnostics.ray ? { cf_ray: diagnostics.ray } : {}),
-                session_response_origin: responseOrigin(diagnostics),
-                session_response_type: diagnostics.responseType,
-              }
-            : {}),
-        },
-        fingerprint: ["tier2-session-start", String(e.status), ...(code ? [code] : [])],
-        ...(diagnostics
-          ? {
-              extra: {
-                sessionElapsedMs: diagnostics.elapsedMs,
-                sessionResponseHeaders: diagnostics.headerNames.join(", "),
-                sessionResponseHeaderCount: diagnostics.headerCount,
-                ...(diagnostics.server ? { sessionResponseServer: diagnostics.server } : {}),
-              },
-            }
-          : {}),
-      });
-    }
     return;
   }
   if (e instanceof ContainerBootFailure) {
     telemetry.error(e, "tier2-container-boot", { surface: "authoring", tier: "2", framework });
-    if (diagnosticsGoToSentry) {
-      Sentry.captureException(e, {
-        tags: { context: "tier2-container-boot" },
-        fingerprint: ["tier2-container-boot"],
-        // Bounded upstream (the status route tails 2500 bytes, `bootFailureDetail`
-        // keeps 40 lines) and already redacted of preview hosts, so no extra cap here.
-        ...(e.log ? { extra: { bootLog: e.log } } : {}),
-      });
-    }
     return;
   }
   // Normal teardown: dispose() races a pending message, or the tab is closing.
   if (e instanceof Error && e.message === "The session was closed.") return;
   telemetry.error(e, "tier2-runtime", { surface: "authoring", tier: "2", framework });
-  if (diagnosticsGoToSentry) {
-    Sentry.captureException(e, { tags: { context: "tier2-runtime" } });
-  }
 }
 
 /** Pin the workspace to the version state's ref. Thin wrapper over the shared
@@ -2028,19 +1883,8 @@ function Authoring({
               apiBaseOrigin: apiBaseOrigin(API_BASE, location.origin),
               netEffectiveType: netEffectiveType(),
             };
-            // Facade first, unconditional — ADR §E.1's own named example.
-            // Sentry keeps it only under `full` scope (contract §11).
+            // A handled diagnostic (ADR §E.1's own named example): facade only.
             telemetry.event("versions_fetch_unreachable", diagnosticTags(full));
-            if (diagnosticsGoToSentry) {
-              Sentry.withScope((scope) => {
-                scope.setLevel("warning");
-                scope.setTags(diagnosticTags(full));
-                scope.setExtras(diagnosticExtras(full));
-                Sentry.captureMessage("versions fetch unreachable", {
-                  fingerprint: ["versions-fetch-unreachable"],
-                });
-              });
-            }
           }
         } else if (isOpaqueNetworkFailure(error)) {
           Sentry.addBreadcrumb({
@@ -2218,24 +2062,15 @@ function Authoring({
           // open. Tagged by which step failed so a missing artifact (docs linking
           // an example that was never imported) is distinguishable from a
           // transient fetch.
-          // Only a transport failure gets the fetch diagnostics: `onlineAtStart`
-          // and `apiBaseOrigin` answer "was the visitor offline / is this build
-          // pointing at localhost", and neither means anything for a missing
-          // artifact, which is a 404 from a server we plainly reached. Tagging
-          // both would put two different faults under one `context` and defeat
-          // the filtering these tags exist for.
           const missing = isMissingDocsResource(error);
-          if (missing) reportError(error, "docs-example-load:path");
-          else withDocsFetchDiagnostics("docs-fetch", () => reportError(error, "docs-example-load:fetch"));
+          reportError(error, missing ? "docs-example-load:path" : "docs-example-load:fetch");
           failOpenDocs(missing ? "path" : "fetch");
         }
       })
       .catch((error) => {
-        // Same split as the example-load catch above: diagnostics only on the
-        // transport sub-case.
+        // Same split as the example-load catch above.
         const missing = isMissingDocsResource(error);
-        if (missing) reportError(error, "docs-bucket-resolve:bucket");
-        else withDocsFetchDiagnostics("docs-fetch", () => reportError(error, "docs-bucket-resolve:fetch"));
+        reportError(error, missing ? "docs-bucket-resolve:bucket" : "docs-bucket-resolve:fetch");
         failOpenDocs(missing ? "bucket" : "fetch");
       });
     return () => { cancelled = true; };

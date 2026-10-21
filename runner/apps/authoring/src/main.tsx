@@ -23,13 +23,8 @@ safeInit(initTelemetry, (err) => Sentry.captureException(err, { tags: { surface:
 // unconditionally — `Sentry.addEventProcessor` is a no-op when reporting is
 // gated off (nothing is ever sent for the processor to run against) — so this
 // import stays free of a second `reportingEnabled` check.
-//
-// `surface === "demo-runtime"` events are skipped: those are relayed preview
-// failures (`reportDemoEvent` in sentry.ts), and this app's own editor
-// activity says nothing about what a demo's own code just did.
 import { snapshotEditorTrail, editorTrailTags } from "./editorTrail.js";
 Sentry.addEventProcessor((event) => {
-  if (event.tags?.surface === "demo-runtime") return event;
   event.tags = { ...event.tags, ...editorTrailTags() };
   event.extra = { ...event.extra, editorTrail: snapshotEditorTrail() };
   return event;

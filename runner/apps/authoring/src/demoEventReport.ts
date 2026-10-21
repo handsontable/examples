@@ -1,7 +1,7 @@
 // What a relayed demo-runtime event becomes (ADR §E.1): a
-// `preview.runtime_error` count through the facade, budgeted by the SAME
-// two `monitor.ts` caps Sentry used. Import-free so `node --test` can pin
-// this logic; `HtMajor` is a type-only import, erased before resolution.
+// `preview.runtime_error` count through the facade. Import-free so
+// `node --test` can pin this logic; `HtMajor` is a type-only import, erased
+// before resolution.
 import type { HtMajor } from "@handsontable/demo-runtime/telemetry";
 
 /** Mirrors `MonitorKind` (`packages/runtime/src/monitor.ts`) structurally,
@@ -47,9 +47,6 @@ export interface DemoEventFacts {
 }
 
 export interface DemoEventReport {
-  /** Which budget governs this event: `"relay"` (tight) for everything but
-   *  a console warning, `"breadcrumb"` (looser) for `console-warn`. */
-  budget: "relay" | "breadcrumb";
   /** `fingerprint()`'s `context` argument, always `"demo-runtime"` — an
    *  explicit field so a test can assert the caller passes surface, not kind. */
   fingerprintContext: string;
@@ -71,11 +68,10 @@ export interface DemoEventReport {
   };
 }
 
-/** Always returns a report — the stateful budget check stays the caller's
- *  job, since this function is pure. */
+/** Always returns a report; `reason`/`recordName` are `null` for an event
+ *  that is not a runtime error. */
 export function demoEventReport(facts: DemoEventFacts): DemoEventReport {
   return {
-    budget: facts.kind === "console-warn" ? "breadcrumb" : "relay",
     fingerprintContext: "demo-runtime",
     fingerprintMessage: facts.message,
     reason: REASON_BY_KIND[facts.kind],

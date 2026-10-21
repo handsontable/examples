@@ -59,7 +59,7 @@ export interface FetchDiagnostics {
    *  `fetchWithDiagnostics`; optional only because `docs-catalog.ts`'s
    *  `fetchDocsJson` has no retry of its own to report (it cannot import this
    *  module and stay node-importable — see this file's header) and still
-   *  reuses `diagnosticTags`/`diagnosticExtras` with a thinner bundle
+   *  reuses `diagnosticTags` with a thinner bundle
    *  (DEV-2859's DEMOS-7D ruling). */
   attempts?: number;
   outcome?: FetchOutcome;
@@ -248,22 +248,6 @@ export function diagnosticTags(diag: FetchDiagnostics): Record<string, string> {
   if (diag.apiBaseOrigin) tags.api_base_origin = diag.apiBaseOrigin;
   if (diag.netEffectiveType) tags.net_effective_type = diag.netEffectiveType;
   return tags;
-}
-
-export function diagnosticExtras(diag: FetchDiagnostics): Record<string, string> {
-  const extras: Record<string, string> = {};
-  if (diag.elapsedMs !== undefined) extras.elapsedMs = String(Math.round(diag.elapsedMs));
-  if (diag.attempts !== undefined && diag.outcome !== undefined) {
-    extras.attemptSummary = `${diag.attempts} attempt${diag.attempts === 1 ? "" : "s"}, ${diag.outcome}`;
-  }
-  if (diag.apiBaseOrigin) {
-    // Host only — never a full URL, never a query string. `apiBaseOrigin`'s
-    // caller passes the classification, not the raw base, so there is nothing
-    // more specific to redact here; this extra exists so the classification
-    // shows up in the event body, not just as a filterable tag.
-    extras.apiBaseClass = diag.apiBaseOrigin;
-  }
-  return extras;
 }
 
 /** Chromium-only `navigator.connection.effectiveType` (e.g. "4g", "3g").

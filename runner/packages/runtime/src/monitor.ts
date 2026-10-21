@@ -267,52 +267,6 @@ export function truncateMessage(value: unknown, max: number = MONITOR_MESSAGE_MA
   return s.length <= max ? s : s.slice(0, max) + "...";
 }
 
-/** First stack frame, which is what makes two same-message faults distinguishable. */
-function firstStackFrame(stack: string | undefined): string {
-  if (!stack) return "";
-  for (const raw of stack.split("\n")) {
-    const line = raw.trim();
-    if (line.startsWith("at ")) return line;
-  }
-  return stack.split("\n")[0]?.trim() ?? "";
-}
-
-/** The identity two reports must share to count as the same one. */
-export function monitorDedupeKey(kind: string, message: string, stack?: string): string {
-  return `${kind}|${message}|${firstStackFrame(stack)}`;
-}
-
-/**
- * A relay budget: the in-page reporter's ceiling and dedupe, counted per page load
- * somewhere the demo cannot reach.
- *
- * The reporter's copy is not a cap. It runs *inside* the preview, alongside code
- * authored by whoever made the demo — and for a shared or docs example, by someone
- * other than the person viewing it. Such a demo can ignore the reporter entirely and
- * `postMessage` crafted payloads with unique messages straight at the parent. So the
- * parent keeps its own budget, and that one is enforceable.
- *
- * Deliberately not exported as a singleton: the app wants one per page load, and a
- * test wants a fresh one per case.
- */
-export function createMonitorBudget(ceiling: number = MONITOR_EVENT_CEILING): {
-  admit(kind: string, message: string, stack?: string): boolean;
-} {
-  const seen = new Set<string>();
-  let used = 0;
-  return {
-    /** True if this event fits the budget, which it then consumes. */
-    admit(kind, message, stack) {
-      if (used >= ceiling) return false;
-      const key = monitorDedupeKey(kind, message, stack);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      used += 1;
-      return true;
-    },
-  };
-}
-
 /**
  * Collapse the volatile parts of a message so one broken demo files one issue
  * rather than hundreds. Numbers, quoted strings, URLs and timestamps are what
