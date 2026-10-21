@@ -25,10 +25,16 @@ jobs:
         run: df -h /
 
       # Same platform wrangler builds for. The background loop logs free disk
-      # every 10 s, so a runner that dies mid-build still leaves the numbers.
+      # and memory every 10 s, so a runner that dies mid-build still leaves the
+      # numbers.
       - name: Build containers/live
         run: |
-          ( while sleep 10; do echo "disk: $(df -h / | tail -1)"; done ) &
+          free -m
+          ( while sleep 10; do
+              echo "disk: $(df -h / | tail -1)"
+              echo "mem: $(free -m | awk '/^Mem:/ {print "used " $3 " / " $2 " MB, available " $7}') swap: $(free -m | awk '/^Swap:/ {print $3 " / " $2}')"
+              ps -eo rss,comm --sort=-rss | head -4 | tail -3 | awk '{printf "  rss %d MB %s\n", $1/1024, $2}'
+            done ) &
           monitor=$!
           docker build --platform linux/amd64 -t live-image-check runner/containers/live
           kill "$monitor"
