@@ -494,8 +494,7 @@ stores a record, and a `t:"vital"` beacon is a hash-only item that writes its `w
 normalised message>`, synchronous and identical in browser and Worker; the normalisation
 is `normalizeMonitorMessage` plus `stripCodeFrame` plus `stripBundleIdentity` (stack-frame
 lines and hashed asset names, so one fault thrown from two builds
-shares a fingerprint; `normalizeMonitorMessage` itself is unchanged, Sentry grouping uses it
-too). For `hot.surface = demo-runtime`,
+shares a fingerprint; `normalizeMonitorMessage` itself is unchanged). For `hot.surface = demo-runtime`,
 keystroke-ladder shapes (`"<identifier> is not defined"` and similar) collapse to one
 fingerprint per shape. Demo-runtime fingerprints never feed the new-fingerprint alert.
 Nor do expected, self-healing classes (`isExpectedTransientError`: `ChunkLoadError` /
@@ -720,9 +719,11 @@ and the post-build leak check fails if the local path survives into it.
 
 ## 11. Sentry scope
 
-Sentry receives only errors that escape a handler (browser `onerror`,
+Sentry receives errors that escape a handler (browser `onerror`,
 `unhandledrejection`, `Sentry.ErrorBoundary`; Worker fetch catch-all, DO alarms, cron,
-snapshot-job failures) and the budget-alert `captureMessage`. Handled diagnostic reports
+snapshot-job failures), plus explicit captures for failures with no other channel: the
+budget-alert and o11y-watchdog `captureMessage`, the reconcile and cron-step captures,
+and the authoring app's telemetry-init failure. Handled diagnostic reports
 (`reportError`, `reportDiagnostic`, the demo-runtime relay) go only to the new stack.
 There is no switch: the `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` flag that once also sent
 them to Sentry was removed after the 2026-10-13 flip held (DEV-3099).

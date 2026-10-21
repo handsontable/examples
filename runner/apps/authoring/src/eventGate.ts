@@ -1,4 +1,4 @@
-// Two `beforeSend` suppression gates for populations the Sentry triage classified
+// `beforeSend` suppression gates for populations the Sentry triage classified
 // NOT-OURS (DEV-2858). Custom message filters are plan-locked on this project — one
 // DSN across all three environments — so this has to be code.
 //

@@ -1328,10 +1328,12 @@ keeps working. A `demo-runtime` environment still shows in the project for older
 events; nothing is filed under it any more (see "Demo-runtime monitoring" below), and
 its saved searches can be archived in the Sentry UI.
 
-**What reaches Sentry (contract §11, ADR §E.1).** Only what escapes a handler outright —
+**What reaches Sentry (contract §11, ADR §E.1).** What escapes a handler —
 browser `window.onerror`/`unhandledrejection`/`Sentry.ErrorBoundary`; Worker
-fetch-catch-all/DO alarms/cron/snapshot-job failures — plus the budget-alert
-`captureMessage`. Every handled diagnostic report (`reportError`, `reportRuntimeError`,
+fetch-catch-all/DO alarms/cron/snapshot-job failures — plus a few explicit captures for
+failures with no other channel: the budget-alert and o11y-watchdog `captureMessage`, the
+reconcile and cron-step captures, and the authoring app's telemetry-init failure. Every
+handled diagnostic report (`reportError`, `reportRuntimeError`,
 the Worker's `reportDiagnostic`, the demo-runtime relay) goes to the o11y stack alone
 ("Observability" above). There is no switch for this any more: the `SENTRY_SCOPE` /
 `VITE_SENTRY_SCOPE` flag was removed after the 2026-10-13 flip held (DEV-3099).

@@ -51,19 +51,11 @@ export function postMonitorReset(target: { postMessage(message: unknown, origin:
  * Ceiling on relayed `console-warn` events per page load, counted separately from
  * `MONITOR_EVENT_CEILING` (DEV-2539).
  *
- * A warning is context, not a fault: parent-side it becomes a Sentry *breadcrumb*
- * attached to the next real error, never an issue of its own. That is why the two
- * ceilings are separate in both directions. Looser, because a breadcrumb costs no
- * issue and the whole point is to have the warnings that preceded a failure. But
- * still capped, and still its own budget — sharing the relay ceiling would let a
- * demo that warns on every render (Handsontable's own "Theme is already registered"
- * notice is emitted by normal re-renders) spend all twenty slots before the
+ * A warning is context, not a fault: the parent files it nowhere (`demoEventReport.ts`
+ * gives it no reason). It still gets its own ceiling — sharing the relay ceiling would
+ * let a demo that warns on every render (Handsontable's own "Theme is already
+ * registered" notice is emitted by normal re-renders) spend all twenty slots before the
  * `console.error` explaining the breakage is ever posted.
- *
- * Paired with `maxBreadcrumbs` in `apps/authoring/src/sentry.ts`, which the demo
- * shares with the authoring app's own trail and which evicts oldest-first: this
- * number must stay a small fraction of it, or a chatty demo silently erases the
- * clicks and fetches that explain an unrelated app failure. Move the two together.
  */
 export const MONITOR_BREADCRUMB_CEILING = 50;
 

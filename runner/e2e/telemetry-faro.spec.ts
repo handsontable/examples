@@ -593,8 +593,14 @@ test.describe("Faro in the authoring app", () => {
       .toBe(true);
     await awaitSentryAlive(page);
 
+    // Matched on the error's own text (`catalog.ts`: "versions 500") as well as the
+    // context tag, so a capture re-added with no tag or another tag still fails.
     const events = await readSentryEvents(page);
-    const sentryHit = events.find((e) => (e as { tags?: { context?: string } }).tags?.context === "versions-fetch");
+    const sentryHit = events.find(
+      (e) =>
+        (e as { tags?: { context?: string } }).tags?.context === "versions-fetch" ||
+        JSON.stringify(e).includes("versions 500"),
+    );
     assert(!sentryHit, "reportError must NOT reach Sentry (contract §11)");
   });
 

@@ -176,7 +176,7 @@ test("T4 (negative guard, passes before and after): a genuine EACCES is not degr
 
 // The degrade is a handled refusal (ADR-0041 §E.1): it is reported as a
 // structured error line, never as a Sentry event.
-test("T5: the container-starting degrade never reaches Sentry, but logs a handled error line", async () => {
+test("the container-starting degrade never reaches Sentry, but logs a handled error line", async () => {
   const { env } = makeEnv();
   const sandbox = fakeSandbox({ mkdirError: new Error(CONTAINER_STARTING) });
   setSandboxFactory(() => sandbox);

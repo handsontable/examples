@@ -256,10 +256,10 @@ function stripInjectedReporter(message: string): string {
  * Bound the bundler's `show-error` string (DEV-2550).
  *
  * This is third-party output about code an anonymous visitor wrote, and it was the
- * only DEV-2527 channel that reached both the error card and `Sentry.captureException`
- * unbounded — the observed payload (DEMOS-15) was a babel code frame followed by a
- * multi-kilobyte inline source map, so the diagnostic was buried in the card and the
- * Sentry event was mostly base64. `reportDemoEvent` bounds its channel through
+ * only DEV-2527 channel that reached the error card and the error report unbounded —
+ * the observed payload (DEMOS-15) was a babel code frame followed by a multi-kilobyte
+ * inline source map, so the diagnostic was buried in the card and the report was
+ * mostly base64. `reportDemoEvent` bounds its channel through
  * `sanitizeMonitorPayload`, container stderr through `truncateMessage`; this is the
  * same treatment for this one.
  *
@@ -622,8 +622,8 @@ export class SandpackRuntime implements DemoRuntime {
       // error from the very first run, and counts at once (no edit burst to
       // collapse). Reported, then rethrown unchanged: the mount still rejects
       // exactly as before, so the error card, `preview.ready_ms
-      // outcome=error` and the Sentry capture downstream (`tier1Report`) see
-      // the same error they always did.
+      // outcome=error` and the report downstream (`tier1Report`) see the
+      // same error they always did.
       if (isTranspileFailure(err)) this.reportTranspileFailure(err);
       throw err;
     }
@@ -906,7 +906,7 @@ export class SandpackRuntime implements DemoRuntime {
          * push — a superseded keystroke's failure is already typed past, and reporting it
          * would put a stale diagnostic into the edit burst the authoring app collapses
          * (`demoEventCollapse.ts`), which counts once per burst. `emitError` is NOT
-         * called: the card and the Sentry capture stay exactly as they were.
+         * called: the card and the error report stay exactly as they were.
          *
          * One exception (DEV-2569): the compiler chunk itself failing to load is not the
          * visitor's half-typed code, and swallowing it here left a stranded tab silently

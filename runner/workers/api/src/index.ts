@@ -2657,9 +2657,8 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // Client input validation (a 400) is not a fault — never reported.
       if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
       // This catch turns every unexpected throw into a 500 body, so withSentry()
-      // never sees it. Report here or the error is invisible. ADR-0041 §E.1: stays
-      // in Sentry unconditionally in both scopes, and now also gets our own
-      // structured line (§D).
+      // never sees it. Report here or the error is invisible. ADR-0041 §E.1: an
+      // escaped error, so it goes to Sentry, plus our own structured line (§D).
       if (err instanceof BuildFailure) {
         logErrorLine(env, "fetch-catch-all:build-failure", err, { phase: err.phase, code: err.code });
         // The demo's own input failing the build is a 4xx, out of `api-5xx-rate` (the
@@ -2677,7 +2676,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // which is the same one-defect-many-issues shape DEV-2570 exists to end,
           // only better titled. Keyed by the machine code so the group stays
           // diagnosable; the title then tracks the newest event within it, which is
-          // the accepted trade (`ContainerBootFailure` in App.tsx makes the same one).
+          // the accepted trade.
           // Bundler failures carry no machine code and therefore share the `other`
           // group — coarse, but their causes are specific (the picker takes the line
           // under a label like vite's "error during build:"), so the title still names

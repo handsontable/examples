@@ -50,6 +50,11 @@ test("the compiler asset is reported even with demo monitoring off", () => {
 test("the two populations are titled apart", () => {
   const infra = tier1Report(compilerAsset());
   const visitor = tier1Report(compile());
+  // Both titles feed the contract fingerprint, so neither may drift.
+  assert.deepEqual(infra.synthesizeAs, {
+    name: "CompilerUnavailableError",
+    message: "Tier-1 preview compiler asset failed to load",
+  });
   assert.deepEqual(visitor.synthesizeAs, { name: "Tier1CompileError", message: "Tier-1 compile failed" });
   assert.notDeepEqual(infra.synthesizeAs, visitor.synthesizeAs);
 });

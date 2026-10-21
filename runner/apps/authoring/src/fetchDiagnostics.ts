@@ -56,11 +56,7 @@ export interface FetchDiagnostics {
   /** 1 (no retry attempted, or a timeout — which never retries) or 2 (a
    *  transport failure was retried once). The decisive tag: a dip fails at
    *  both attempts, a blip only fails the first. Always populated by
-   *  `fetchWithDiagnostics`; optional only because `docs-catalog.ts`'s
-   *  `fetchDocsJson` has no retry of its own to report (it cannot import this
-   *  module and stay node-importable — see this file's header) and still
-   *  reuses `diagnosticTags` with a thinner bundle
-   *  (DEV-2859's DEMOS-7D ruling). */
+   *  `fetchWithDiagnostics`. */
   attempts?: number;
   outcome?: FetchOutcome;
   /** `navigator.onLine` at the start of the call. `undefined` outside a
@@ -69,7 +65,7 @@ export interface FetchDiagnostics {
    *  same caution `tier1Report.ts` documents for the same signal. */
   onlineAtStart: boolean | undefined;
   elapsedMs?: number;
-  /** Set by the caller (`context: "versions-fetch"` or `"docs-fetch"`) before
+  /** Set by the caller (`context: "versions-fetch"`) before
    *  tagging — this module has no opinion on which population it is instrumenting. */
   context?: string;
   apiBaseOrigin?: "same" | "cross" | "localhost";
@@ -228,10 +224,8 @@ export function apiBaseOrigin(apiBase: string, pageOrigin: string): "same" | "cr
   return apiHost === pageHost ? "same" : "cross";
 }
 
-/** `context` is required and drives the tag-name prefix, so the same
- *  diagnostics shape can tag both the `versions-fetch` (DEMOS-2X) and
- *  `docs-fetch` (DEMOS-7D) populations without one borrowing the other's tag
- *  names in the Sentry UI. */
+/** `context` drives the tag-name prefix, so two populations tagged from the
+ *  same diagnostics shape never share tag names. */
 function prefixFor(diag: FetchDiagnostics): string {
   return (diag.context ?? "fetch").replace(/-/g, "_");
 }

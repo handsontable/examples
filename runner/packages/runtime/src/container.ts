@@ -461,26 +461,24 @@ export class ContainerRuntime implements DemoRuntime {
    *  own `reload()`. */
   private lastEditFlushDispatchedAt: number | null = null;
   /** Dev-server stderr lines already relayed, keyed on `normalizeMonitorMessage` —
-   *  the same fingerprint `sentry.ts` groups the Sentry issue by — so a message the
-   *  server repeats every keystroke, or with only its clock changed (a build
-   *  envelope's timestamp), is filed once. A coarser key than the raw line, on
-   *  purpose: the parent already fingerprints on the normalized message, so two raw
-   *  lines that normalize identically were always going to land in one Sentry
-   *  issue — relaying both just spent a `MONITOR_EVENT_CEILING` slot on a second
-   *  sample of a fault already reported. The honest trade: only the first variant
-   *  of a class now ever leaves the page, so no issue is lost, but sample diversity
-   *  *within* an issue narrows — `Cannot find module 'foo'` and `'bar'` used to
-   *  both reach Sentry as two events under one fingerprint; now only the first
-   *  does. Capped by `MONITOR_EVENT_CEILING` below; the set only ever holds what
-   *  fit under it.
+   *  which the parent's contract fingerprint (`telemetry/fingerprint.ts`) also
+   *  normalizes with — so a message the server repeats every keystroke, or with only
+   *  its clock changed (a build envelope's timestamp), is filed once. A coarser key
+   *  than the raw line, on purpose: two raw lines that normalize identically were
+   *  always going to count as one fault — relaying both just spent a
+   *  `MONITOR_EVENT_CEILING` slot on a second sample of a fault already reported. The
+   *  honest trade: only the first variant of a class now ever leaves the page, so no
+   *  fault class is lost, but sample diversity *within* one narrows — `Cannot find
+   *  module 'foo'` and `'bar'` used to both reach the parent under one fingerprint;
+   *  now only the first does. Capped by `MONITOR_EVENT_CEILING` below; the set only
+   *  ever holds what fit under it.
    *
    *  DEV-2853 added a second instance of the same trade: `normalizeMonitorMessage`
    *  now also collapses the bare identifier in a ReferenceError ladder (`foo is not
    *  defined`), so two dev-server stderr lines differing only in which identifier
-   *  is undefined now relay once instead of twice. No issue is lost — the parent
-   *  fingerprint in `sentry.ts` already merged them under one issue — this is just
-   *  the point where that merge also stops a second raw line from reaching the
-   *  page at all. */
+   *  is undefined now relay once instead of twice. No fault class is lost — the
+   *  parent fingerprint already merged them — this is just the point where that
+   *  merge also stops a second raw line from reaching the page at all. */
   private readonly stderrSeen = new Set<string>();
   private stderrRelayed = 0;
   private previewUrl = "";
@@ -1180,8 +1178,8 @@ export class ContainerRuntime implements DemoRuntime {
    *
    * `stderrSeen` is keyed on `normalizeMonitorMessage(message)`, not the raw line
    * — see the field comment. The relayed payload stays the raw, truncated line: the
-   * diagnostic reaching Sentry is still the verbatim compiler output, only the
-   * dedupe key is coarsened to match what `sentry.ts:263` fingerprints on.
+   * diagnostic reaching the parent is still the verbatim compiler output, only the
+   * dedupe key is coarsened to match the parent fingerprint.
    */
   private relayStderr(log: string): void {
     if (this.disposed || this.stderrCbs.size === 0) return;

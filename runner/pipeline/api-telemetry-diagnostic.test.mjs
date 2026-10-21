@@ -61,10 +61,6 @@ test("reportDiagnostic never reaches Sentry: diagnostic.ts imports no Sentry SDK
   assert.doesNotMatch(source, /\bSentry\./);
 });
 
-test("reportDiagnostic: does not throw without a Sentry client", () => {
-  assert.doesNotThrow(() => reportDiagnostic(ENV, new Error("boom"), { context: "test-site", routeClass: "api/test" }));
-});
-
 // The structured error line `reportDiagnostic` writes via `logErrorLine`
 // must carry the contract-fingerprint under `hot.fingerprint` (contract
 // §3 AE-only key) — otherwise the API worker's handled errors have no way

@@ -201,7 +201,7 @@ function ladderHarness() {
   // Mirrors `sentry.ts#collapseCompileError`.
   const collapseCompileError = (emit, origin) =>
     collapse.report("compile:sandpack.compile_error", emit, { replacesRun: true, fromBundler: origin === "bundler" });
-  // Mirrors `sentry.ts#reportDemoEventUnguarded` → `emitCollapsedDemoEvent`.
+  // Mirrors `sentry.ts#reportDemoEvent` → `emitCollapsedDemoEvent`.
   const relayRuntimeError = (message) => {
     const fp = fingerprint("demo-runtime", message);
     collapse.report(fp, () =>
