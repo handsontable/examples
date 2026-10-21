@@ -1,17 +1,14 @@
 # ADR-0041: Observability on Cloudflare — a sleeping Loki + Grafana box, OTLP inward, Sentry for uncaught errors
 
-**Status:** Proposed — design approved 2026-09-23 (revision 3), implemented, local
-end-to-end walkthrough, every sandbox probe and the first production verification
-(2026-09-29 to 2026-10-02) complete (§L "Results"). 13 of 15 exit criteria pass with
-real evidence, criteria 5, 9 and 11 now also in production; criterion 13 passes on its
-mechanism and waits for calendar time; criterion 8 (Volume) is **Mixed**, not a pass —
-Analytics Engine points and the raw Workers Logs pool both pass at 10× with real margin,
-but the exported-logs allotment does not (§D above has the numbers and the fallback).
-The design's own §L trigger (criterion 1, 2 or 7 failing) is not engaged.
-**Stays Proposed, not Accepted, pending exactly one production reading**: exit criterion
-13's real-object retention expiry in production (the inbox bucket must hold nothing older
-than 7 days; checkable on or after 2026-10-06, tracked in DEV-3178). The monthly
-exported-logs count behind criterion 8 is in (2026-10-02, below).
+**Status:** Accepted (2026-10-21) — design approved 2026-09-23 (revision 3), implemented,
+local end-to-end walkthrough, every sandbox probe and the production verification
+(2026-09-29 to 2026-10-21, DEV-3093) complete (§L "Results"). 14 of 15 exit criteria pass
+with real evidence, criteria 5, 9, 11 and 13 also in production; criterion 8 (Volume) is
+**Mixed**, not a pass — Analytics Engine points and the raw Workers Logs pool both pass at
+10× with real margin, but the exported-logs allotment does not (§D above has the numbers
+and the fallback). The design's own §L trigger (criterion 1, 2 or 7 failing) is not
+engaged. The last pending reading, criterion 13's real-object retention expiry on the
+production inbox bucket, passed on 2026-10-21 (DEV-3178).
 The §E.3 Sentry scope switch was flipped to `uncaught` on 2026-10-13, held for a week
 (checked 2026-10-21) and was then removed (DEV-3099): §E.1's split is now fixed in code.
 Supersedes ADR-0040 decisions A, B, C.2 and C.3; amends ADR-0022 (o11y spend cap,
@@ -19,7 +16,7 @@ per-script billing rows), ADR-0038 (WAF exception extended to `/telemetry/*`); a
 routes under ADR-0020. **No longer deviates from ADR-0007**: `/grafana/*` gates
 through the same Handsontable login broker as every other internal surface, not
 Cloudflare Access — see §H. ADR-0042 ships with this
-ADR, and stays at the same status (Proposed) until this one flips to Accepted.
+ADR and was accepted with it.
 ADR-0043 follows after launch (not yet dispatched).
 
 ## Context
@@ -790,13 +787,13 @@ serverless store before more is built.
 | 10 | Placement | **PASS** — sandbox: EU region `mxp04` (Milan) |
 | 11 | Worker errors → structured line | **PASS** — fetch-handler and cron paths confirmed live (T05, T11); in production (2026-09-30) one anonymous `GET /api/versions/exists?v=<600 characters>` returned 500 and produced both a Sentry event (`api-production`) and the `fetch-catch-all` error line plus the `api.request` 500 line in `Loki (worker)`. The DO-alarm path is unit/pipeline-tested (T01–T03) but not independently reproduced live |
 | 12 | Stop semantics | **PASS** — `onStop` is recorded and, by design, claims nothing about cleanliness (T01); "no SIGKILL before the clean marker" is the same platform behaviour criteria 1 and 2 already confirm |
-| 13 | Retention | **Mechanism PASS, real expiry PENDING the calendar** — R2 lifecycle rules apply and read back correctly (T01, T10); the production rules were read back on 2026-09-30: inbox `inbox-7d`, loki `browser/` 30 d, `worker/` 90 d, `index/` 90 d, `state/` 30 d, maps `maps-30d`. Real expiry on the sandbox (2026-10-02): `o11y-probe-t03-loki` still has its 1-day rule and holds 0 objects, 0 B, where the test objects were written on 2026-09-23 (consistent with expiry; bucket info alone can't rule out a manual delete, and the bucket's own delete reported "not empty" at 0 objects, likely leftover multipart uploads). Still to read in production: the inbox bucket holds no object older than 7 days, on or after 2026-10-06 (DEV-3178). The sandbox test (`t03-retention-clock-test/`) started 2026-09-23T14:15:22Z |
+| 13 | Retention | **PASS in production (2026-10-21)** — at 2026-10-21 09:27 UTC the production `handsontable-demos-o11y-inbox` held 8,476 objects (8,227 `inbox/worker/`, 249 `inbox/browser/`); the oldest, `inbox/worker/2026-10-14/09/000000014907.ndjson.gz`, was written 2026-10-14T09:16:55Z, 7 days and 11 minutes earlier, and every lower sequence number written since 2026-09-29 is gone. 10 objects were 0–11 minutes past 7 days, within R2's asynchronous lifecycle lag. Loki's own 30/90-day expiry and `max_query_lookback` cannot be read in production until the oldest data is that old (from 2026-10-29 for `browser/`); they rest on the read-back rules below and the sandbox/local evidence. Earlier: R2 lifecycle rules apply and read back correctly (T01, T10); the production rules were read back on 2026-09-30: inbox `inbox-7d`, loki `browser/` 30 d, `worker/` 90 d, `index/` 90 d, `state/` 30 d, maps `maps-30d`. Real expiry on the sandbox (2026-10-02): `o11y-probe-t03-loki` still has its 1-day rule and holds 0 objects, 0 B, where the test objects were written on 2026-09-23 (consistent with expiry; bucket info alone can't rule out a manual delete, and the bucket's own delete reported "not empty" at 0 objects, likely leftover multipart uploads). The sandbox test (`t03-retention-clock-test/`) started 2026-09-23T14:15:22Z |
 | 14 | Image size | **PASS** — 212.9 MB compressed, real `linux/amd64` build (T01), under the 1 GB bound; uncompressed size against the `standard-1` 8 GB disk was not separately recorded by any task |
 | 15 | Labels | **PASS, all four sources, both tenants** — confirmed live against the real committed `loki-config.yaml`: Faro (`demos-authoring`) and the lite beacon (`demos-embed`), browser tenant; the Cloudflare export (`demos-api`) and deploy events (`demos-o11y`), worker tenant — all seven labels populated, `service.version` present as a resource attribute but deliberately never promoted to a label (see §C.2), `hot.demo_id`/`session.id`/`cf.ray` never labels |
 
 §L's own trigger (criterion 1, 2 or 7 failing its plan B) is **not** engaged — all three pass.
-One production reading keeps this ADR at **Proposed** rather than **Accepted**: criterion
-13's real retention expiry on the production inbox bucket, on or after 2026-10-06 (DEV-3178).
+The last production reading, criterion 13's real retention expiry on the production inbox
+bucket, passed on 2026-10-21 (DEV-3178), so this ADR is **Accepted**.
 Criterion 8's exported-logs finding is real and measured, not a missing-evidence gap: the
 monthly count (about 0.36M to 0.85M events/month today) is recorded in the row above and
 confirms the §D projection, so lowering `head_sampling_rate` stays the named fallback, to be
