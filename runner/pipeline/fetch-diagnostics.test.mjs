@@ -19,7 +19,6 @@ import {
   elapsedBucket,
   apiBaseOrigin,
   diagnosticTags,
-  diagnosticExtras,
 } from "../apps/authoring/src/fetchDiagnostics.ts";
 
 function fakeClock(step = 10) {
@@ -177,7 +176,7 @@ test("elapsedBucket: every boundary is pinned from both sides", () => {
   }
 });
 
-// --- diagnosticTags / diagnosticExtras -----------------------------------
+// --- diagnosticTags -----------------------------------------------
 
 test("diagnosticTags: prefixes tag names from context, versions-fetch", () => {
   const tags = diagnosticTags({
@@ -207,24 +206,6 @@ test("diagnosticTags: prefixes tag names from context, docs-fetch (DEMOS-7D)", (
   assert.equal(tags.docs_fetch_attempts, "1");
   assert.equal(tags.docs_fetch_outcome, "ok");
   assert.equal("docs_fetch_online" in tags, false); // omitted when unknown
-});
-
-test("diagnosticExtras: host-class only, never a raw URL", () => {
-  const extras = diagnosticExtras({
-    context: "versions-fetch",
-    attempts: 2,
-    outcome: "transport",
-    onlineAtStart: true,
-    elapsedMs: 1234,
-    apiBaseOrigin: "same",
-  });
-  assert.equal(extras.elapsedMs, "1234");
-  assert.match(extras.attemptSummary, /2 attempts, transport/);
-  assert.equal(extras.apiBaseClass, "same");
-  for (const value of Object.values(extras)) {
-    assert.equal(String(value).includes("http"), false);
-    assert.equal(String(value).includes("?"), false);
-  }
 });
 
 test("the attached fetchDiagnostics property is non-enumerable", async () => {

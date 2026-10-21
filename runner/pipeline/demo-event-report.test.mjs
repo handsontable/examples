@@ -38,21 +38,6 @@ test("network maps to 'network', stderr maps to 'stderr'", () => {
   );
 });
 
-test("only console-warn is budgeted against the looser breadcrumb cap", () => {
-  const kinds = ["error", "rejection", "console-error", "network", "stderr"];
-  for (const kind of kinds) {
-    assert.equal(
-      demoEventReport({ kind, message: "m", tier: 1, framework: "react", htMajor: "18" }).budget,
-      "relay",
-      `kind=${kind}`,
-    );
-  }
-  assert.equal(
-    demoEventReport({ kind: "console-warn", message: "m", tier: 1, framework: "react", htMajor: "18" }).budget,
-    "breadcrumb",
-  );
-});
-
 test("attrs carry surface=demo-runtime, the stringified tier, framework, and ht_major", () => {
   const report = demoEventReport({ kind: "error", message: "m", tier: 2, framework: "vue", htMajor: "17" });
   assert.deepEqual(report.attrs, { surface: "demo-runtime", tier: "2", framework: "vue", ht_major: "17" });

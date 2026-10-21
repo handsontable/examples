@@ -21,8 +21,8 @@ build/
 test-results/
 playwright-report/
 .playwright/
-# telemetry e2e specs' own private preview builds (telemetry-faro.spec.ts's
-# dist-uncaught-scope, example-analytics.spec.ts's dist-example-analytics) —
+# telemetry e2e specs' own private preview builds (dist-o11y-local,
+# dist-example-analytics, dist-telemetry-metrics) —
 # `dist/` above only matches the literal name, not these (D-I1 fix round).
 apps/authoring/dist-*/
 

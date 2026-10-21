@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { demoIdFromPath, routeClassOf, validSessionId } from "../workers/api/src/telemetry/route-class.ts";
 import { serviceEnvironment, serviceVersion } from "../workers/api/src/telemetry/resource.ts";
-import { sentryScopeIsFull } from "../workers/api/src/telemetry/scope.ts";
 
 // Route classification (blob10 `route_class`, contract §4) and the
 // service.version / deployment.environment.name resource attrs (contract §3).
@@ -121,27 +120,4 @@ test("serviceVersion: an empty --var (wrangler's own empty-string shape) still f
   // `wrangler deploy --var SERVICE_VERSION:` yields "", exactly like
   // SENTRY_ENVIRONMENT's documented empty-string case in sentry-gate.ts.
   assert.equal(serviceVersion({ SERVICE_VERSION: "", CF_VERSION_METADATA: { id: "v-id", tag: "" } }), "v-id");
-});
-
-// ── contract §11: the Sentry scope switch's decision ─────────────────────────
-//
-// `diagnostic.ts#reportDiagnostic` gates its `Sentry.captureException` call
-// on this function's result
-// (`if (sentryScopeIsFull(env)) { Sentry.captureException(...) }` — read
-// directly in the source, since `diagnostic.ts` itself pulls in the real
-// `@sentry/cloudflare` package). This is the decision alone; a live
-// transport-spy integration check needs a running `wrangler dev`, where
-// Sentry deliberately never initialises at all (sentry-gate.ts's own
-// local-dev gate).
-
-test("sentryScopeIsFull: full (the default) is true", () => {
-  assert.equal(sentryScopeIsFull({ SENTRY_SCOPE: "full" }), true);
-});
-
-test("sentryScopeIsFull: uncaught is false", () => {
-  assert.equal(sentryScopeIsFull({ SENTRY_SCOPE: "uncaught" }), false);
-});
-
-test("sentryScopeIsFull: absent means full, exactly like leaving the wrangler.jsonc var out", () => {
-  assert.equal(sentryScopeIsFull({}), true);
 });

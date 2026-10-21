@@ -10,13 +10,11 @@ import {
 } from "../workers/api/src/sentry-gate.ts";
 import {
   applyFaroTee,
-  isEdgelessForeignSessionStart,
   isForeignUnhandled,
   isOfficeScannerRejection,
   isUnhandledNoise,
   withoutMessageEchoFrames,
 } from "../apps/authoring/src/eventGate.ts";
-import { resolveSentryScope, reportsDiagnosticToSentry } from "../apps/authoring/src/sentryScope.ts";
 import { safeInit } from "../apps/authoring/src/bootGuard.ts";
 
 // DEV-2540. Three classes of traffic reached the production Sentry project that had
@@ -331,11 +329,11 @@ test("a genuinely foreign third-party script error is still dropped", () => {
   assert.equal(isForeignUnhandled(event, "http://localhost:5173"), true);
 });
 
-// ── DEV-2858. beforeSend suppression gates for two NOT-OURS populations ─────────
+// ── DEV-2858. beforeSend suppression gate for a NOT-OURS population ─────────────
 //
-// `isOfficeScannerRejection` (DEMOS-5F) and `isEdgelessForeignSessionStart`
-// (DEMOS-9) live in `eventGate.ts`, import-free for the same reason as
-// `sentry-gate.ts` above. P = dropped (positive match), N = reported (must survive).
+// `isOfficeScannerRejection` (DEMOS-5F) lives in `eventGate.ts`, import-free for
+// the same reason as `sentry-gate.ts` above. P = dropped (positive match),
+// N = reported (must survive).
 
 // ── DEMOS-5F: Office/Outlook safelink scanner ────────────────────────────────────
 
@@ -412,153 +410,6 @@ test("N3: an event with no exception values does not throw and is not dropped", 
   // Guards an unguarded event.exception.values deref.
   assert.equal(isOfficeScannerRejection({ exception: { values: [] } }), false);
   assert.equal(isOfficeScannerRejection({}), false);
-});
-
-// ── DEMOS-9: edgeless-foreign session-start facet ────────────────────────────────
-//
-// Tag shapes mirror the ones App.tsx:292-305 actually sets.
-
-test("P1: foreign origin with no cf_ray is dropped", () => {
-  const event = {
-    tags: {
-      context: "tier2-session-start",
-      session_status: "504",
-      session_response_origin: "foreign",
-      session_response_type: "basic",
-      session_elapsed_bucket: "<1s",
-      framework: "angular",
-    },
-  };
-  assert.equal(isEdgelessForeignSessionStart(event), true);
-});
-
-test("P2: a different session_status is still dropped", () => {
-  // Fails if someone adds a status conjunct — the tier turns on where the response
-  // came from, not on the status (pipeline/session-start-failure.test.mjs:464).
-  const event = {
-    tags: {
-      context: "tier2-session-start",
-      session_status: "503",
-      session_response_origin: "foreign",
-      session_response_type: "basic",
-      session_elapsed_bucket: "<1s",
-      framework: "angular",
-    },
-  };
-  assert.equal(isEdgelessForeignSessionStart(event), true);
-});
-
-test("N1 (highest value in this change): a foreign-shaped event WITH a cf_ray is reported", () => {
-  // Unreachable today — sessionDiagnostics.ts's responseOrigin only returns
-  // "foreign" when there is no ray. This is a spec guard on an input the taxonomy
-  // does not currently produce, kept because the !cf_ray conjunct is narrowing
-  // (can only suppress less), not widening (see eventGate.ts's comment). Fails the
-  // moment the gate is collapsed to an origin-only check.
-  const event = {
-    tags: {
-      context: "tier2-session-start",
-      session_status: "504",
-      session_response_origin: "foreign",
-      session_response_type: "basic",
-      session_elapsed_bucket: "<1s",
-      framework: "angular",
-      cf_ray: "9a1b2c3d4e5f6789-WAW",
-    },
-  };
-  assert.equal(isEdgelessForeignSessionStart(event), false);
-});
-
-test("N2: the real capacity signal — cloudflare origin with a ray — is reported", () => {
-  // Fails if the gate is collapsed to a ray-only check instead of requiring the
-  // foreign origin too.
-  const event = {
-    tags: {
-      context: "tier2-session-start",
-      session_status: "504",
-      session_response_origin: "cloudflare",
-      cf_ray: "9a1b2c3d4e5f6789-WAW",
-    },
-  };
-  assert.equal(isEdgelessForeignSessionStart(event), false);
-});
-
-test("N3: an 'unreadable' origin (cross-origin dev) is reported", () => {
-  // headersReadable is called load-bearing at session-start-failure.test.mjs:432 —
-  // absence of a ray proves nothing when headers cannot be read at all.
-  const event = {
-    tags: {
-      context: "tier2-session-start",
-      session_response_origin: "unreadable",
-    },
-  };
-  assert.equal(isEdgelessForeignSessionStart(event), false);
-});
-
-test("N4: a 'headerless' origin is reported", () => {
-  // One taxonomy value is suppressed by this gate, not three.
-  const event = {
-    tags: {
-      context: "tier2-session-start",
-      session_response_origin: "headerless",
-    },
-  };
-  assert.equal(isEdgelessForeignSessionStart(event), false);
-});
-
-test("N5: an untagged pre-instrumentation event is reported", () => {
-  // The ~88 events predating DEV-2559's diagnostics tags. Guards a
-  // !== "cloudflare" inversion — an absent session_response_origin must not be
-  // treated as evidence of "foreign".
-  const event = { tags: { context: "tier2-session-start", session_status: "504" } };
-  assert.equal(isEdgelessForeignSessionStart(event), false);
-});
-
-test("N6: a foreign-shaped event under a different context is reported", () => {
-  // Guards the context scoping conjunct — a future reuse of
-  // session_response_origin outside tier2-session-start must not be silently
-  // silenced.
-  const event = { tags: { context: "tier2-container-boot", session_response_origin: "foreign" } };
-  assert.equal(isEdgelessForeignSessionStart(event), false);
-});
-
-test("N7: an event with no tags at all does not throw and is not dropped", () => {
-  assert.equal(isEdgelessForeignSessionStart({}), false);
-  assert.equal(isEdgelessForeignSessionStart({ tags: {} }), false);
-});
-
-// ── contract §11 / ADR §E.3: VITE_SENTRY_SCOPE ──────────────────────────────────────
-//
-// `sentryScope.ts` is import-free for the same reason as `reportingGate.ts` — see
-// its own header. The truth table: `"full"` is the default for every input other
-// than the exact string `"uncaught"`, and `reportsDiagnosticToSentry` only ever
-// narrows `reportingEnabled`, never widens it.
-
-test("resolveSentryScope: only the literal 'uncaught' opens the narrow scope", () => {
-  assert.equal(resolveSentryScope("uncaught"), "uncaught");
-});
-
-test("resolveSentryScope: absent, empty, or any other string stays 'full'", () => {
-  for (const raw of [undefined, "", "Uncaught", "UNCAUGHT", "full", "off", "uncaught "]) {
-    assert.equal(resolveSentryScope(raw), "full", `raw=${JSON.stringify(raw)}`);
-  }
-});
-
-test("reportsDiagnosticToSentry: full scope + reporting enabled -> true", () => {
-  assert.equal(reportsDiagnosticToSentry(true, "full"), true);
-});
-
-test("reportsDiagnosticToSentry: uncaught scope closes it even though reporting is enabled", () => {
-  // The launch-plan flip (ADR §E.3): once this ships, a handled diagnostic no
-  // longer reaches Sentry at all, on the production host, with reporting on.
-  assert.equal(reportsDiagnosticToSentry(true, "uncaught"), false);
-});
-
-test("reportsDiagnosticToSentry: never widens a closed reportingEnabled gate", () => {
-  // The regression this guards: a scope switch must not become a second way to
-  // turn Sentry on when the production/automation gate (reportingGate.ts) is
-  // already closed — full scope on a closed gate still reports nothing.
-  assert.equal(reportsDiagnosticToSentry(false, "full"), false);
-  assert.equal(reportsDiagnosticToSentry(false, "uncaught"), false);
 });
 
 // ── unguarded browser telemetry ───────────────────────────────────────────────────

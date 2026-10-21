@@ -170,22 +170,31 @@ test("T4 (negative guard, passes before and after): a genuine EACCES is not degr
   assert.equal(
     captured[0].context?.level,
     undefined,
-    "no level override — this must file at Sentry's default (error), unlike the container-starting degrade",
+    "no level override — this must file at Sentry's default (error)",
   );
 });
 
-test("T5: the container-starting capture is a warning under its own fingerprint", async () => {
+// The degrade is a handled refusal (ADR-0041 §E.1): it is reported as a
+// structured error line, never as a Sentry event.
+test("T5: the container-starting degrade never reaches Sentry, but logs a handled error line", async () => {
   const { env } = makeEnv();
   const sandbox = fakeSandbox({ mkdirError: new Error(CONTAINER_STARTING) });
   setSandboxFactory(() => sandbox);
 
+  const lines = [];
+  const realConsoleError = console.error;
+  console.error = (...args) => lines.push(args.join(" "));
   const before = captures.length;
-  await worker.fetch(sessionRequest({ framework: "react-js", files: FILES }), env, ctx);
-  const captured = captures.slice(before);
+  let res;
+  try {
+    res = await worker.fetch(sessionRequest({ framework: "react-js", files: FILES }), env, ctx);
+  } finally {
+    console.error = realConsoleError;
+  }
 
-  assert.equal(captured.length, 1, "exactly one Sentry event for the degrade");
-  assert.equal(captured[0].kind, "exception");
-  assert.equal(captured[0].context?.level, "warning");
-  assert.deepEqual(captured[0].context?.fingerprint, ["tier2-session-container-starting"]);
-  assert.deepEqual(captured[0].context?.tags, { context: "tier2-session-start" });
+  assert.equal(res.status, 503);
+  assert.equal(captures.length - before, 0, "a handled degrade must not file a Sentry event");
+  const handled = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter((l) => l?.["log.kind"] === "error" && l.context === "tier2-session-container-starting");
+  assert.equal(handled.length, 1, "exactly one structured error line for the degrade");
 });

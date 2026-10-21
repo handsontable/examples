@@ -14,7 +14,6 @@ import {
   MONITOR_URL_MAX,
   REPORTER_MODULE_LINE,
   REPORTER_SOURCE,
-  createMonitorBudget,
   injectReporter,
   injectReporterIntoHtml,
   isMonitorPayload,
@@ -1238,44 +1237,6 @@ test("sanitizeMonitorPayload keeps optional fields absent rather than empty", ()
   const clean = sanitizeMonitorPayload({ type: MONITOR_MESSAGE_TYPE, kind: "console-warn", message: "x" });
   assert.equal("stack" in clean, false);
   assert.equal("url" in clean, false);
-});
-
-// ---- the parent-side budget ------------------------------------------------
-//
-// Bugbot #190, MEDIUM: the reporter's ceiling runs *inside* the preview, next to code
-// the demo's author wrote — and for a shared or docs example that author is not the
-// person viewing it. Such a demo can skip the reporter and postMessage crafted
-// payloads with unique messages straight at the parent, so the in-page cap bounds
-// nothing. These cover the copy that is actually enforceable.
-
-test("budget stops at the ceiling however unique the messages are", () => {
-  const budget = createMonitorBudget(3);
-  const admitted = Array.from({ length: 50 }, (_, i) => budget.admit("error", `unique ${i}`));
-  assert.equal(admitted.filter(Boolean).length, 3, "a flood of distinct messages is still capped");
-});
-
-test("budget dedupes on kind + message + first frame", () => {
-  const budget = createMonitorBudget(10);
-  const stack = "Error: x\n    at boom (https://preview/app.js:1:1)";
-
-  assert.equal(budget.admit("error", "same", stack), true);
-  assert.equal(budget.admit("error", "same", stack), false, "identical report");
-  assert.equal(budget.admit("console-error", "same", stack), true, "a different kind is a different report");
-  assert.equal(
-    budget.admit("error", "same", "Error: x\n    at other (https://preview/app.js:9:9)"),
-    true,
-    "same message, different frame, is a different fault",
-  );
-});
-
-test("budgets are independent instances", () => {
-  // The app holds one per page load; a per-mount budget would hand out a fresh
-  // allowance on every example switch.
-  const a = createMonitorBudget(1);
-  const b = createMonitorBudget(1);
-  assert.equal(a.admit("error", "x"), true);
-  assert.equal(a.admit("error", "y"), false);
-  assert.equal(b.admit("error", "x"), true, "a separate budget is unaffected");
 });
 
 test("REPORTER_SOURCE parses as ES5", () => {
