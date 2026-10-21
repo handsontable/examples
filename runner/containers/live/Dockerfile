@@ -47,11 +47,6 @@ COPY baked/next-shadcn-js-18/package.json baked/next-shadcn-js-18/pnpm-lock.yaml
 RUN cd /baked/next-shadcn-js-18 && pnpm install --frozen-lockfile
 COPY baked/next-shadcn-js-18/prime/ /prime/next-shadcn-js-18/
 RUN prime-dev-cache.sh next-shadcn-js-18 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0" && rm -rf /prime/next-shadcn-js-18
-RUN echo "PROBE alloc" && du -sh /baked/next-js-18/.next /baked/next-shadcn-js-18/.next \
-  && echo "PROBE apparent" && du -sh --apparent-size /baked/next-js-18/.next /baked/next-shadcn-js-18/.next \
-  && echo "PROBE files" && find /baked/next-js-18/.next /baked/next-shadcn-js-18/.next -type f | wc -l \
-  && echo "PROBE big" && find /baked/next-js-18/.next /baked/next-shadcn-js-18/.next -type f -size +20M -exec ls -ls {} \; \
-  && echo "PROBE baked" && du -sh /baked && du -sh --apparent-size /baked && echo "PROBE store" && du -sh /root/.local/share/pnpm 2>/dev/null; true
 
 # astro (bucket 18)
 COPY baked/astro-18/package.json baked/astro-18/pnpm-lock.yaml /baked/astro-18/
