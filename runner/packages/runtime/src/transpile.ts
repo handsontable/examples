@@ -47,10 +47,9 @@ export function createLazyLoader<T>(load: () => Promise<T>): () => Promise<T> {
 /**
  * What a `CompilerUnavailableError` says, always (DEV-2569).
  *
- * Constant on purpose. A Sentry issue derives its title from `name: message` and
- * re-derives it from the newest event, so a message carrying the hashed chunk URL titles
- * the issue after one sample and renames it with the next one. That is half of what
- * DEMOS-15 was. The URL rides on `assetUrl` and reaches Sentry as an extra.
+ * Constant on purpose. A message carrying the hashed chunk URL would make every deploy's
+ * chunk its own failure class, and a report titled after one sample. That is half of
+ * what DEMOS-15 was. The URL stays on `assetUrl`, out of the message.
  */
 export const COMPILER_UNAVAILABLE_MESSAGE = "the in-browser compiler could not be loaded";
 
@@ -120,12 +119,10 @@ export function isCompilerUnavailable(e: unknown): boolean {
  * sees these sources, so it is the only place the failure exists as an error object.
  *
  * A plain `Error` marked after construction, not a subclass or a factory, and deliberately
- * so. The same error reaches Sentry as the `cause` of the constant-titled
- * `Tier1CompileError` on the mount path (`tier1Report`), and the linked-errors integration
- * serialises its `name`, message and stack: a subclass would rename it or add a
- * constructor frame, a factory would add its own frame, and this classification must not
- * move a byte of what Sentry receives. The marker (not `instanceof`) also matches
- * `CompilerUnavailableError`'s cross-bundle reasoning above.
+ * so: the same error is the `cause` of the constant-titled `Tier1CompileError` on the mount
+ * path (`tier1Report`), and a subclass would rename it while a factory would add its own
+ * frame. The marker (not `instanceof`) also matches `CompilerUnavailableError`'s
+ * cross-bundle reasoning above.
  */
 function markTranspileFailure(error: Error): void {
   (error as { transpileFailed?: boolean }).transpileFailed = true;

@@ -169,7 +169,6 @@ test.describe("o11y local end-to-end", () => {
         VITE_TELEMETRY_LOCAL: "1",
         VITE_DEV_USER: "t11-e2e@handsontable.com",
         VITE_API_BASE: API_BASE_URL,
-        VITE_SENTRY_SCOPE: "full",
       },
       stdio: "pipe",
     });

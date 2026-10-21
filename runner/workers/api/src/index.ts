@@ -284,15 +284,10 @@ class SandboxBaseWithSleep extends SandboxBase {
     if (descriptor.report && !this.bootFailureReported) {
       this.bootFailureReported = true;
       const env = this.env as Env;
-      // ADR-0041 §E.1: a diagnostic (handled) capture — always on the new
-      // stack, to Sentry only while SENTRY_SCOPE is "full". Fingerprinted
-      // away from the raw error so surviving events stay countable as a
-      // capacity signal.
+      // ADR-0041 §E.1: a diagnostic (handled) report, never sent to Sentry.
       reportDiagnostic(env, err, {
         context: "preview-boot-window-exceeded",
         routeClass: "api/session/:id/*",
-        tags: { preview_boot: "terminal" },
-        sentryFingerprint: ["preview-boot-window-exceeded"],
       });
       // `container.boot_ms`, outcome `window_exceeded` — not `session.start`'s
       // `boot_timeout`: this DO fetch override can fire long after
@@ -556,10 +551,9 @@ async function teardownLiveSession(
     // retained. Capacity events are rare (two in 90 days), which makes the
     // expected number of surviving log lines a fraction of one.
     //
-    // So the event also goes to Sentry, as a `warning` (a handled refusal,
-    // ADR-0041 §E.1, not an escape), fingerprinted so it doesn't land in the
-    // same grab-bag as DEMOS-1. The structured line and `error.handled`
-    // point below are the always-on signal — see `reportDiagnostic`.
+    // So the event also goes through `reportDiagnostic` (a handled refusal,
+    // ADR-0041 §E.1, not an escape): its structured line and `error.handled`
+    // point are the always-on signal.
     //
     // This matters most for `container service is unreachable`, the weakest
     // member of `isExpectedTeardownFailure`: unlike the other three it does NOT
@@ -570,9 +564,6 @@ async function teardownLiveSession(
     reportDiagnostic(env, err, {
       context: "tier2-teardown-declined",
       routeClass: "api/session/:id",
-      level: "warning",
-      tags: { context: "tier2-teardown" },
-      sentryFingerprint: ["tier2-teardown-declined"],
     });
   }
 }
@@ -1210,15 +1201,11 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // were added anywhere in this fix.
           if (isContainerStartingFailure(err)) {
             console.warn(`[session] ${body.framework} session ${sessionId}: container never became ready`);
-            // Handled refusal (ADR-0041 §E.1): the scope switch, plus the
-            // structured line and `error.handled` point, make it visible
-            // without Sentry too.
+            // Handled refusal (ADR-0041 §E.1): visible through the
+            // structured line and `error.handled` point.
             reportDiagnostic(env, err, {
               context: "tier2-session-container-starting",
               routeClass: "api/session",
-              level: "warning",
-              tags: { context: "tier2-session-start" },
-              sentryFingerprint: ["tier2-session-container-starting"],
             });
             void emitSessionStart("container_starting");
             return json({ error: CONTAINER_STARTING_CODE, message: containerStartingMessage }, 503);
@@ -2025,7 +2012,6 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           reportDiagnostic(env, e, {
             context: "npm-registry:version-exists",
             routeClass: "api/versions/exists",
-            tags: { upstream: "npm-registry", probe: "version-exists" },
           });
           return json({ error: e instanceof Error ? e.message : String(e) }, 502);
         }
@@ -2065,7 +2051,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             );
             return json({ error: error.message }, error.status);
           }
-          reportDiagnostic(env, error, { context: "import-url", routeClass: "api/import", tags: { upstream: "import-url" } });
+          reportDiagnostic(env, error, { context: "import-url", routeClass: "api/import" });
           void emitPoint(
             env,
             "import.url",
@@ -2139,7 +2125,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // KV failure gets here as something else, and that one is ours — a
           // diagnostic (handled into a 500, not an escape).
           if (error instanceof ImportError) return json({ error: error.message }, error.status);
-          reportDiagnostic(env, error, { context: "payload-store", routeClass: "api/payload", tags: { route: "payload" } });
+          reportDiagnostic(env, error, { context: "payload-store", routeClass: "api/payload" });
           void emitPoint(env, "payload.boot", { count: 1 }, { framework: "other", outcome: "error" });
           return json({ error: "could not store that project" }, 500);
         }
@@ -2169,7 +2155,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         try {
           record = await env.CACHE.get(`payload:${payloadId}`, "json");
         } catch (error) {
-          reportDiagnostic(env, error, { context: "payload-load", routeClass: "api/payload/:id", tags: { route: "payload" } });
+          reportDiagnostic(env, error, { context: "payload-load", routeClass: "api/payload/:id" });
           bootFailed();
           return json({ error: "could not load that project" }, 500);
         }
@@ -2192,7 +2178,6 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           reportDiagnostic(env, e, {
             context: "npm-registry:versions",
             routeClass: "api/versions",
-            tags: { upstream: "npm-registry", probe: "versions" },
           });
           return json({ error: e instanceof Error ? e.message : String(e) }, 502);
         }
@@ -2278,14 +2263,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
             // Configuration faults (no `status`) are already logged in chat.ts;
             // a gateway failure (`status` set) is the ADR-0041 §E.1 diagnostic.
             if (err.status !== undefined) {
-              reportDiagnostic(env, err, {
-                context: "chat-gateway",
-                routeClass: "api/chat",
-                tags: { upstream: "litellm-chat", status: String(err.status), request_id: err.requestId ?? "none" },
-                // Groups by gateway + status, not by message (which carries a
-                // unique `request_id` and would fingerprint every request separately).
-                sentryFingerprint: ["litellm-gateway", String(err.status)],
-              });
+              reportDiagnostic(env, err, { context: "chat-gateway", routeClass: "api/chat" });
             }
             // the caller gets a sentence, not a stack trace.
             return json({ error: "chat_unavailable", message: err.message }, 503);
@@ -2352,13 +2330,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           if (err instanceof ChatUnavailableError) {
             ctx.waitUntil(recordUsageEvent(env, "chat_error", "theme"));
             if (err.status !== undefined) {
-              reportDiagnostic(env, err, {
-                context: "theme-gateway",
-                routeClass: "api/theme",
-                tags: { upstream: "litellm-theme", status: String(err.status), request_id: err.requestId ?? "none" },
-                // Same reasoning as the chat-gateway call site above.
-                sentryFingerprint: ["litellm-gateway", String(err.status)],
-              });
+              reportDiagnostic(env, err, { context: "theme-gateway", routeClass: "api/theme" });
             }
             return json({ error: "chat_unavailable", message: err.message }, 503);
           }
@@ -2685,9 +2657,8 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
       // Client input validation (a 400) is not a fault — never reported.
       if (err instanceof InvalidFilePathError) return json({ error: err.message }, 400);
       // This catch turns every unexpected throw into a 500 body, so withSentry()
-      // never sees it. Report here or the error is invisible. ADR-0041 §E.1: stays
-      // in Sentry unconditionally in both scopes, and now also gets our own
-      // structured line (§D).
+      // never sees it. Report here or the error is invisible. ADR-0041 §E.1: an
+      // escaped error, so it goes to Sentry, plus our own structured line (§D).
       if (err instanceof BuildFailure) {
         logErrorLine(env, "fetch-catch-all:build-failure", err, { phase: err.phase, code: err.code });
         // The demo's own input failing the build is a 4xx, out of `api-5xx-rate` (the
@@ -2705,7 +2676,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // which is the same one-defect-many-issues shape DEV-2570 exists to end,
           // only better titled. Keyed by the machine code so the group stays
           // diagnosable; the title then tracks the newest event within it, which is
-          // the accepted trade (`ContainerBootFailure` in App.tsx makes the same one).
+          // the accepted trade.
           // Bundler failures carry no machine code and therefore share the `other`
           // group — coarse, but their causes are specific (the picker takes the line
           // under a label like vite's "error during build:"), so the title still names

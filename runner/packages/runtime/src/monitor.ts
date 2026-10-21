@@ -51,19 +51,11 @@ export function postMonitorReset(target: { postMessage(message: unknown, origin:
  * Ceiling on relayed `console-warn` events per page load, counted separately from
  * `MONITOR_EVENT_CEILING` (DEV-2539).
  *
- * A warning is context, not a fault: parent-side it becomes a Sentry *breadcrumb*
- * attached to the next real error, never an issue of its own. That is why the two
- * ceilings are separate in both directions. Looser, because a breadcrumb costs no
- * issue and the whole point is to have the warnings that preceded a failure. But
- * still capped, and still its own budget — sharing the relay ceiling would let a
- * demo that warns on every render (Handsontable's own "Theme is already registered"
- * notice is emitted by normal re-renders) spend all twenty slots before the
+ * A warning is context, not a fault: the parent files it nowhere (`demoEventReport.ts`
+ * gives it no reason). It still gets its own ceiling — sharing the relay ceiling would
+ * let a demo that warns on every render (Handsontable's own "Theme is already
+ * registered" notice is emitted by normal re-renders) spend all twenty slots before the
  * `console.error` explaining the breakage is ever posted.
- *
- * Paired with `maxBreadcrumbs` in `apps/authoring/src/sentry.ts`, which the demo
- * shares with the authoring app's own trail and which evicts oldest-first: this
- * number must stay a small fraction of it, or a chatty demo silently erases the
- * clicks and fetches that explain an unrelated app failure. Move the two together.
  */
 export const MONITOR_BREADCRUMB_CEILING = 50;
 
@@ -265,52 +257,6 @@ export function isMonitorPayload(data: unknown): data is MonitorPayload {
 export function truncateMessage(value: unknown, max: number = MONITOR_MESSAGE_MAX): string {
   const s = typeof value === "string" ? value : String(value);
   return s.length <= max ? s : s.slice(0, max) + "...";
-}
-
-/** First stack frame, which is what makes two same-message faults distinguishable. */
-function firstStackFrame(stack: string | undefined): string {
-  if (!stack) return "";
-  for (const raw of stack.split("\n")) {
-    const line = raw.trim();
-    if (line.startsWith("at ")) return line;
-  }
-  return stack.split("\n")[0]?.trim() ?? "";
-}
-
-/** The identity two reports must share to count as the same one. */
-export function monitorDedupeKey(kind: string, message: string, stack?: string): string {
-  return `${kind}|${message}|${firstStackFrame(stack)}`;
-}
-
-/**
- * A relay budget: the in-page reporter's ceiling and dedupe, counted per page load
- * somewhere the demo cannot reach.
- *
- * The reporter's copy is not a cap. It runs *inside* the preview, alongside code
- * authored by whoever made the demo — and for a shared or docs example, by someone
- * other than the person viewing it. Such a demo can ignore the reporter entirely and
- * `postMessage` crafted payloads with unique messages straight at the parent. So the
- * parent keeps its own budget, and that one is enforceable.
- *
- * Deliberately not exported as a singleton: the app wants one per page load, and a
- * test wants a fresh one per case.
- */
-export function createMonitorBudget(ceiling: number = MONITOR_EVENT_CEILING): {
-  admit(kind: string, message: string, stack?: string): boolean;
-} {
-  const seen = new Set<string>();
-  let used = 0;
-  return {
-    /** True if this event fits the budget, which it then consumes. */
-    admit(kind, message, stack) {
-      if (used >= ceiling) return false;
-      const key = monitorDedupeKey(kind, message, stack);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      used += 1;
-      return true;
-    },
-  };
 }
 
 /**

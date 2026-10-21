@@ -1,5 +1,5 @@
 import { test, expect, type Route, type Page } from "@playwright/test";
-import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
@@ -25,8 +25,7 @@ const newerPatch = (v: string) => v.replace(/\d+$/, (patch) => String(Number(pat
 //
 // This spec manages its own preview server, not the shared
 // playwright.config.ts webServer, so it never depends on whatever `dist`
-// another spec run left behind. `E2E_TELEMETRY_PORT` /
-// `E2E_TELEMETRY_UNCAUGHT_PORT` override the ports.
+// another spec run left behind. `E2E_TELEMETRY_PORT` overrides the port.
 const PORT = Number(process.env.E2E_TELEMETRY_PORT ?? 4711);
 // 127.0.0.1, not "localhost": in CI (the Playwright container job) this
 // spec's own `fetch("http://localhost:…")` readiness poll failed outright
@@ -127,21 +126,33 @@ function readSentryEvents(page: Page): Promise<Record<string, unknown>[]> {
   });
 }
 
-/** `window.__t06ReportDemoEvent`, called from the browser with a minimal
- *  `MonitorPayload`/`DemoEventContext` pair — bypasses `monitorDemos` (see
- *  `sentry.ts#reportDemoEventUnguarded`'s doc comment) so this deterministic
- *  spec can drive `reportDemoEvent`'s reporting logic without a real
- *  (E2E_LIVE-gated) preview mount. */
+/** Throws an uncaught error on the page and waits until Sentry's transport
+ *  spy holds it — proof the Sentry client is alive, so a later "never reached
+ *  Sentry" check cannot pass just because nothing has been sent yet. */
+async function awaitSentryAlive(page: Page): Promise<void> {
+  const marker = "T06 e2e Sentry-alive control " + Date.now();
+  await page.evaluate((msg) => {
+    setTimeout(() => { throw new Error(msg); });
+  }, marker);
+  await expect
+    .poll(() => readSentryEvents(page).then((events) => events.some((e) => JSON.stringify(e).includes(marker))))
+    .toBe(true);
+}
+
+/** `window.__t06ReportDemoEventGuarded` — the real `reportDemoEvent` entry
+ *  point `App.tsx` uses — called from the browser with a minimal
+ *  `MonitorPayload`/`DemoEventContext` pair, so this deterministic spec can
+ *  drive the relay without a real (E2E_LIVE-gated) preview mount. */
 function callReportDemoEvent(page: Page, message: string): Promise<void> {
   return page.evaluate((msg) => {
     (
       window as unknown as {
-        __t06ReportDemoEvent?: (
+        __t06ReportDemoEventGuarded?: (
           payload: { type: string; kind: string; message: string },
           context: { tier: number; framework: string; htMajor: string },
         ) => void;
       }
-    ).__t06ReportDemoEvent?.(
+    ).__t06ReportDemoEventGuarded?.(
       { type: "hot-runner-monitor", kind: "error", message: msg },
       { tier: 1, framework: "react", htMajor: "18" },
     );
@@ -271,7 +282,7 @@ test.describe("Faro in the authoring app", () => {
   // second example (identical `ref`-keyed attrs) must still leave the
   // browser. `faro.ts`'s `event()`/`metric()` pass `skipDedupe: true`;
   // `window.__t06Telemetry` (a build+host-gated e2e-only hook, same
-  // guarantee as `__t06ReportDemoEvent`) calls the real facade methods
+  // guarantee as `__t06ReportDemoEventGuarded`) calls the real facade methods
   // directly so this proves the facade's own behaviour without driving the
   // real save/download UI.
   test("two identical example.downloaded events both reach Faro (facade skipDedupe)", async ({ page }) => {
@@ -547,13 +558,10 @@ test.describe("Faro in the authoring app", () => {
     captured.forEach((body, i) => scan(body, `body[${i}]`));
   });
 
-  // ---- an uncaught error reaches Sentry (transport spy) ----------------------
+  // ---- Sentry receives uncaught errors only (transport spy) ------------------
   //
-  // Three cases, all against this describe block's `full`-scope build (the
-  // default — no VITE_SENTRY_SCOPE set): uncaught always reaches Sentry;
-  // reportError and demo-runtime reach it too, because full scope keeps
-  // today's behaviour. The mirror describe block below rebuilds with
-  // VITE_SENTRY_SCOPE=uncaught and proves the opposite for the latter two.
+  // ADR-0041 §E.1 / contract §11: an uncaught error reaches Sentry; a handled
+  // report (reportError, a demo-runtime relay) reaches the facade only.
 
   test("an uncaught error reaches Sentry (transport spy)", async ({ page }) => {
     await stubShell(page);
@@ -569,62 +577,44 @@ test.describe("Faro in the authoring app", () => {
     assert(hit, "no Sentry event matched the uncaught probe message");
   });
 
-  test("reportError reaches Sentry under full scope", async ({ page }) => {
+  test("reportError does NOT reach Sentry, but still reaches the facade", async ({ page }) => {
     await page.route("**/api/versions", (route) => route.fulfill({ status: 500, body: "boom" }));
     await abortSandpackHosts(page);
     await page.route("**/broker/login**", (route) => route.abort());
+    const captured = captureTelemetry(page);
     await page.goto("/");
-    await expect.poll(() => readSentryEvents(page).then((e) => e.length)).toBeGreaterThan(0);
-    const events = await readSentryEvents(page);
-    const hit = events.find((e) => (e as { tags?: { context?: string } }).tags?.context === "versions-fetch");
-    assert(hit, "no Sentry event tagged context=versions-fetch — reportError did not reach Sentry under full scope");
-  });
+    // The facade side fires first — wait on it so a pass below can't be "nothing ran yet".
+    await expect
+      .poll(() =>
+        captured
+          .flatMap((b) => b.exceptions ?? [])
+          .some((e) => String((e as { fingerprint?: string }).fingerprint ?? "").startsWith("versions-fetch:")),
+      )
+      .toBe(true);
+    await awaitSentryAlive(page);
 
-  test("a demo-runtime event reaches Sentry under full scope, re-homed to the demo-runtime environment", async ({ page }) => {
-    await stubShell(page);
-    await page.goto("/");
-    await callReportDemoEvent(page, "T06 e2e I3 demo-runtime probe");
-    await expect.poll(() => readSentryEvents(page).then((e) => e.length)).toBeGreaterThan(0);
+    // Matched on the error's own text (`catalog.ts`: "versions 500") as well as the
+    // context tag, so a capture re-added with no tag or another tag still fails.
     const events = await readSentryEvents(page);
-    const hit = events.find((e) => (e as { tags?: { surface?: string } }).tags?.surface === "demo-runtime");
-    assert(hit, "no Sentry event tagged surface=demo-runtime — reportDemoEvent did not reach Sentry under full scope");
-    // The re-homing that beforeSend restores.
-    assert(
-      (hit as { environment?: string }).environment === "demo-runtime",
-      `demo-runtime event must be re-homed to environment "demo-runtime", got ${JSON.stringify((hit as { environment?: string }).environment)}`,
+    const sentryHit = events.find(
+      (e) =>
+        (e as { tags?: { context?: string } }).tags?.context === "versions-fetch" ||
+        JSON.stringify(e).includes("versions 500"),
     );
+    assert(!sentryHit, "reportError must NOT reach Sentry (contract §11)");
   });
 
-  // ---- reportDemoEvent's own gate (previewMonitoring), not the
-  // ---- __t06ReportDemoEvent bypass above -----------------------------------
-  //
-  // Every test above drives `reportDemoEventUnguarded` directly (the
-  // `__t06ReportDemoEvent` hook), which never exercises `reportDemoEvent`'s
-  // own `monitorDemos` gate. With no `VITE_MONITOR_DEMOS` (so `monitorDemos`
-  // is false, same as every real `dev:full` run), `reportDemoEvent` itself
-  // must not be a no-op. `__t06ReportDemoEventGuarded` calls
-  // `reportDemoEvent` (the real, guarded entry point `App.tsx`'s
-  // `onPreviewMessage` uses) so this proves the fix without a real
-  // (E2E_LIVE-gated) preview mount.
-  test("reportDemoEvent (guarded) reaches Faro under the local leg, and never Sentry", async ({ page }) => {
+  // `__t06ReportDemoEventGuarded` calls `reportDemoEvent` (the real, guarded
+  // entry point `App.tsx`'s `onPreviewMessage` uses). With no
+  // `VITE_MONITOR_DEMOS` (so `monitorDemos` is false, same as every real
+  // `dev:full` run), `previewMonitoring`'s local leg must still let it through.
+  test("reportDemoEvent reaches Faro under the local leg, and never Sentry", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
 
-    const guardedMarker = "T06 e2e R3 F10 guarded probe " + Date.now();
-    await page.evaluate((msg) => {
-      (
-        window as unknown as {
-          __t06ReportDemoEventGuarded?: (
-            payload: { type: string; kind: string; message: string },
-            context: { tier: number; framework: string; htMajor: string },
-          ) => void;
-        }
-      ).__t06ReportDemoEventGuarded?.(
-        { type: "hot-runner-monitor", kind: "error", message: msg },
-        { tier: 1, framework: "react", htMajor: "18" },
-      );
-    }, guardedMarker);
+    const marker = "T06 e2e R3 F10 guarded probe " + Date.now();
+    await callReportDemoEvent(page, marker);
 
     // The AE metric (contract §5): `previewMonitoring`
     // (`monitorDemos || localTestSentryEnabled()`) is what lets this call
@@ -632,38 +622,26 @@ test.describe("Faro in the authoring app", () => {
     await expect
       .poll(() => captured.flatMap((b) => b.measurements ?? []).some((m) => m.type === "preview.runtime_error"))
       .toBe(true);
+    await awaitSentryAlive(page);
 
-    // Control: a second demo-runtime event, fired through the unguarded
-    // hook (opts.sentry=true default), which does reach Sentry on this
-    // exact dist (proved by the sibling "I3: a demo-runtime event reaches
-    // Sentry under full scope" test above). Waiting for this first rules
-    // out "no Sentry event yet because nothing has flushed" as the reason
-    // the guarded marker is absent below — Sentry capture/transport is
-    // provably alive on this page.
-    const controlMarker = "T06 e2e R3 F10 control probe " + Date.now();
-    await callReportDemoEvent(page, controlMarker);
-    await expect
-      .poll(() => readSentryEvents(page).then((events) => events.some((e) => JSON.stringify(e).includes(controlMarker))))
-      .toBe(true);
-
-    // Never Sentry: `opts.sentry` is `monitorDemos` (false in this build,
-    // same as every real local run) — independent of `previewMonitoring` and
-    // of `diagnosticsGoToSentry`, which is true in this build (the control
-    // above proved it). Matched on the message text, not `tags.surface`:
-    // the control event also carries `surface: "demo-runtime"`, so a
-    // surface-only match would pass even if the guarded call had leaked
-    // through too.
+    // Matched on the message text, so neither the control above nor any other
+    // event on the page can stand in for it.
     const events = await readSentryEvents(page);
-    const guardedHit = events.find((e) => JSON.stringify(e).includes(guardedMarker));
-    assert(!guardedHit, "reportDemoEvent must never reach Sentry through the R3 F10 local leg");
+    const hit = events.find((e) => JSON.stringify(e).includes(marker));
+    assert(!hit, "a demo-runtime relay must never reach Sentry (contract §11)");
+    assert(
+      !events.some((e) => (e as { tags?: { surface?: string } }).tags?.surface === "demo-runtime"),
+      "no Sentry event may carry surface=demo-runtime",
+    );
   });
+
   // ---- the edit-burst collapse in front of the facade ------------------------
   //
   // Typing one throwing line relayed one `preview.runtime_error` per
   // half-typed prefix. Drives the same two entry points `App.tsx` uses — the
   // guarded `reportDemoEvent` and the edit signal `noteDemoEdit` — through
   // their local-only hooks, so no real (E2E_LIVE-gated) preview is needed.
-  test("a keystroke ladder emits one preview.runtime_error + one Faro record; a first-load error counts at once; Sentry is not collapsed", async ({ page }) => {
+  test("a keystroke ladder emits one preview.runtime_error + one Faro record; a first-load error counts at once", async ({ page }) => {
     await stubShell(page);
     const captured = captureTelemetry(page);
     await page.goto("/");
@@ -671,15 +649,7 @@ test.describe("Faro in the authoring app", () => {
     // closes the open burst; drive the ladder after it.
     await expect(page).toHaveURL(/[?&]v=18\.0\.0\b/);
 
-    const relay = (message: string, sentry = false) =>
-      page.evaluate(
-        ([msg, viaSentry]) => {
-          const w = window as unknown as Record<string, (p: unknown, c: unknown) => void>;
-          const hook = viaSentry ? w.__t06ReportDemoEvent : w.__t06ReportDemoEventGuarded;
-          hook({ type: "hot-runner-monitor", kind: "error", message: msg }, { tier: 1, framework: "react", htMajor: "18" });
-        },
-        [message, sentry] as const,
-      );
+    const relay = (message: string) => callReportDemoEvent(page, message);
     const noteEdit = () =>
       page.evaluate(() => (window as unknown as { __t06ReportDemoEventNoteEdit: () => void }).__t06ReportDemoEventNoteEdit());
     // Letters only in the markers: digits would be normalised to `<n>` in the shape.
@@ -736,16 +706,6 @@ test.describe("Faro in the authoring app", () => {
     await flushFaro(page, eventSeen(captured));
     expect(runtimePoints()).toHaveLength(2);
     expect(demoRecords().map((r) => r.value)).toContain(`first load ${run}`);
-
-    // Sentry is NOT behind the collapse: under an open burst, every rung still
-    // reaches it at once (the unguarded hook is the `opts.sentry` path).
-    await noteEdit();
-    for (const rung of ["a is not defined", "ab is not defined", "abc is not defined"]) {
-      await relay(`${rung} ${run}`, true);
-    }
-    await expect
-      .poll(() => readSentryEvents(page).then((events) => events.filter((e) => JSON.stringify(e).includes(run)).length))
-      .toBe(3);
   });
 
   // The test above drives the edit signal through its hook; this one proves
@@ -983,113 +943,6 @@ test.describe("Faro in the authoring app", () => {
       .filter((m) => m.type === "preview.ready_ms")
       .filter((m) => (m.context as Record<string, string> | undefined)?.["hot.outcome"] === "abandoned");
     expect(abandoned, "no preview was torn down by the version swap").toEqual([]);
-  });
-});
-
-// ---- Sentry scope switch = uncaught ----------------------------------------
-// A second dist, built by this describe block's own `beforeAll` with
-// VITE_SENTRY_SCOPE=uncaught (a build-time define, needing its own build
-// and port). Proves the other half of the scope truth table: uncaught
-// still reaches Sentry (ADR §E.1, regardless of scope), but reportError and
-// demo-runtime do not (ADR §E.3: moved diagnostic reports go to the facade
-// only once the scope is uncaught).
-test.describe("Sentry scope switch = uncaught", () => {
-  test.skip(
-    process.env.E2E_TELEMETRY !== "1",
-    "set E2E_TELEMETRY=1 and build with VITE_TELEMETRY_LOCAL=1 first",
-  );
-  test.describe.configure({ mode: "serial" });
-
-  const UNCAUGHT_PORT = Number(process.env.E2E_TELEMETRY_UNCAUGHT_PORT ?? 4712);
-  const UNCAUGHT_BASE_URL = `http://127.0.0.1:${UNCAUGHT_PORT}`;
-  const OUT_DIR = "dist-uncaught-scope";
-  test.use({ baseURL: UNCAUGHT_BASE_URL });
-
-  let server: ChildProcess;
-
-  test.beforeAll(async () => {
-    const already = await fetch(UNCAUGHT_BASE_URL).then(() => true).catch(() => false);
-    if (already) {
-      throw new Error(
-        `something is already answering on :${UNCAUGHT_PORT} — kill it first (lsof -ti :${UNCAUGHT_PORT} | xargs kill)`,
-      );
-    }
-    // A genuinely separate build: VITE_SENTRY_SCOPE is a build-time
-    // `import.meta.env` read (`sentry.ts`'s `resolveSentryScope`), so there is
-    // no way to flip it per-request against the `full`-scope dist above.
-    execSync("node_modules/.bin/vite build --outDir " + OUT_DIR, {
-      cwd: AUTHORING_DIR,
-      env: { ...process.env, VITE_TELEMETRY_LOCAL: "1", VITE_SENTRY_SCOPE: "uncaught" },
-      stdio: "pipe",
-    });
-    server = spawn(
-      "node_modules/.bin/vite",
-      ["preview", "--outDir", OUT_DIR, "--host", "127.0.0.1", "--port", String(UNCAUGHT_PORT), "--strictPort"],
-      { cwd: AUTHORING_DIR, stdio: "pipe" },
-    );
-    const diagnostics = captureServerDiagnostics(server);
-    try {
-      await waitForServer(UNCAUGHT_BASE_URL, 30_000);
-    } catch (err) {
-      throw new Error(`preview server on :${UNCAUGHT_PORT} never came up: fetch: ${formatFetchFailure(err)} | server output: ${diagnostics.get() || "(none)"}`);
-    }
-  });
-
-  test.afterAll(() => {
-    server?.kill();
-  });
-
-  function captureTelemetry(page: Page): FaroBody[] {
-    const bodies: FaroBody[] = [];
-    void page.route("**/telemetry/collect", async (route: Route) => {
-      bodies.push(route.request().postDataJSON() as FaroBody);
-      await route.fulfill({ status: 200, body: "" });
-    });
-    return bodies;
-  }
-
-  test("an uncaught error still reaches Sentry under uncaught scope (ADR §E.1)", async ({ page }) => {
-    await stubShell(page);
-    await page.goto("/");
-    await page.evaluate(() => {
-      setTimeout(() => { throw new Error("T06 e2e I3 uncaught-scope uncaught probe " + Date.now()); });
-    });
-    await expect.poll(() => readSentryEvents(page).then((e) => e.length)).toBeGreaterThan(0);
-    const events = await readSentryEvents(page);
-    const hit = events.find((e) =>
-      JSON.stringify((e as { exception?: unknown }).exception ?? "").includes("T06 e2e I3 uncaught-scope uncaught probe"),
-    );
-    assert(hit, "an uncaught error must reach Sentry under EVERY scope, including uncaught");
-  });
-
-  test("reportError does NOT reach Sentry under uncaught scope, but still reaches the facade", async ({ page }) => {
-    await page.route("**/api/versions", (route) => route.fulfill({ status: 500, body: "boom" }));
-    await abortSandpackHosts(page);
-    await page.route("**/broker/login**", (route) => route.abort());
-    const captured = captureTelemetry(page);
-    await page.goto("/");
-    // The facade side must still fire (contract-mandated, scope-independent) —
-    // wait on that first so a false pass below can't be "nothing ran yet".
-    await expect.poll(() => captured.flatMap((b) => b.exceptions ?? []).length).toBeGreaterThan(0);
-    const faroHit = captured
-      .flatMap((b) => b.exceptions ?? [])
-      .find((e) => String((e as { fingerprint?: string }).fingerprint ?? "").startsWith("versions-fetch:"));
-    assert(faroHit, "reportError must still reach the facade under uncaught scope");
-
-    const events = await readSentryEvents(page);
-    const sentryHit = events.find((e) => (e as { tags?: { context?: string } }).tags?.context === "versions-fetch");
-    assert(!sentryHit, "reportError must NOT reach Sentry under uncaught scope (ADR §E.3)");
-  });
-
-  test("a demo-runtime event does NOT reach Sentry under uncaught scope, but still reaches the facade", async ({ page }) => {
-    await stubShell(page);
-    const captured = captureTelemetry(page);
-    await page.goto("/");
-    await callReportDemoEvent(page, "T06 e2e I3 uncaught-scope demo-runtime probe");
-    await expect.poll(() => captured.flatMap((b) => b.measurements ?? []).length).toBeGreaterThan(0);
-    const events = await readSentryEvents(page);
-    const sentryHit = events.find((e) => (e as { tags?: { surface?: string } }).tags?.surface === "demo-runtime");
-    assert(!sentryHit, "a demo-runtime event must NOT reach Sentry under uncaught scope (ADR §E.3 / task Scope)");
   });
 });
 

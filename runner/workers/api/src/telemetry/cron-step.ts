@@ -12,19 +12,18 @@ import * as Sentry from "@sentry/cloudflare";
 import type { Env } from "../env.js";
 import { logErrorLine } from "./lines.js";
 
-/** The shape `Sentry.captureException` is called with — same injection
- *  pattern as `diagnostic.ts#CaptureExceptionFn`, so a test can assert a
- *  throwing step is actually captured instead of trusting the rethrow: a
- *  throw inside `ctx.waitUntil(...)` is invisible to `Sentry.withSentry`'s
- *  own `scheduled` auto-capture. */
+/** The shape `Sentry.captureException` is called with — injected so a test
+ *  can assert a throwing step is actually captured instead of trusting the
+ *  rethrow: a throw inside `ctx.waitUntil(...)` is invisible to
+ *  `Sentry.withSentry`'s own `scheduled` auto-capture. */
 export type CronCaptureFn = (err: unknown, context: { tags: Record<string, string> }) => void;
 
 const defaultCapture: CronCaptureFn = (err, context) => Sentry.captureException(err, context);
 
 /**
  * Run one cron step in isolation: on failure, log our own structured line and
- * report to Sentry directly (uncaught class, §E.1, unconditional — never
- * gated by `SENTRY_SCOPE`), then swallow so a sibling step still runs.
+ * report to Sentry directly (uncaught class, §E.1), then swallow so a
+ * sibling step still runs.
  *
  * Explicit and ungated rather than "rethrow and let `Sentry.withSentry`'s own
  * `scheduled` wrapping catch it": measured against the SDK's own source

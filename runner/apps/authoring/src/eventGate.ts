@@ -1,4 +1,4 @@
-// Two `beforeSend` suppression gates for populations the Sentry triage classified
+// `beforeSend` suppression gates for populations the Sentry triage classified
 // NOT-OURS (DEV-2858). Custom message filters are plan-locked on this project — one
 // DSN across all three environments — so this has to be code.
 //
@@ -25,8 +25,8 @@ interface ExceptionShape {
   };
 }
 
-/** The `tags` shape `isEdgelessForeignSessionStart` reads. Declared locally for the
- *  same import-free reason as `ExceptionShape` above. */
+/** The `tags` shape `applyFaroTee` writes. Declared locally for the same
+ *  import-free reason as `ExceptionShape` above. */
 interface TaggedEvent {
   tags?: Record<string, unknown>;
 }
@@ -121,51 +121,6 @@ export function isOfficeScannerRejection(event: ExceptionShape): boolean {
     (v) =>
       v.mechanism?.handled === false &&
       INJECTED_SCANNER_MESSAGES.some((re) => re.test(v.value ?? "") || re.test(v.type ?? "")),
-  );
-}
-
-// ── Gate 2: DEMOS-9 — the edgeless-foreign session-start facet ──────────────────
-//
-// Tags only, set at `App.tsx:292-305` — a file DEV-2854 owns; a rename there makes
-// this gate stop matching, fail-open (noisy, never silent).
-//
-// `context` is a scoping conjunct so a future, unrelated reuse of
-// `session_response_origin` elsewhere in the app is not silently silenced by this
-// gate. `session_status` is deliberately NOT a conjunct — precedent at
-// `pipeline/session-start-failure.test.mjs:464`: "the tier turns on where the
-// response came from, not on the status."
-//
-// `cf_ray` is checked for a non-empty string, not with `in` / presence, so a
-// hypothetical empty-string tag counts as absent rather than as present-and-truthy.
-//
-// THE `!cf_ray` CONJUNCT IS UNREACHABLE TODAY — KEEP IT ANYWAY.
-// `sessionDiagnostics.ts:58` (`responseOrigin`) returns `"cloudflare"` whenever
-// `ray` is truthy, so `"foreign"` already implies no ray: every event this gate can
-// see today has no `cf_ray` tag at all, which makes `!cf_ray` look like dead code.
-// A reviewer may read it that way and cite the `session-lifecycle.ts:145-154` rule
-// — "no create-path event of it exists, so widening this predicate for it would be
-// a guess dressed as a fact" — as licence to delete it. That rule forbids WIDENING
-// a predicate to cover an unobserved input. `!cf_ray` is the opposite: a NARROWING
-// conjunct, and a narrowing conjunct can only ever suppress LESS than the gate
-// would without it, never more. Direction is the discriminator, not observability.
-// It keeps this gate correct if the `responseOrigin` taxonomy in
-// `sessionDiagnostics.ts` ever changes shape and starts emitting `"foreign"` for a
-// ray-bearing response — which would be OUR side of the edge (a real invocation,
-// not an intercepted one) and the actual capacity signal DEMOS-9 exists to protect,
-// so it must not be silenced by this gate no matter how the origin taxonomy drifts.
-//
-// THIS DOES NOT ZERO THE 786. The ~88 events predating the DEV-2559 instrumentation
-// deploy carry no diagnostics tags at all and keep reporting — correctly: an
-// untagged event carries no evidence of being not-ours, so there is nothing here
-// for the gate to match.
-export function isEdgelessForeignSessionStart(event: TaggedEvent): boolean {
-  const tags = event.tags ?? {};
-  const cfRay = tags.cf_ray;
-  const hasRay = typeof cfRay === "string" && cfRay.length > 0;
-  return (
-    tags.context === "tier2-session-start" &&
-    tags.session_response_origin === "foreign" &&
-    !hasRay
   );
 }
 

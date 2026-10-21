@@ -107,9 +107,6 @@ export interface Env {
   /** Service binding to `handsontable-demos-o11y` — `heartbeat()` for the
    *  watchdog cron (ADR §F.3), later `AdminReads` (ADR-0043). */
   O11Y?: Fetcher;
-  /** `full` (default) | `uncaught` (contract §11) — which handled-error
-   *  reports also go to Sentry. See `telemetry/diagnostic.ts`. */
-  SENTRY_SCOPE?: "full" | "uncaught";
   /** `service.version` (contract §2/§D): the full deploy `GITHUB_SHA`, set
    *  by the `deploy` script's `--var`. See `telemetry/resource.ts#serviceVersion`
    *  for the fallback. */

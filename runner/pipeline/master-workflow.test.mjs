@@ -132,13 +132,3 @@ test("master.yml: every version_id assignment is followed by an ::warning:: for 
     );
   }
 });
-
-// The authoring build is the only place VITE_SENTRY_SCOPE is set for production; the API half of the
-// switch is pinned in `api-telemetry-config.test.mjs`, so the two halves cannot drift apart unnoticed.
-test("master.yml: the authoring production build sets VITE_SENTRY_SCOPE to uncaught (DEV-3099)", () => {
-  const stepStart = source.indexOf("name: Build authoring (skipped when only the api/o11y deploys)");
-  assert.ok(stepStart > -1, "the authoring build step exists in master.yml");
-  const stepEnd = source.indexOf("\n      - name:", stepStart + 1);
-  const step = source.slice(stepStart, stepEnd > -1 ? stepEnd : undefined);
-  assert.match(step, /VITE_SENTRY_SCOPE:\s*uncaught\s*$/m);
-});

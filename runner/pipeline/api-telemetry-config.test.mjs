@@ -113,10 +113,6 @@ test("every o11y service binding declares a real entrypoint, and O11Y's is O11yH
   }
 });
 
-test("SENTRY_SCOPE is committed as uncaught after the DEV-3099 flip (contract §11)", () => {
-  assert.equal(wrangler.vars.SENTRY_SCOPE, "uncaught");
-});
-
 test("the deploy script sets SERVICE_VERSION from GITHUB_SHA, alongside every existing --routes flag", () => {
   const deploy = pkg.scripts.deploy;
   for (const route of [
