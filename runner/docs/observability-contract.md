@@ -100,7 +100,6 @@ only; it writes Loki data and the clean markers there. Lifecycle rules: `browser
 | `RUNNER_EVENTS` | Analytics Engine | dataset `runner_events` |
 | `O11Y` | service binding, entrypoint `O11yHeartbeat` | `handsontable-demos-o11y`, `heartbeat()` RPC for the watchdog (not an HTTP route — A-C1) |
 | `SERVICE_VERSION` | `--var` in the deploy script | full `GITHUB_SHA` |
-| `SENTRY_SCOPE` | var | `full` \| `uncaught` (§11) |
 | `CF_ACCOUNT_ID` | var | GraphQL Analytics API account tag; also scopes the Analytics Engine SQL API read below |
 | `AE_SQL_TOKEN` | secret | Analytics Engine SQL API (Account Analytics Read) — production read side of the nightly `example_daily` rollup (ADR-0042 §5, C-I1). Unset means `reconcile.ts#queryExampleEventTotals` throws instead of rolling up an empty day |
 | `o11y-logs` | export destination name | referenced from `observability.logs.destinations` |
@@ -108,7 +107,7 @@ only; it writes Loki data and the clean markers there. Lifecycle rules: `browser
 
 **Authoring app**: `VITE_SENTRY_RELEASE` (the `GITHUB_SHA` define) doubles as
 `service.version`; `VITE_TELEMETRY_LOCAL=1` enables the local path (§10) and is never set
-for a production build; `VITE_SENTRY_SCOPE` = `full` | `uncaught` (§11).
+for a production build.
 
 **Headers**: `x-hot-session` (page-load id, browser → API worker), `x-o11y-secret`,
 `sentry-hook-signature`, the `__Host-o11y_session`/`__Host-o11y_login` cookies
@@ -357,8 +356,7 @@ collapses it (`apps/authoring/src/demoEventCollapse.ts`) before the facade:
 An async report of the previous run (a timer, a rejected promise, a failed request) that
 fires after the next run started can still add one point. On Tier 2, where a rebuild
 outlasts the 2 s window, a superseded rebuild's report can land after the burst closed
-and count on its own. The Sentry side is not behind this collapse; its relay budgets are
-unchanged.
+and count on its own.
 
 `example.saved` is written by the API worker when an editor Save (`PATCH /api/demos/:id`
 with `files`) finishes its rebuild, because the rebuild can outlast the visitor's stay on
@@ -722,9 +720,9 @@ and the post-build leak check fails if the local path survives into it.
 
 ## 11. Sentry scope
 
-`SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` = `full` (default): handled diagnostic reports go to
-Sentry **and** the new stack. `uncaught`: they go only to the new stack; Sentry keeps
-errors that escape a handler (browser `onerror`, `unhandledrejection`,
-`Sentry.ErrorBoundary`; Worker fetch catch-all, DO alarms, cron, snapshot-job failures)
-and the budget-alert `captureMessage`. The launch plan flips to `uncaught` after the
-pipeline is seen working in production.
+Sentry receives only errors that escape a handler (browser `onerror`,
+`unhandledrejection`, `Sentry.ErrorBoundary`; Worker fetch catch-all, DO alarms, cron,
+snapshot-job failures) and the budget-alert `captureMessage`. Handled diagnostic reports
+(`reportError`, `reportDiagnostic`, the demo-runtime relay) go only to the new stack.
+There is no switch: the `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` flag that once also sent
+them to Sentry was removed after the 2026-10-13 flip held (DEV-3099).

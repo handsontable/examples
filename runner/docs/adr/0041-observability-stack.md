@@ -12,6 +12,8 @@ The design's own §L trigger (criterion 1, 2 or 7 failing) is not engaged.
 13's real-object retention expiry in production (the inbox bucket must hold nothing older
 than 7 days; checkable on or after 2026-10-06, tracked in DEV-3178). The monthly
 exported-logs count behind criterion 8 is in (2026-10-02, below).
+The §E.3 Sentry scope switch was flipped to `uncaught` on 2026-10-13, held for a week
+(checked 2026-10-21) and was then removed (DEV-3099): §E.1's split is now fixed in code.
 Supersedes ADR-0040 decisions A, B, C.2 and C.3; amends ADR-0022 (o11y spend cap,
 per-script billing rows), ADR-0038 (WAF exception extended to `/telemetry/*`); adds
 routes under ADR-0020. **No longer deviates from ADR-0007**: `/grafana/*` gates
@@ -524,8 +526,8 @@ stack (§E.2).
 **Moves to the new stack only**: diagnostic reports about handled conditions — upstream
 failures reported with tags (npm registry, import URL), the preview boot-window report,
 `reportError` calls for recoverable UI failures, and demo-runtime preview events. They
-become Faro reports or structured lines with an `error.handled` point and lose Sentry's
-grouping; the exact new-fingerprint registry (§F.3) replaces its "new issue" signal as a
+become Faro reports or structured lines with an `error.handled` point, and Sentry no
+longer receives them at all; the exact new-fingerprint registry (§F.3) replaces its "new issue" signal as a
 dashboard table, not a push notification. The
 Outcome of each implementing task lists every call site and its classification.
 
@@ -539,11 +541,14 @@ pushes the Sentry event id as a Faro event, and the Faro page-load id becomes a 
 tag. The issue-alert webhook (new issue, regression, resolved) becomes a Loki line with
 issue id, title, release and link.
 
-**E.3 Switch.** The trim ships behind `SENTRY_SCOPE` (API worker var) and
-`VITE_SENTRY_SCOPE` (authoring build), both `full` by default, where moved reports go to
-**both** Sentry and the new stack. The launch plan flips both to `uncaught` only after
-data has been seen end to end in Grafana, alerts have fired once, and volume sits inside
-the budget. Until then nothing that reaches Sentry today stops reaching it.
+**E.3 Switch (removed).** The trim shipped behind `SENTRY_SCOPE` (API worker var) and
+`VITE_SENTRY_SCOPE` (authoring build), `full` by default, where moved reports went to
+**both** Sentry and the new stack. Both were flipped to `uncaught` on 2026-10-13, after
+data had been seen end to end in Grafana, alerts had fired and volume sat inside the
+budget. The flip held for a week, and the switch and its `full` code path were then
+deleted (DEV-3099): the authoring Sentry client always runs with only the global
+handlers and dedupe, and `reportDiagnostic` never calls Sentry. Rolling back means
+reverting that change.
 
 **E.4 Faro configuration and the operational-log rule.**
 
@@ -902,11 +907,8 @@ where they add information beyond what §A–§L already say:
 
   Without BOTH, this gate is a correctly-gated no-op against real production traffic,
   not a silent bypass; with both, it fires for real. **This makes it LIVE at merge**
-  (the o11y worker's `*/10` new-fingerprint cron runs unconditionally, regardless of
-  `SENTRY_SCOPE`/`VITE_SENTRY_SCOPE` — those only gate whether a moved report ALSO
-  reaches Sentry, §E.3), not gated behind any later `SENTRY_SCOPE` flip —
-  `docs/run-and-deploy.md`'s runbook is updated with this as an explicit precondition
-  check, not just a flip-time one.
+  (the o11y worker's `*/10` new-fingerprint cron runs unconditionally) —
+  `docs/run-and-deploy.md`'s runbook keeps this as a standing check.
 
   The fourth condition — not Tier-2 container stdout — is attempted by construction,
   not guaranteed: the B cross-note fix (two bullets below) makes `tryParseJsonBodyAttrs`
@@ -949,11 +951,9 @@ where they add information beyond what §A–§L already say:
   envelopes; with it, exactly one).
 - **§E Sentry.** The full call-site inventory found one real §11 violation: `App.tsx`'s
   `versions-fetch` diagnostic was unconditional before this ADR's switch existed, exactly
-  the shape §E.1 already names as "handled." §E.3 is binding for demo-runtime preview
-  events: `reportDemoEvent` keeps its full pre-ADR Sentry behaviour (including the
-  `DEMO_SURFACE` environment re-homing) under `full` scope, unreachable under `uncaught`
-  — "the re-homing disappears once the scope flips" is literally true only after the
-  flip, not at implementation time.
+  the shape §E.1 already names as "handled." Demo-runtime preview events kept their
+  pre-ADR Sentry path (including the `DEMO_SURFACE` environment re-homing) until the
+  §E.3 switch was removed; that path, the re-homing and its relay budgets are deleted.
 - **§B.3 drain, a key with a mixed 400/2xx outcome** ("accepted chunks skip §B.3").
   Pushing every chunk of a key even after an earlier one 400'd, while still
   classifying the whole key `rejected` if ANY chunk 400'd — including when another chunk
@@ -1033,8 +1033,8 @@ where they add information beyond what §A–§L already say:
   Handsontable login broker as every other internal surface (§H).
 - **ADR-0020**: more route patterns on the main hostname, still in deploy commands.
 - **Sentry** keeps uncaught errors (as §E.1 defines them) and spend alerts; handled
-  diagnostics move and lose grouping; the per-event `environment` re-homing and the
-  `demo-runtime` environment disappear once the scope flips.
+  diagnostics moved and lost grouping; the per-event `environment` re-homing was removed
+  with the §E.3 switch, so no new events reach the `demo-runtime` environment.
 - **Source maps** are no longer deleted inside `vite build`; CI uploads them to Sentry
   and to R2, then deletes them before deploy.
 - **We own**: the Faro-to-OTLP converter, the scrubber, the symbolicator, the drain and

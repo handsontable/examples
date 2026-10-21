@@ -290,8 +290,7 @@ at all any more, not even a count-only one. Each collapsed demo-runtime
 report (one per fingerprint per edit burst) is also filed as a handled Faro exception
 (`emitCollapsedDemoEvent` in `apps/authoring/src/sentry.ts`), which is the Loki line, and its message
 is the fingerprint shape, never the relayed text; the Tier-1 compile-failure branch's message is
-the constant `"Tier-1 compile failed"`, with the diagnostic detail in `extra`. The full text lives in Sentry, when
-`MONITOR_DEMOS`/`VITE_MONITOR_DEMOS` is on.) `/admin`'s
+the constant `"Tier-1 compile failed"`. The relayed text itself is not kept anywhere.) `/admin`'s
 header also has an **Open Grafana** link
 (otherwise nothing in the app points at it): `href={GRAFANA_URL}` in
 `Admin.tsx`, which reads `import.meta.env.VITE_GRAFANA_URL` and falls back to
@@ -672,8 +671,8 @@ read from committed `.env.production`. A post-deploy smoke check verifies
 `workflow_dispatch`'s `deploy_authoring` checkbox allows a manual run.
 
 **Source maps (ADR §C.3).** The `build` job's authoring build step passes
-`SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` (repo secret + vars) and
-`VITE_SENTRY_SCOPE: full` — those three secrets present is what
+`SENTRY_AUTH_TOKEN`/`SENTRY_ORG`/`SENTRY_PROJECT` (repo secret + vars) — those
+three present is what
 `apps/authoring/vite.config.ts` reads as "this is the real production build",
 which is what turns maps on (`sourcemap: "hidden"`, no `sourceMappingURL`
 comment in the served JS — Workers Assets' SPA fallback, DEV-2569, answers any
@@ -1096,8 +1095,8 @@ probe exercises the mutual binding at all.
 
 The order above ("First deploy, in order") is the mechanical dependency; this
 section is the gate around it — what must be true before deploying at all,
-what to check right after, and the two decisions ("flip the Sentry scope",
-"roll back") that come later, not at deploy time.
+what to check right after, and the one decision ("roll back") that comes later, not at
+deploy time.
 
 ### Pre-conditions — confirm every one before the first real deploy
 
@@ -1275,62 +1274,23 @@ walkthrough already showed.
    Fill the live pool (real Tier-2 sessions, one per framework, up to `max_instances`) and
    confirm the next session gets a 503 `at_capacity` refusal and the alert fires.
 
-### Flipping `SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` to `uncaught`
+### Sentry scope (done)
 
-All three conditions below must hold, evidenced the same way this task's own local
-walkthrough evidenced them (Grafana dashboards, a fired-and-resolved alert, the volume
-projection) — but against real production data, not the local stack:
+Sentry was narrowed to uncaught errors on 2026-10-13, after real production data showed
+up end to end in Grafana, real alerts had fired and resolved in Slack, and volume sat
+inside the projection. The flip held for a week, and the `SENTRY_SCOPE` /
+`VITE_SENTRY_SCOPE` switch was then removed from the code (DEV-3099); rolling back means
+reverting that change, not editing a config value.
 
-1. **Data seen end to end in Grafana** — every §F.2 journey that gets real production
-   traffic shows real points on its dashboard (not "No data"), for at least a full day.
-2. **Alerts have fired at least once** — at least one real alert (any rule) has gone
-   `fired` → `resolved` in production and posted to the real Slack channel, confirming the
-   whole cron → rule → notify → Slack path works against real infrastructure, not just this
-   task's local capture server.
-3. **Volume sits inside the projection** — the Observability-self dashboard's real numbers,
-   after at least a few days of production traffic, are under half of every allotment (§D)
-   the dashboard covers, matching or beating the sandbox-measured figures (ADR-0041 §L,
-   criteria 7–8: $0.21/month at 1× traffic, $0.33/month at 10×, both far under the $10
-   ceiling). The exported-logs allotment specifically is NOT on that
-   dashboard (see the post-deploy smoke's item 6 above for why) — read it from
-   Cloudflare's own Workers → Observability → Usage view instead, same place, same
-   number, this time "at least a few days" rather than "one day." If real Tier-2 stdout
-   volume turns out to exceed the measured exported-logs allotment (ADR-0041 §L
-   criterion 8, the one criterion that stayed Mixed rather than passing), do not flip
-   the scope until the fallback (lowering `head_sampling_rate`, ADR §D's own named
-   escape hatch) has brought it back under half.
-4. **The API-side new-fingerprint feed is confirmed live in production, not
-   just correctly gated.** ADR §E.1: the exact new-fingerprint alert (§F.3) is what
-   replaces Sentry's own "new issue" signal for a handled-error class once the scope
-   narrows — if this feed is dark, an API-side handled-error class that goes from zero
-   to happening gets NO signal at all under `uncaught` (Sentry stops seeing it, and
-   nothing tells the operator a new one started). This is **not** itself gated by the
-   `SENTRY_SCOPE` flip — the o11y worker's `*/10` new-fingerprint cron runs
-   unconditionally (ADR §M) — so confirm it separately, before relying on
-   it as the flip's replacement signal: trigger a real, once-off `reportDiagnostic` call
-   in production (the `npm-registry:version-exists`/`npm-registry:versions` probe paths
-   are the ADR's own named example) and confirm its `hot.fingerprint` appears as a new
-   `fp:` entry and a row in the Observability self "New handled-error fingerprints"
-   table, not silently dropped. There is no Slack post for it: after the scope flip a new
-   API handled-error class reaches the operator only as a dashboard row, so someone has
-   to look at that table. This needs BOTH
-   the real `service.name` normalised to the contract's `demos-api`, and the shared
-   fingerprint validator accepting a `:`-joined `context` — either one reverted or
-   regressed makes this feed a silent no-op again.
-   Also confirm, separately, that no unrelated Tier-2 SSR authored `console.log` is
-   producing spurious `fp:` entries of its own (ADR §M's known, accepted,
-   bounded residual risk — table noise only, not a blocker, but worth a quick look at the
-   table's actual rows before trusting this as a clean signal).
-
-**Who flips it**: whoever owns the o11y stack operationally at launch time (the same person
-or team who would triage an `alert-eval-error` or a stale-heartbeat page) — a role, not a
-name fixed here; confirm with the user before the first flip. The
-mechanism is not a `--var` flag pair — both names are already committed config, edited in
-place and redeployed/rebuilt: `SENTRY_SCOPE` is the `"full"` var in
-`workers/api/wrangler.jsonc`, flipped to `"uncaught"` and deployed with the API worker;
-`VITE_SENTRY_SCOPE` is the `full` build-env value in `.github/workflows/master.yml`'s
-authoring build step, flipped to `uncaught` and shipped on the next authoring deploy. Both
-read `uncaught` in those two committed files since DEV-3099 (the flip); rollback is setting both back to `full`.
+**Standing check: the new-fingerprint table.** ADR §E.1: for a handled-error class the
+exact new-fingerprint feed (§F.3) replaces Sentry's own "new issue" signal, and there is
+no Slack post for it — a new API handled-error class reaches the operator only as a row in
+the Observability self "New handled-error fingerprints (first seen)" table, so someone has
+to look at that table. The feed needs BOTH the real `service.name` normalised to the
+contract's `demos-api` and the shared fingerprint validator accepting a `:`-joined
+`context` — either one reverted or regressed makes it a silent no-op. Also glance at the
+table's rows for spurious `fp:` entries from an unrelated Tier-2 SSR authored
+`console.log` (ADR §M's known, accepted, bounded residual risk — table noise only).
 
 ### Rollback
 
@@ -1343,11 +1303,6 @@ read `uncaught` in those two committed files since DEV-3099 (the flip); rollback
 - **Revert the `observability` block** (`workers/api/wrangler.jsonc`'s
   `observability.logs`/`.traces`) to pre-o11y values if the volume itself is the problem —
   this is a config-only revert, no code change.
-- **The `SENTRY_SCOPE`/`VITE_SENTRY_SCOPE` flip needs no revert plan of its own** (ADR
-  Consequences, and the "Error monitoring" section below repeats this) — it only ever
-  narrows what reaches Sentry, never widens it past what the production gates already allow,
-  so reverting it just means editing the same two committed values (`workers/api/wrangler.jsonc`'s
-  `SENTRY_SCOPE`, `master.yml`'s `VITE_SENTRY_SCOPE` build env) back to `full` and redeploying.
 - The o11y worker and the Grafana box can be torn down entirely (delete the Worker, the
   Container application, the three R2 buckets) without touching the API worker or authoring
   app at all — they have no hard dependency in that direction (the API worker's own
@@ -1363,35 +1318,23 @@ serves every surface, separated by `environment`:
 | --- | --- |
 | `authoring-production` | The browser app, on the production host. |
 | `api-production` | The deployed API Worker. |
-| `demo-runtime` | The preview itself — temporary, see below. |
-| `budget-alerts` | The nightly spend alerts, re-homed per event so they can be filtered, muted and rate-limited apart from real faults. They are still issues in this project. |
+| `budget-alerts` | The nightly spend alerts, re-homed per event so they can be filtered and muted apart from real faults (the project has one DSN, so there is no per-environment rate limit). They are still issues in this project. |
 | `authoring-local` | A browser build served anywhere but the production host. Never sent while the gate is closed — it exists so that a gate patched open locally is self-labelling. |
 
 The first two are no longer hardcoded literals; they are derived (from the hostname
 and from a deploy-time var respectively), with the production strings unchanged.
 Anything keying on them Sentry-side — alert rules, saved searches, dashboards —
-keeps working.
+keeps working. A `demo-runtime` environment still shows in the project for older
+events; nothing is filed under it any more (see "Demo-runtime monitoring" below), and
+its saved searches can be archived in the Sentry UI.
 
-**`SENTRY_SCOPE` / `VITE_SENTRY_SCOPE` — full vs. uncaught (contract §11, ADR
-§E.3).** Sentry now sits beside the o11y stack described in "Observability"
-above, not in front of it, and this switch controls how much overlap the two
-keep. `full` (the default — an absent var also means `full`: `resolveSentryScope`/the API
-worker's own fallback treat it so, for a build/deploy that predates either being set;
-both committed values were `full` until the DEV-3099 flip: `SENTRY_SCOPE` in
-`workers/api/wrangler.jsonc`, `VITE_SENTRY_SCOPE` in `.github/workflows/master.yml`'s
-authoring build env, and both now read `uncaught`) sends every explicit diagnostic
-report — `reportError`, the Tier-1/Tier-2 branches of `reportRuntimeError`, the
-Worker's own handled-error lines — to **both** Sentry and the o11y facade, so
-today's dashboards, saved searches and on-call habits keep working unchanged.
-`uncaught` narrows Sentry to only what escapes a handler outright (browser
-`window.onerror`/`unhandledrejection`/`Sentry.ErrorBoundary`; Worker
-fetch-catch-all/DO alarms/cron/snapshot-job failures) plus the budget-alert
-`captureMessage` — everything else goes to o11y alone. **Do not flip this
-switch as part of CI or any one-time setup step above** — see "Launch plan
-(ADR-0041 §L)" above for the exact three conditions and who flips it; it
-needs no revert plan of its own either way, since it only ever
-narrows Sentry, never widens it beyond what `reportingGate.ts`/`sentry-gate.ts`
-already allow.
+**What reaches Sentry (contract §11, ADR §E.1).** Only what escapes a handler outright —
+browser `window.onerror`/`unhandledrejection`/`Sentry.ErrorBoundary`; Worker
+fetch-catch-all/DO alarms/cron/snapshot-job failures — plus the budget-alert
+`captureMessage`. Every handled diagnostic report (`reportError`, `reportRuntimeError`,
+the Worker's `reportDiagnostic`, the demo-runtime relay) goes to the o11y stack alone
+("Observability" above). There is no switch for this any more: the `SENTRY_SCOPE` /
+`VITE_SENTRY_SCOPE` flag was removed after the 2026-10-13 flip held (DEV-3099).
 
 **The DSN is committed, in two places**, because a DSN is a write-only ingest
 endpoint that ships inside the JS bundle by construction — hiding it buys nothing,
@@ -1421,7 +1364,7 @@ two small import-free modules, `apps/authoring/src/reportingGate.ts` and
   production (`E2E_BASE_URL=https://demos.handsontable.com`, `e2e-live.yml`,
   `e2e-starter-matrix.yml`) from filing real issues; it used to. Nothing is lost —
   `e2e/starter-matrix.spec.ts` collects failures itself via `page.on("pageerror")`
-  and never reads Sentry. It also silences demo-runtime relaying during those runs,
+  and never reads Sentry. It also keeps the demo-runtime relay off during those runs,
   deliberately: an e2e-driven page load is not real demo usage.
 - Worker: `PREVIEW_HOST` matching the production host **and** `SENTRY_ENVIRONMENT`
   being set. `PREVIEW_HOST` alone failed open — the committed `wrangler.jsonc` vars
@@ -1466,34 +1409,27 @@ and it covers both SDKs at once. If it has been enabled, an off-host verificatio
 against localhost will be dropped at ingest, and the test has to run against a
 non-localhost host to prove anything.
 
-**Preview-iframe errors are not reported by default.** The iframe runs arbitrary
-authored and imported example code, so a compile error or a mid-keystroke typo is
-product output, not an application fault. `reportRuntimeError` in
-`apps/authoring/src/App.tsx` reports container-engine faults unconditionally —
-`SessionStartError` (Tier-2 pool refusing a session; 410 excluded, that is normal
-teardown) and `ContainerBootFailure` — and from the Sandpack engine only what the two
-branches below describe.
+**Preview-iframe errors never reach Sentry.** The iframe runs arbitrary authored and
+imported example code, so a compile error or a mid-keystroke typo is product output, not
+an application fault. `reportRuntimeError` in `apps/authoring/src/App.tsx` reports to the
+telemetry facade: container-engine faults unconditionally — `SessionStartError` (Tier-2
+pool refusing a session; 410 excluded, that is normal teardown) and `ContainerBootFailure`
+— and from the Sandpack engine only what the two branches below describe.
 
-**Tier-1 grouping and titles (DEV-2569).** Every rule for the Sandpack branch lives in
+**Tier-1 report titles (DEV-2569).** Every rule for the Sandpack branch lives in
 `apps/authoring/src/tier1Report.ts`, pinned by `pipeline/tier1-report.test.mjs`; `App.tsx`
-extracts the facts and captures. Two branches, and the split is the fix for Sentry DEMOS-15,
-which held both populations under one title:
+extracts the facts and reports. Two branches, each recorded as a **synthetic error with a
+constant `name: message`**, so neither a visitor's typo nor one deploy's hashed chunk name
+becomes its own error class (the split is the fix for DEMOS-15, which once held both
+populations under one title):
 
-- `context: tier1-compiler-asset`, fingerprint `["tier1-compiler-asset"]`, level `error`.
-  Our own `@babel/standalone` chunk failing to load — the Tier-1 pre-transpile is ~3 MB and
-  code-split, so first use is a network fetch. It is reported **ahead of the `monitorDemos`
-  gate** (it is not demo monitoring, and it must outlive the DEV-2527 teardown below) and it
-  deliberately carries **no** `surface: demo-runtime` tag, because `beforeSend` would re-home
-  it into the `demo-runtime` environment where visitor noise is filtered past. The chunk URL
-  travels as `extra.assetUrl`: it is hashed per build, so in the title it would name one
-  deploy's sample and in the fingerprint it would open a new issue every deploy.
-- `kind: sandpack-compile`, fingerprint `["demo-runtime","sandpack-compile"]` (unchanged),
-  level `warning`. A bundler diagnostic for a module that never ran, i.e. the visitor's own
-  source. Flat on purpose — default grouping shards it per typo — and *because* it is flat
-  the code frame must not be in the message: an issue re-derives its title from the newest
-  event, so a per-event message means the title names whichever typo arrived last. Both
-  branches are therefore captured as a **synthetic error with a constant `name: message`**,
-  with the real text in `extra.compileDiagnostic` / `extra.cause`.
+- `context: tier1-compiler-asset`. Our own `@babel/standalone` chunk failing to load —
+  the Tier-1 pre-transpile is ~3 MB and code-split, so first use is a network fetch. It is
+  reported **ahead of the `monitorDemos` gate** (it is not demo monitoring, and it must
+  outlive that flag being turned off) and it deliberately carries **no**
+  `surface: demo-runtime` tag, which is where visitor noise lives.
+- `surface: demo-runtime`, `kind: sandpack-compile`. A bundler diagnostic for a module
+  that never ran, i.e. the visitor's own source, titled `Tier-1 compile failed`.
 
 The retry rule behind the first branch is in `packages/runtime/src/transpile.ts`, and it has
 one non-obvious constraint. A rejected dynamic import used to be cached for the life of the
@@ -1516,8 +1452,8 @@ build. An engine that names no URL (Safari says just "Load failed") is terminal 
 failure, because there is nothing to bust. A second failure raises the terminal
 `CompilerUnavailableError` and latches; later compiles get the same failure back with
 `replay: true`, which `tier1Report` drops so one fault is not one event per keystroke. An
-offline visitor (`navigator.onLine === false`) is dropped too — this branch has no flag gate
-and no `beforeSend` re-home, so that is the one brake on it.
+offline visitor (`navigator.onLine === false`) is dropped too — this branch has no flag gate,
+so that is the one brake on it.
 
 Only *Restart preview* lifts the latch (`rearmCompilerLoad`), and it mints a fresh query so
 the click is a real request rather than a replay of a decided failure: a blip that has since
@@ -1529,44 +1465,29 @@ per click; nothing retries on its own.
 re-surfaces this one, once — without that, a stranded tab froze silently on its last good
 render, with no card and no report.
 
-**Session-start diagnostics (DEV-2559) — temporary, remove with the DEMOS-9 fix.**
-The `tier2-session-start` branch of `reportRuntimeError` carries three extra tags —
-`framework`, `session_elapsed_bucket`, `cf_ray` — plus `extra.sessionElapsedMs`, all
-of them beside the fingerprint and none of them in it. They exist to answer one
-question on Sentry DEMOS-9 (is the 504 a fixed ceiling above our Worker, or container
-starts that are honestly slow?) and should come out once it is answered, together
-with the DEV-2527 teardown below. Three pieces, in this order: `SessionStartDiagnostics`
-and the clock in `packages/runtime/src/container.ts` (the fourth `SessionStartError`
-argument is optional, so the error's shape survives either way),
-`apps/authoring/src/sessionDiagnostics.ts` with `pipeline/session-diagnostics.test.mjs`,
-and the tag block in `App.tsx`. `cf_ray` is the reason for the deadline: it is
-~one tag value per event, affordable only because this path fires a handful of times a
-day, and it must not survive into a hotter one.
+**Session-start diagnostics (DEV-2559) — no longer sent anywhere.** The
+`tier2-session-start` branch of `reportRuntimeError` used to carry Sentry tags for
+DEMOS-9 — `session_elapsed_bucket`, `cf_ray`, `session_response_origin` and friends, plus
+`extra.sessionElapsedMs`. They were Sentry-only and stopped with the narrowing to
+uncaught errors; the facade record carries only `framework` and the refusal reason.
+`SessionStartDiagnostics` and its clock in `packages/runtime/src/container.ts`, and
+`apps/authoring/src/sessionDiagnostics.ts`, still exist but nothing reports what they
+compute.
 
-### Demo-runtime monitoring (DEV-2527) — temporary
+### Demo-runtime monitoring (DEV-2527)
 
-A third `environment`, `demo-runtime`, carries what the preview itself hits:
-uncaught errors, unhandled rejections, `console.error`, failed requests, Tier-1
-Sandpack compile errors, and Tier-2 dev-server stderr raised after the preview came
-up. It covers all traffic on `demos.handsontable.com`, anonymous visitors included.
+The preview's own failures — uncaught errors, unhandled rejections, `console.error`,
+failed requests, Tier-1 Sandpack compile errors, and Tier-2 dev-server stderr raised
+after the preview came up — are relayed to the app and reported to the telemetry facade
+only, never to Sentry: a `preview.runtime_error` count (Analytics Engine) and one handled
+Faro exception per fingerprint per edit burst (the Loki line, whose message is the
+fingerprint shape, never the relayed text; contract §5 and the edit-burst collapse in
+`apps/authoring/src/demoEventCollapse.ts`). It covers all traffic on
+`demos.handsontable.com`, anonymous visitors included.
 
-`console.warn` is relayed too but **never becomes an issue** (DEV-2539).
-`reportDemoEvent` files it as a Sentry *breadcrumb*, so the warnings that preceded a
-failure arrive as context on the next real error instead of as issues of their own —
-a message event at `warning` level is still an issue, and Handsontable's idempotent
-`Theme "…" is already registered` notice, emitted by ordinary re-renders, was the
-loudest of them. Breadcrumbs get their own ceiling at both ends
-(`MONITOR_BREADCRUMB_CEILING`, 50), deliberately separate from the relay ceiling: a
-breadcrumb files no issue so it can be looser, but a demo warning on every render must
-not spend the twenty relay slots before the `console.error` explaining the breakage is
-posted. Breadcrumbs live on the Sentry scope, which outlives one preview, so a warning
-recorded under example A can appear beneath an error from example B — their `data`
-carries tier, framework and demo id for exactly that reason. That scope is shared with
-the authoring app's own trail, and the buffer evicts oldest-first, which is why
-`Sentry.init` now states `maxBreadcrumbs: 200` instead of inheriting the SDK's default
-of 100: at 100 a demo spending its whole allowance would erase half the clicks and
-fetches you would need to explain an unrelated app failure. The two numbers move
-together or not at all.
+`console.warn` is relayed too but the app drops it (DEV-2539): it is not a runtime
+error, and Handsontable's idempotent `Theme "…" is already registered` notice, emitted by
+ordinary re-renders, would otherwise be the loudest event of all.
 
 **One owner per class of failure** (DEV-2552), because two channels can see the same
 Tier-1 fault. The in-preview relay owns anything the demo raised *while running* —
@@ -1580,7 +1501,7 @@ React's commit phase never reaches the window listener, and Angular's default
 `App.tsx` owns the other class, a bundler diagnostic for a module that never evaluated
 (`SandpackCompileError`); a `show-error` that carries `payload.frames` came from a
 module that did evaluate (`SandpackEvaluationError`) and the shell stands down for it.
-Before the split, one Tier-1 throw filed three Sentry issues.
+Before the split, one Tier-1 throw was filed three times.
 
 The preview is cross-origin on both tiers, so nothing in it can reach this window's
 handlers. `packages/runtime/src/monitor.ts` holds the bridge — one ES5 reporter,
@@ -1596,28 +1517,22 @@ because Next and Nuxt have no `index.html` for a file-level injection to find.
 - Worker: `MONITOR_DEMOS` in the `vars` block of `workers/api/wrangler.jsonc`
 
 Anything other than `"1"` (including deleting the line) is off. Because off costs a
-deploy, the immediate brake is elsewhere: `MONITOR_EVENT_CEILING` (20) events per
-page load, deduped by kind plus message plus first stack frame, messages truncated
-to 500 characters. Warnings are counted against a second, separate ceiling — see the
-breadcrumb paragraph above — so 20 is the cap on issue-producing events, not on
-everything the reporter sends.
-
-That ceiling is enforced **twice, and the parent's copy is the one that counts**. The
-reporter applies it in-page, but it runs beside code the demo's author wrote — and
-for a shared or docs example that author is not the person viewing it. Such a demo
-can ignore the reporter and `postMessage` crafted payloads straight at the app, so
-`reportDemoEvent` keeps its own `createMonitorBudget` and validates every field,
-`kind` against a closed set (it becomes a Sentry tag). Treat the in-page cap as
-advisory and the relay's as the limit.
+deploy, the brakes are elsewhere. In the page: `MONITOR_EVENT_CEILING` (20) events per
+page load, deduped by kind plus message plus first stack frame, messages truncated to
+500 characters, with warnings counted against a separate `MONITOR_BREADCRUMB_CEILING`.
+That cap runs beside code the demo's author wrote — and for a shared or docs example
+that author is not the person viewing it — so a demo can ignore the reporter and
+`postMessage` crafted payloads straight at the app. Treat it as advisory. What bounds the
+stack is in the app and behind it: `reportDemoEvent` validates every field
+(`sanitizeMonitorPayload`, `kind` against a closed set), the edit-burst collapse records
+a fingerprint once per burst and at most `DEMO_COLLAPSE_CEILING` (50) points per page
+load, and `POST /telemetry/collect` is rate-limited per IP (contract §2).
 
 On Tier 1 the in-page cap is per run, not per page load: the preview document is
 re-evaluated in place on every compile, so `SandpackRuntime` posts a reset
 (`MONITOR_RESET`) into it before each dispatched run. Otherwise the prefix runs of one
-typed line spend all 20 slots before the finished line throws. The warning ceiling and
-the relay's own budget stay per page load.
-
-**A per-environment rate limit on `demo-runtime` in the Sentry UI is still the only
-brake that works without a build** — keep one configured for as long as this is on.
+typed line spend all 20 slots before the finished line throws. The warning ceiling
+stays per page load.
 
 Nothing identifying is relayed: no source snippets, no file map, and network events
 carry scheme, host and path only, with the query string stripped. Same rule as
@@ -1625,33 +1540,28 @@ carry scheme, host and path only, with the query string stripped. Same rule as
 host to strip and its "path" *is* its payload, so a failed `<script src="data:…">`
 relays up to `MONITOR_URL_MAX` characters of the demo's own bytes. Kept deliberately —
 such a URL cannot be a third-party beacon, so the origin filter treats it as the demo's
-own — but it is the one shape in which a snippet can reach an event.
+own — but it is the one shape in which a snippet can reach the app.
 
 **Network events the reporter produces are same-origin only** (DEV-2539) — a crafted
-`postMessage` can still carry any url, which is why a relayed url reaches `extra` and
-the issue title only, never a Sentry tag and never the fingerprint. The reporter's
-`scrub` drops any request whose host is not the preview's own, so third-party beacons
-and CDN fetches never leave the page: Tier 1 runs inside CodeSandbox's bundler
-document, which beacons to its own telemetry host, and an ad blocker turns that into a
-`fetch` rejection the unfiltered wrapper filed against the demo. The check belongs in
-the reporter and nowhere else — `location.host` *is* the preview origin on both tiers,
-and by the time a payload reaches the app that host has been redacted to `<preview>` by
-design, so a parent-side origin check would be a check against a forgeable string. It
-fails open when `location` is unreadable (blinding the monitor is worse than noise) and
-treats a `data:`/`blob:` URL as the demo's own. Known cost, accepted: a docs example's
-genuine failure against a third-party host is dropped along with the beacons — a data
-API that 404s, and a broken CDN `<script>`/`<link>` too. If those are wanted back, the
-narrow version is an allowlist of the hosts docs examples actually use, not a return to
-reporting every host. For the events that survive, the URL is appended to the
-issue title as well as `extra` — `resource failed to load` alone is unactionable — but
-never to the fingerprint or the budget key, so a dozen broken assets stay one issue and
-one relay slot. One issue with *one* URL, though, not twelve: the reporter's own dedupe
-key is kind plus message plus first stack frame, and a resource load has no stack, so
-every failed `<img>/<script>/<link>` on a page collapses to the constant
-`network|resource failed to load|` and only the first is ever posted. The title names
-the asset that failed first and gives no hint that others did. Widening the dedupe key
-to include the URL was rejected on purpose: a dozen distinct keys would burn a dozen of
-the twenty relay slots and crowd out the `console.error` that explains the breakage.
+`postMessage` can still carry any url, but the app does not record it: only the message's
+fingerprint shape reaches the stack. The reporter's `scrub` drops any request whose host
+is not the preview's own, so third-party beacons and CDN fetches never leave the page:
+Tier 1 runs inside CodeSandbox's bundler document, which beacons to its own telemetry
+host, and an ad blocker turns that into a `fetch` rejection the unfiltered wrapper filed
+against the demo. The check belongs in the reporter and nowhere else — `location.host`
+*is* the preview origin on both tiers, and by the time a payload reaches the app that
+host has been redacted to `<preview>` by design, so a parent-side origin check would be a
+check against a forgeable string. It fails open when `location` is unreadable (blinding
+the monitor is worse than noise) and treats a `data:`/`blob:` URL as the demo's own.
+Known cost, accepted: a docs example's genuine failure against a third-party host is
+dropped along with the beacons — a data API that 404s, and a broken CDN
+`<script>`/`<link>` too. If those are wanted back, the narrow version is an allowlist of
+the hosts docs examples actually use, not a return to reporting every host. The
+reporter's dedupe key is kind plus message plus first stack frame, and a resource load
+has no stack, so every failed `<img>/<script>/<link>` on a page collapses to the constant
+`network|resource failed to load|` and only the first is ever posted. Widening the dedupe
+key to include the URL was rejected on purpose: a dozen distinct keys would burn a dozen
+of the twenty in-page slots and crowd out the `console.error` that explains the breakage.
 
 **The Tier-2 preview hostname is itself a session credential** and is redacted to
 `<preview>` everywhere. `<port>-<sandboxId>-<token>.demos.handsontable.com` is what
@@ -1671,24 +1581,12 @@ Two traps if you touch this, both of which shipped once and were caught in revie
 The app's own `demos.handsontable.com` origin stays readable; only hosts with a
 subdomain label are redacted.
 
-**Removing it** means deleting `packages/runtime/src/monitor.ts`, its test
-(`pipeline/monitor-inject.test.mjs`), and its callsites: `withMonitor` in
-`sandpack.ts`, `onStderr`/`relayStderr` in `container.ts`, `injectMonitor` in the
-Worker, and `monitorDemos` / `reportDemoEvent` in `sentry.ts` plus the relay listener
-in `App.tsx`. The `beforeSend` narrowing in `sentry.ts` is **not** part of this
-feature and must stay — it is a fix in its own right. Neither are the two
-DEMOS-5F / DEMOS-9 suppression gates it also calls: they live in `eventGate.ts`,
-are pinned by `pipeline/sentry-gating.test.mjs`, and are not part of the
-monitor-removal path either. Neither is the
-`tier1-compiler-asset` branch of `tier1Report` (DEV-2569): it sits ahead of the
-`monitorDemos` gate precisely so that removing this feature does not take our own
-compiler asset failing to load down with it.
-
-Removal must also drop the `SandpackEvaluationError` early return in
-`reportRuntimeError` (`App.tsx`), and with it the `SandpackEvaluationError` branch in
-`sandpack.ts`. That guard stands down for evaluated Tier-1 throws *because the relay
-reports them* — delete the relay and leave the guard, and that class of failure is
-reported by nobody. It is the one place the shell depends on the relay existing.
+**One dependency on the relay.** The `SandpackEvaluationError` early return in
+`reportRuntimeError` (`App.tsx`), and the `SandpackEvaluationError` branch in
+`sandpack.ts` behind it, stand down for evaluated Tier-1 throws *because the relay
+reports them*. Turning the flags off silences that class of failure along with the rest
+of the relay; deleting the monitor outright would have to take that guard with it, or
+the class is reported by nobody.
 
 **Releases.** The frontend release is the commit (`GITHUB_SHA`, injected as
 `VITE_SENTRY_RELEASE`). The Worker release is Cloudflare's per-deploy version id
