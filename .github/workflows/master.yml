@@ -101,7 +101,7 @@ jobs:
           # subtrees the API worker's own deploy actually builds/pushes
           # (containers/live/, containers/builder/); containers/o11y/ stays
           # gated on the o11y line below only.
-          grep -qE '^runner/(workers/api/|containers/(live|builder)/|scripts/|config/|packages/|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$' /tmp/changed.txt && api=true
+          grep -qE '^runner/(workers/api/|containers/(live|builder)/|scripts/|config/|packages/|pnpm-lock\.yaml$)|^\.github/workflows/(master|ci)\.yml$|^\.github/actions/docker-containerd-store/' /tmp/changed.txt && api=true
           # T10: workers/o11y (the worker itself), containers/o11y (the Grafana
           # box image) and packages/ (the shared telemetry module — gated on the
           # whole directory, not just packages/runtime/src/telemetry/, since
@@ -401,6 +401,10 @@ jobs:
         with:
           name: runtime-dist
           path: runner/packages/runtime/dist/
+
+      # Without this the containers/live image export runs the runner out of
+      # memory; see the action. live-image.yml builds with the same setup on PRs.
+      - uses: ./.github/actions/docker-containerd-store
 
       # Apply pending D1 schema changes to the remote DB before shipping code
       # that may depend on them. Migrations are idempotent (IF NOT EXISTS).

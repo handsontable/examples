@@ -1,0 +1,23 @@
+name: Docker containerd image store
+description: >-
+  Switches the runner's Docker daemon to the containerd image store before the
+  Tier-2 live image is built. With the default overlay2 store, dockerd holds
+  the image in memory while it exports the layers (12.6 GB for the 3.4 GB image
+  before the Next.js cache prime, past the 16 GB runner after it), and the
+  runner is shut down mid-export. With the containerd store dockerd stays
+  under 400 MB.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        { cat /etc/docker/daemon.json 2> /dev/null || echo "{}"; } \
+          | jq '.features["containerd-snapshotter"] = true' > /tmp/daemon.json
+        sudo mv /tmp/daemon.json /etc/docker/daemon.json
+        sudo systemctl restart docker
+        store=$(docker info --format '{{.DriverStatus}}')
+        echo "docker image store: $store"
+        case "$store" in
+          *io.containerd.snapshotter*) ;;
+          *) echo "::error::Docker did not switch to the containerd image store" >&2; exit 1 ;;
+        esac

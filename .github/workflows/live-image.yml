@@ -1,0 +1,51 @@
+name: Live image
+
+# Builds the Tier-2 `containers/live` image on a PR that changes it, on the
+# same hosted runner and Docker setup `deploy-api` (master.yml) builds it with.
+# Nothing else builds this image before merge, so an image that cannot build
+# there used to surface only as a failed production deploy.
+
+on:
+  pull_request:
+    paths:
+      - runner/containers/live/**
+      - runner/scripts/prepare-container.mjs
+      - .github/actions/docker-containerd-store/**
+      - .github/workflows/live-image.yml
+
+concurrency:
+  group: live-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: ./.github/actions/docker-containerd-store
+
+      # The flags wrangler's own build passes (`--load --platform linux/amd64
+      # --provenance=false`), so this produces the same single-manifest image.
+      # The background loop logs memory and dockerd's resident size every 10 s,
+      # so a runner that dies mid-build still leaves the numbers.
+      - name: Build containers/live
+        run: |
+          ( while sleep 10; do
+              echo "mon: $(free -m | awk '/^Mem:/ {print "mem used " $3 " / " $2 " MB"}'), dockerd rss $(ps -C dockerd -o rss= | awk '{s+=$1} END {print int(s/1024)}') MB, disk $(df -h / | awk 'NR==2 {print $3 " used"}')"
+            done ) &
+          monitor=$!
+          trap 'kill "$monitor"' EXIT
+          docker build --load --platform linux/amd64 --provenance=false -t live-image-check runner/containers/live
+
+      # wrangler refuses to push an image when Size * 1.1 + layers * 16 MiB
+      # exceeds the instance type's disk (`standard-1`: 8000 MB), after the
+      # Worker is already uploaded. Checking the same sum here fails the PR
+      # instead of leaving a half-deployed API worker.
+      - name: Image fits the standard-1 disk limit
+        run: |
+          read -r size layers < <(docker image inspect live-image-check --format '{{.Size}} {{len .RootFS.Layers}}')
+          required=$(( size * 11 / 10 + layers * 16 * 1024 * 1024 ))
+          limit=8000000000
+          echo "image size ${size} B, ${layers} layers: needs ${required} B of ${limit} B"
+          [ "$required" -le "$limit" ] || { echo "::error::containers/live needs ${required} B, over the ${limit} B standard-1 disk limit wrangler enforces"; exit 1; }
