@@ -1,0 +1,39 @@
+name: Live image
+
+# Builds the Tier-2 `containers/live` image on a PR that changes it, on the
+# same hosted runner `deploy-api` (master.yml) builds it on. Nothing else
+# builds this image before merge, so an image that cannot build on that runner
+# used to surface only as a failed production deploy.
+
+on:
+  pull_request:
+    paths:
+      - runner/containers/live/**
+      - .github/workflows/live-image.yml
+
+concurrency:
+  group: live-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Disk before the build
+        run: df -h /
+
+      # Same platform wrangler builds for. The background loop logs free disk
+      # every 10 s, so a runner that dies mid-build still leaves the numbers.
+      - name: Build containers/live
+        run: |
+          ( while sleep 10; do echo "disk: $(df -h / | tail -1)"; done ) &
+          monitor=$!
+          docker build --platform linux/amd64 -t live-image-check runner/containers/live
+          kill "$monitor"
+
+      - name: Image size and disk after the build
+        run: |
+          docker image ls live-image-check
+          df -h /
