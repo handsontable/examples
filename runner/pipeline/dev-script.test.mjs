@@ -1155,12 +1155,12 @@ test("readContainerDockerfilePaths: reads containers[].image from the real worke
 
 test("collectTierBaseImages: tier=2 against the real repo resolves the shared sandbox base image once", () => {
   const refs = collectTierBaseImages("2", RUNNER_ROOT);
-  assert.deepEqual(refs, ["docker.io/cloudflare/sandbox:0.12.3"]);
+  assert.deepEqual(refs, ["docker.io/cloudflare/sandbox:0.12.14"]);
 });
 
 test("collectTierBaseImages: tier=full also pulls in the o11y worker's two real base images", () => {
   const refs = collectTierBaseImages("full", RUNNER_ROOT);
-  assert.deepEqual(refs, ["docker.io/cloudflare/sandbox:0.12.3", "grafana/loki:3.3.2", "grafana/grafana:11.4.0"]);
+  assert.deepEqual(refs, ["docker.io/cloudflare/sandbox:0.12.14", "grafana/loki:3.3.2", "grafana/grafana:11.4.0"]);
 });
 
 test("shouldCheckContainerImages: true for tier 2/full unless --skip-image-check; always false for tier 1", () => {
@@ -1336,7 +1336,7 @@ test("CLI: `dev.mjs --tier=2` stops before spawning any worker when a required b
   assert.notEqual(result.status, 0);
   const output = `${result.stdout}${result.stderr}`;
   assert.match(output, /could not pull required container base image/);
-  assert.match(output, /docker pull docker\.io\/cloudflare\/sandbox:0\.12\.3/);
+  assert.match(output, /docker pull docker\.io\/cloudflare\/sandbox:0\.12\.14/);
   assert.match(output, /attempt 3\/3/, "the bounded retry must actually run through the real CLI, not just report ok:false");
   assert.doesNotMatch(output, /spawning:/, "no worker should ever be spawned once the image pull gate fails");
   // The stub docker has no "ps" handler (the very next docker call after

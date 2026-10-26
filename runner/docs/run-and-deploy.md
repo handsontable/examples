@@ -63,7 +63,7 @@ hardcoded), runs `docker image inspect` on each, and `docker pull`s (3
 attempts, with backoff) any that's missing, printing `[images]` progress
 lines. This is what `wrangler dev`'s own container build otherwise skips
 silently: without it, a missing base image (e.g. a Docker Hub timeout
-pulling `cloudflare/sandbox:0.12.3`) can leave `wrangler dev` running with a
+pulling `cloudflare/sandbox:0.12.14`) can leave `wrangler dev` running with a
 broken container build, surfacing only later as an opaque Tier-2
 session-start failure. If a pull still fails after every retry, `dev.mjs`
 prints which image, the Docker error's last line, and the exact

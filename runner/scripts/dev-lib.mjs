@@ -55,7 +55,7 @@ Options:
                     (--tier=2 or --tier=full only) skip the pre-flight check
                     that every container base image (read from each
                     wrangler.jsonc's own containers[].image Dockerfile,
-                    e.g. cloudflare/sandbox:0.12.3) is present locally,
+                    e.g. cloudflare/sandbox:0.12.14) is present locally,
                     pulling any that's missing before starting a worker.
                     Escape hatch for offline use when the images are
                     already built.
