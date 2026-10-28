@@ -48,3 +48,4 @@ once Accepted.
 | [0041](0041-observability-stack.md) | Observability on Cloudflare — a sleeping Loki + Grafana box, OTLP inward, Sentry for uncaught errors | Accepted 2026-10-21 (rev. 3; 14/15 exit criteria pass, criteria 5, 9, 11, 13 verified in production; criterion 8 Mixed at ≈0.36–0.85M/month; §L "Results"; supersedes part of 0040; amends 0022, 0038) |
 | [0042](0042-example-analytics.md) | Count which examples people open, by docs guide and starter | Accepted 2026-10-21 (rev. 2; ships with 0041) |
 | [0043](0043-admin-cutover-to-grafana.md) | `/admin` reads move to Grafana; the writes stay on `/admin/controls` | Proposed, design approved (rev. 2; after 0041's launch; amends 0022) |
+| [0044](0044-consent-gated-marketing-tags.md) | Consent-gated marketing tags (HubSpot + Reo) on the authoring SPA | Proposed |
