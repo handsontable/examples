@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-963c44a-20261021",
-  "count": 1654,
+  "hotVersion": "0.0.0-next-36242d6-20261027",
+  "count": 1679,
   "examples": [
     {
       "bucket": "next",
@@ -16197,6 +16197,246 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/angular/example1.ts",
+      "file": "guides__formulas__formula-builder__angular__example1.ts.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/formula-builder",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/javascript/example1.js",
+      "file": "guides__formulas__formula-builder__javascript__example1.js.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/formula-builder",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/react/example1.tsx",
+      "file": "guides__formulas__formula-builder__react__example1.tsx.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/formula-builder",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/javascript/example1.ts",
+      "file": "guides__formulas__formula-builder__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/formula-builder",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/vue/example1.vue",
+      "file": "guides__formulas__formula-builder__vue__example1.vue.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/formula-builder",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/angular/example2.ts",
+      "file": "guides__formulas__formula-builder__angular__example2.ts.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example2",
+      "exampleTitle": "Autocomplete and popups",
+      "docPermalink": "/formula-builder",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/javascript/example2.js",
+      "file": "guides__formulas__formula-builder__javascript__example2.js.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example2",
+      "exampleTitle": "Autocomplete and popups",
+      "docPermalink": "/formula-builder",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/react/example2.tsx",
+      "file": "guides__formulas__formula-builder__react__example2.tsx.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example2",
+      "exampleTitle": "Autocomplete and popups",
+      "docPermalink": "/formula-builder",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/javascript/example2.ts",
+      "file": "guides__formulas__formula-builder__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example2",
+      "exampleTitle": "Autocomplete and popups",
+      "docPermalink": "/formula-builder",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/vue/example2.vue",
+      "file": "guides__formulas__formula-builder__vue__example2.vue.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example2",
+      "exampleTitle": "Autocomplete and popups",
+      "docPermalink": "/formula-builder",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/angular/example3.ts",
+      "file": "guides__formulas__formula-builder__angular__example3.ts.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example3",
+      "exampleTitle": "Error indicators and read-only cells",
+      "docPermalink": "/formula-builder",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/javascript/example3.js",
+      "file": "guides__formulas__formula-builder__javascript__example3.js.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example3",
+      "exampleTitle": "Error indicators and read-only cells",
+      "docPermalink": "/formula-builder",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/react/example3.tsx",
+      "file": "guides__formulas__formula-builder__react__example3.tsx.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example3",
+      "exampleTitle": "Error indicators and read-only cells",
+      "docPermalink": "/formula-builder",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/javascript/example3.ts",
+      "file": "guides__formulas__formula-builder__javascript__example3.ts.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example3",
+      "exampleTitle": "Error indicators and read-only cells",
+      "docPermalink": "/formula-builder",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/formulas/formula-builder/vue/example3.vue",
+      "file": "guides__formulas__formula-builder__vue__example3.vue.json",
+      "breadcrumb": [
+        "Formulas",
+        "Formula builder"
+      ],
+      "guide": "guides/formulas/formula-builder/formula-builder.md",
+      "guideTitle": "Formula builder",
+      "exampleId": "example3",
+      "exampleTitle": "Error indicators and read-only cells",
+      "docPermalink": "/formula-builder",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/formulas/formula-calculation/angular/example-custom-functions.ts",
       "file": "guides__formulas__formula-calculation__angular__example-custom-functions.ts.json",
       "breadcrumb": [
@@ -21181,6 +21421,176 @@
       "docPermalink": "/recipes/data-management/load-data-rest-api",
       "framework": "typescript",
       "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/angular/example1.ts",
+      "file": "recipes__data-management__load-data-odata__angular__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/javascript/example1.js",
+      "file": "recipes__data-management__load-data-odata__javascript__example1.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/react/example1.tsx",
+      "file": "recipes__data-management__load-data-odata__react__example1.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/javascript/example1.ts",
+      "file": "recipes__data-management__load-data-odata__javascript__example1.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/vue/example1.vue",
+      "file": "recipes__data-management__load-data-odata__vue__example1.vue.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example1",
+      "exampleTitle": "Standard example",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/angular/example2.ts",
+      "file": "recipes__data-management__load-data-odata__angular__example2.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example2",
+      "exampleTitle": "Step 3: Fill an autocomplete cell from the service",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/javascript/example2.js",
+      "file": "recipes__data-management__load-data-odata__javascript__example2.js.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example2",
+      "exampleTitle": "Step 3: Fill an autocomplete cell from the service",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/react/example2.tsx",
+      "file": "recipes__data-management__load-data-odata__react__example2.tsx.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example2",
+      "exampleTitle": "Step 3: Fill an autocomplete cell from the service",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/javascript/example2.ts",
+      "file": "recipes__data-management__load-data-odata__javascript__example2.ts.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example2",
+      "exampleTitle": "Step 3: Fill an autocomplete cell from the service",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "recipes/data-management/load-data-odata/vue/example2.vue",
+      "file": "recipes__data-management__load-data-odata__vue__example2.vue.json",
+      "breadcrumb": [
+        "Recipes",
+        "Data Management",
+        "Load data from an OData service"
+      ],
+      "guide": "recipes/data-management/load-data-odata/load-data-odata.md",
+      "guideTitle": "Load data from an OData service",
+      "exampleId": "example2",
+      "exampleTitle": "Step 3: Fill an autocomplete cell from the service",
+      "docPermalink": "/recipes/data-management/load-data-odata",
+      "framework": "vue",
+      "displayName": "Vue 3"
     },
     {
       "bucket": "next",
