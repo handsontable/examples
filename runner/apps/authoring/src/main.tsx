@@ -18,6 +18,10 @@ import { safeInit } from "./bootGuard.js";
 // best-effort side channel, so a construction failure degrades to
 // `noopTelemetry` instead — see `safeInit`'s own doc comment.
 safeInit(initTelemetry, (err) => Sentry.captureException(err, { tags: { surface: "telemetry-init" } }));
+// The consent banner and, once marketing consent is given, HubSpot + Reo
+// (ADR-0044). Guarded like telemetry: a marketing tag must never blank the app.
+import { initMarketingTags } from "./marketingTags.js";
+safeInit(initMarketingTags, (err) => Sentry.captureException(err, { tags: { surface: "marketing-init" } }));
 // DEMOS-1D (DEV-2859): attach the bounded editor trail to every event this
 // client sends, plus the tags derived from its most recent entry. Registered
 // unconditionally — `Sentry.addEventProcessor` is a no-op when reporting is
