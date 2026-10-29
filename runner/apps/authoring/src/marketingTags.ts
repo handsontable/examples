@@ -6,7 +6,13 @@
 // The decision itself is `marketingGate.ts`, where it can be tested.
 
 import { getToken } from "./auth.js";
-import { looksSignedIn, marketingConsented, offerMarketingTags, type CookiebotShape } from "./marketingGate.js";
+import {
+  consentAction,
+  looksSignedIn,
+  marketingConsented,
+  offerMarketingTags,
+  type CookiebotShape,
+} from "./marketingGate.js";
 import { PRODUCTION_HOST } from "./reportingGate.js";
 
 /* Public identifiers, the same ones handsontable.com ships: the Cookiebot account
@@ -30,6 +36,30 @@ function addScript(src: string): HTMLScriptElement {
   return script;
 }
 
+/* The cookies the two tags set: Reo's six first-party cookies (docs.reo.dev,
+   "Cookies & Consent Guide") and HubSpot's tracking cookies. Cleared on this
+   host and on the parent domain, either of which the scripts may have used. */
+const MARKETING_COOKIES = [
+  "__sec__cid",
+  "__sec__fid",
+  "__sec__ghost",
+  "__sec__token",
+  "__sec__crid",
+  "__sec__tid",
+  "hubspotutk",
+  "__hstc",
+  "__hssc",
+  "__hssrc",
+];
+
+function clearMarketingCookies(): void {
+  const expired = "expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+  for (const name of MARKETING_COOKIES) {
+    document.cookie = `${name}=; ${expired}`;
+    document.cookie = `${name}=; ${expired}; domain=.handsontable.com`;
+  }
+}
+
 export function initMarketingTags(): void {
   let token: string | null = null;
   try {
@@ -47,22 +77,30 @@ export function initMarketingTags(): void {
 
   const w = window as MarketingWindow;
   let loaded = false;
-  const loadIfConsented = () => {
-    if (loaded || !marketingConsented(w.Cookiebot)) return;
-    loaded = true;
-    addScript(HUBSPOT_SRC).id = "hs-script-loader";
-    addScript(`https://static.reo.dev/${REO_CLIENT_ID}/reo.js`).onload = () =>
-      w.Reo?.init({ clientID: REO_CLIENT_ID });
+  const syncConsent = () => {
+    const action = consentAction(marketingConsented(w.Cookiebot), loaded);
+    if (action === "load") {
+      loaded = true;
+      addScript(HUBSPOT_SRC).id = "hs-script-loader";
+      addScript(`https://static.reo.dev/${REO_CLIENT_ID}/reo.js`).onload = () =>
+        w.Reo?.init({ clientID: REO_CLIENT_ID });
+    } else if (action === "withdraw") {
+      // Marketing consent withdrawn mid-visit. Reo has no stop call (its docs
+      // only say not to load it without consent), so both tags' cookies go and
+      // the page reloads without either script. HubSpot is also told directly,
+      // in case it writes again before the reload. Only signed-out pages get
+      // here, and their edits are never persisted — the edit page's
+      // unsaved-work guard is staff-only, as are its tags.
+      (w._hsq = w._hsq || []).push(["revokeCookieConsent"]);
+      clearMarketingCookies();
+      window.location.reload();
+    }
   };
-  // `CookiebotOnConsentReady` fires once a stored or implied answer is known,
-  // `CookiebotOnAccept` when the visitor accepts in the banner.
-  window.addEventListener("CookiebotOnConsentReady", loadIfConsented);
-  window.addEventListener("CookiebotOnAccept", loadIfConsented);
-  // A withdrawal mid-visit: HubSpot drops its cookies; the scripts themselves go
-  // with the next page load, which no longer loads them.
-  window.addEventListener("CookiebotOnDecline", () => {
-    if (loaded) (w._hsq = w._hsq || []).push(["revokeCookieConsent"]);
-  });
+  // The event name does not say which way marketing went (unticking only
+  // marketing fires `CookiebotOnAccept`), so every one re-reads the consent.
+  for (const event of ["CookiebotOnConsentReady", "CookiebotOnAccept", "CookiebotOnDecline"]) {
+    window.addEventListener(event, syncConsent);
+  }
 
   const banner = addScript("https://consent.cookiebot.com/uc.js");
   banner.id = "Cookiebot";

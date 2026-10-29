@@ -45,6 +45,18 @@ export function marketingConsented(cookiebot: CookiebotShape | undefined): boole
 }
 
 /**
+ * What a consent change asks of the page, given whether the tags are loaded.
+ * Every Cookiebot event goes through this one rule, because the event name does
+ * not say which way marketing went: unticking only marketing in the banner fires
+ * `CookiebotOnAccept`, not `CookiebotOnDecline`.
+ */
+export function consentAction(consented: boolean, loaded: boolean): "load" | "withdraw" | "none" {
+  if (consented && !loaded) return "load";
+  if (!consented && loaded) return "withdraw";
+  return "none";
+}
+
+/**
  * A staff session, read synchronously: the broker token in sessionStorage, or a
  * `#token=` fragment the broker has just redirected back with and `auth.ts` has not
  * consumed yet. Deliberately not `currentUser()`, which round-trips the broker

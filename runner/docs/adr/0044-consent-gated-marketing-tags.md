@@ -26,10 +26,15 @@ cookies.
    neither do Tier-2 previews.
 2. **Consent first.** The page loads the Cookiebot banner with the account
    handsontable.com uses. HubSpot (`js-eu1.hs-scripts.com/147178780.js`) and Reo
-   load only once `Cookiebot.consent.marketing` is true: on
-   `CookiebotOnConsentReady` for a stored or implied answer, or on
-   `CookiebotOnAccept`. This is an explicit gate in code, not left to tag-manager
-   settings, so a decline is honoured in every region.
+   load only once `Cookiebot.consent.marketing` is true. Every Cookiebot event
+   (`CookiebotOnConsentReady`, `CookiebotOnAccept`, `CookiebotOnDecline`) re-reads
+   the consent and compares it with what is loaded (`consentAction`), because the
+   event name does not say which way marketing went: unticking only marketing in
+   the banner fires `CookiebotOnAccept`. A withdrawal after the tags loaded clears
+   their cookies and reloads the page. Reo has no stop call, and only signed-out
+   pages, whose edits are never persisted, carry the tags. This is an explicit
+   gate in code, not left to tag-manager settings, so a decline is honoured in
+   every region.
 3. **Visitors only.** The gate (`marketingGate.ts`) requires the production host
    (strict equality, as in `reportingGate.ts`), `navigator.webdriver !== true`, and
    no staff session. A staff session is detected synchronously from the broker

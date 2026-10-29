@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PRODUCTION_HOST } from "../apps/authoring/src/reportingGate.ts";
-import { looksSignedIn, marketingConsented, offerMarketingTags } from "../apps/authoring/src/marketingGate.ts";
+import {
+  consentAction,
+  looksSignedIn,
+  marketingConsented,
+  offerMarketingTags,
+} from "../apps/authoring/src/marketingGate.ts";
 
 // ADR-0044. The marketing tags (HubSpot + Reo) and their consent banner load only
 // for a signed-out visitor on the production host, outside automation, and the
@@ -37,6 +42,16 @@ test("only an explicit or implied marketing consent lets the tags load", () => {
   assert.equal(marketingConsented({ consent: {} }), false);
   assert.equal(marketingConsented({}), false);
   assert.equal(marketingConsented(undefined), false);
+});
+
+test("withdrawing marketing consent after the tags loaded is a withdrawal, whatever event carried it", () => {
+  // PR #476 review: unticking only marketing fires CookiebotOnAccept, so the old
+  // "load on accept, revoke on decline" wiring never revoked. The decision now
+  // depends only on consent vs. what is loaded.
+  assert.equal(consentAction(false, true), "withdraw");
+  assert.equal(consentAction(true, false), "load");
+  assert.equal(consentAction(true, true), "none");
+  assert.equal(consentAction(false, false), "none");
 });
 
 test("a staff session is the stored token or a #token= the broker just returned", () => {
