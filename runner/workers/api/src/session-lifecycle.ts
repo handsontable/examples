@@ -39,15 +39,19 @@ export const TOMBSTONE_ATTEMPTED = "1";
  *  without touching the sandbox. */
 export const TOMBSTONE_DESTROYED = "destroyed";
 
+/** The SDK is stopping the container after `sleepAfter`; the gate answers `session_slept` so the tab can offer a restart. */
+export const TOMBSTONE_SLEPT = "slept";
+
 /** Ten minutes, comfortably past `sleepAfter = "5m"` in `index.ts`: a marker
  *  must outlive the container it guards, or a straggler request resurrects one
  *  under a dead id. Also the ceiling on how long a DELETE stays idempotent. */
 export const TOMBSTONE_TTL_SECONDS = 600;
 
 /**
- * Whether we have watched this session's container actually go away.
+ * Whether this session's container is gone or being stopped by the platform.
  *
- * True for exactly one literal. `null` (no marker), `"1"` (a teardown was
+ * True for `destroyed` (we watched `destroy()` resolve) and `slept` (the SDK's
+ * idle stop wrote it). `null` (no marker), `"1"` (a teardown was
  * attempted, outcome unknown) and anything unrecognised all mean "still needs
  * the RPC" — the direction a mistake has to fail in. Answering `true` for an
  * attempt would turn a transient destroy failure into a guaranteed leak, since
@@ -62,7 +66,7 @@ export const TOMBSTONE_TTL_SECONDS = 600;
  * destroy, and only writes the confirmation afterwards.
  */
 export function destroyConfirmed(marker: string | null | undefined): boolean {
-  return marker === TOMBSTONE_DESTROYED;
+  return marker === TOMBSTONE_DESTROYED || marker === TOMBSTONE_SLEPT;
 }
 
 /** What the `/api/session/:id/*` gate does with a request: let it through, answer

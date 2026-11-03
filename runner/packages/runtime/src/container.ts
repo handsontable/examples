@@ -1231,9 +1231,11 @@ export class ContainerRuntime implements DemoRuntime {
           }
           // The keepalive is also how a *running* session learns the cost
           // ceiling closed it (the server destroys the container on this
-          // request). Without this the preview would just quietly go stale.
+          // request), or that its container was stopped after sitting idle.
+          // Without this the preview would just quietly go stale.
           const failure = await readFailure(r);
-          if (this.disposed || !failure.code?.startsWith("budget_")) return;
+          const surfaced = failure.code?.startsWith("budget_") || failure.code === "session_slept";
+          if (this.disposed || !surfaced) return;
           if (this.frameEverPointed) this.opts.iframe.src = "about:blank";
           this.emitError(new SessionStartError(410, failure.message, failure.code));
         })

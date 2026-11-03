@@ -109,7 +109,15 @@ export function trackPreviewReady(
 
   runtime.onReady(() => finish("ready"));
   runtime.onError(() => finish("error"));
-  timer = setTimeout(() => finish("timeout"), timeoutMs);
+  timer = setTimeout(() => {
+    // A fake or fast-forwarded timer can fire long before the clock got there;
+    // that timeout never happened, so settle without reporting one.
+    if (now() - startedAt < timeoutMs * 0.9) {
+      settled = true;
+      return;
+    }
+    finish("timeout");
+  }, timeoutMs);
 
   return {
     observe(mountPromise) {

@@ -43,6 +43,7 @@ import {
   sessionGateVerdict,
   TOMBSTONE_ATTEMPTED,
   TOMBSTONE_DESTROYED,
+  TOMBSTONE_SLEPT,
   TOMBSTONE_TTL_SECONDS,
 } from "./session-lifecycle.js";
 import { refAmbiguousMessage, refUnknownMessage } from "./session-listing.js";
@@ -59,6 +60,7 @@ import {
   getBudgetState,
   hasSessionMeter,
   invalidateBudgetState,
+  KV_METER_TTL_SECONDS,
   meterSession,
   meterSessionReading,
   noteTraffic,
@@ -196,6 +198,8 @@ class SandboxBaseWithSleep extends SandboxBase {
    *  cannot be recomputed after an isolate eviction. */
   private framework: string | null = null;
   private static readonly FRAMEWORK_STORAGE_KEY = "o11y:boot-framework";
+  /** The id this DO was created under, so its idle stop can end that session. */
+  private static readonly SESSION_ID_STORAGE_KEY = "session-id";
 
   /**
    * Fires on every container start, which is exactly the clock DEV-2537 needs:
@@ -222,13 +226,23 @@ class SandboxBaseWithSleep extends SandboxBase {
    * Best-effort in both directions: the Worker `.catch()`s this RPC, and this
    * method never throws, because losing the framework only means
    * `window_exceeded` falls back to today's framework-less point — it must
-   * never fail the create.
+   * never fail the create. `sessionId` rides the same call for the idle stop.
    */
-  async setFramework(framework: string): Promise<void> {
+  async setFramework(framework: string, sessionId?: string): Promise<void> {
     this.framework = framework;
     try {
       await this.ctx.storage.put(SandboxBaseWithSleep.FRAMEWORK_STORAGE_KEY, framework);
+      if (sessionId) await this.ctx.storage.put(SandboxBaseWithSleep.SESSION_ID_STORAGE_KEY, sessionId);
     } catch { /* best effort — see the field doc */ }
+  }
+
+  /** The SDK stops an idle container here; end its session first, without ever blocking the stop. */
+  override async onActivityExpired(): Promise<void> {
+    try {
+      const sessionId = await this.ctx.storage.get<string>(SandboxBaseWithSleep.SESSION_ID_STORAGE_KEY);
+      if (sessionId) await closeIdleSession(this.env as Env, sessionId);
+    } catch { /* telemetry and KV are best effort here */ }
+    await super.onActivityExpired();
   }
 
   /**
@@ -424,7 +438,7 @@ type SandboxLike = {
   destroy(): Promise<unknown>;
   // Best-effort framework hand-off for `container.boot_ms window_exceeded`
   // — see `SandboxBaseWithSleep#setFramework`.
-  setFramework(framework: string): Promise<void>;
+  setFramework(framework: string, sessionId?: string): Promise<void>;
 };
 // Cast the function itself so TS never instantiates its deep generic return.
 const getSandboxShallow = getSandbox as unknown as (ns: unknown, id: string) => SandboxLike;
@@ -455,15 +469,36 @@ const readTombstone = (env: Env, sessionId: string): Promise<string | null> =>
  *  must not become the 500 this whole change exists to remove. Without the
  *  marker the mid-create race and the duplicate-DELETE skip both fall back to
  *  the `sleepAfter` backstop, which is where they were before DEV-2556. */
-async function putTombstone(env: Env, sessionId: string, marker: string): Promise<void> {
+async function putTombstone(
+  env: Env,
+  sessionId: string,
+  marker: string,
+  ttlSeconds: number = TOMBSTONE_TTL_SECONDS,
+): Promise<void> {
   try {
-    await env.CACHE.put(tombstoneKey(sessionId), marker, { expirationTtl: TOMBSTONE_TTL_SECONDS });
+    await env.CACHE.put(tombstoneKey(sessionId), marker, { expirationTtl: ttlSeconds });
   } catch { /* defense-in-depth only */ }
 }
 
 /** `session.end`'s doubles: `value` is left off when no meter was read, so a missing figure is not plotted as a 0 s session. */
 const sessionEndValues = (awakeSeconds: number | undefined) =>
   awakeSeconds === undefined ? { count: 1 } : { count: 1, value: Math.round(awakeSeconds) };
+
+/** Shown on the error card, so it avoids the words App.tsx's local-dev heuristic matches. */
+const SESSION_SLEPT_MESSAGE =
+  "This demo was paused after a few minutes without activity. Restart the preview to continue.";
+
+/**
+ * End a session whose container the SDK is about to stop after `sleepAfter`.
+ * Tombstoned first so `/api/session/:id/*` refuses instead of booting an empty
+ * container under the old id, which could never serve the old preview URL.
+ */
+async function closeIdleSession(env: Env, sessionId: string): Promise<void> {
+  if ((await readTombstone(env, sessionId)) !== null) return;
+  await putTombstone(env, sessionId, TOMBSTONE_SLEPT, KV_METER_TTL_SECONDS);
+  const { framework, awakeSeconds } = await meterSessionReading(env, sessionId, { final: true });
+  void emitPoint(env, "session.end", sessionEndValues(awakeSeconds), { framework: framework ?? "", reason: "sleep_after" });
+}
 
 /**
  * Tear a live session down: close its awake window, tombstone it, destroy the
@@ -491,7 +526,8 @@ async function teardownLiveSession(
   // re-entered the sandbox would be asking for a slot in order to destroy
   // something that is not there — the create/delete race
   // (packages/runtime/src/container.ts) sends exactly that.
-  if (destroyConfirmed(await readTombstone(env, sessionId))) {
+  const existingMarker = await readTombstone(env, sessionId);
+  if (destroyConfirmed(existingMarker)) {
     // Still metered, even though every writer of a `destroyed` marker now closes
     // the window itself (`closedWhileCreating()` gained that call in DEV-2567).
     // Kept as the backstop for the ordering that produced the phantom rows in
@@ -500,8 +536,9 @@ async function teardownLiveSession(
     // missing meter — so the cost of keeping it is one KV read.
     await meterSession(env, sessionId, { final: true });
     // Keep the marker alive for as long as teardowns keep arriving: it is also
-    // what the resurrection gate reads.
-    await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
+    // what the resurrection gate reads. A `slept` marker already outlives this
+    // TTL and carries the reason the gate reports, so it stays.
+    if (existingMarker !== TOMBSTONE_SLEPT) await putTombstone(env, sessionId, TOMBSTONE_DESTROYED);
     return;
   }
   // Tombstone BEFORE destroying: if a create for this id is still in flight
@@ -1025,7 +1062,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
           // ever attaches, and this call must never be the reason a create
           // fails.
           try {
-            await sandbox.setFramework(body.framework);
+            await sandbox.setFramework(body.framework, sessionId);
           } catch { /* best effort */ }
           await recordUsageEvent(env, "session_started", body.framework);
           await writeFiles(sandbox, files);
@@ -1246,7 +1283,11 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         const gateRequest = { method: request.method, sub: parts[3] };
         const refuse = (verdict: ReturnType<typeof sessionGateVerdict>) =>
           verdict === "noop" ? cors(new Response(null, { status: 204 })) : json({ error: "session closed" }, 410);
-        const tombstoneVerdict = sessionGateVerdict({ tombstoned: await isTombstoned(env, sessionId), metered: true }, gateRequest);
+        const marker = await readTombstone(env, sessionId);
+        const tombstoneVerdict = sessionGateVerdict({ tombstoned: marker !== null, metered: true }, gateRequest);
+        if (tombstoneVerdict === "gone" && marker === TOMBSTONE_SLEPT) {
+          return json({ error: "session_slept", message: SESSION_SLEPT_MESSAGE }, 410);
+        }
         if (tombstoneVerdict !== "pass") return refuse(tombstoneVerdict);
         // The cost ceiling belongs here too, for the same reason the tombstone
         // check does: every subroute below reaches the sandbox, and every

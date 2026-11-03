@@ -290,9 +290,13 @@ never counted `accepted`. Cloudflare's exporter behaviour (timeout, retries and 
 back-pressure on the source Worker, what it treats as failure) is undocumented and remains a known
 unknown, watched through the "Observability self" dashboard.
 
-Two reasons in this table have no emitter and never produce data: `session.end` reason
-`sleep_after` (nothing observes the Sandbox SDK's idle-timeout stop) and `pool.gauge`
-reason `builder` (the builder pool is not metered; the `*/5` cron emits `live` only).
+`session.end` reason `sleep_after` comes from the live-preview Durable Object's
+`onActivityExpired`, just before the Sandbox SDK stops an idle container; it also
+tombstones the session so later `/api/session/:id/*` requests are refused instead of
+booting a new container.
+
+One reason in this table has no emitter and never produces data: `pool.gauge` reason
+`builder` (the builder pool is not metered; the `*/5` cron emits `live` only).
 
 `o11y.wake`'s `duration_ms` is wake-to-ready time — from the wake starting to the
 box's first successful `isReady()`, sourced from `wake:<wakeId>.readyMs` (§8) — on both
