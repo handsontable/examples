@@ -43,7 +43,7 @@ const {
   o11yCapRule,
   alertEvalErrorRule,
 } = await import("../workers/o11y/src/alerts/rules.ts");
-const { assertAllowedAeQuery, findDisallowedAeFunctions, findUnsupportedAeConstructs, ALLOWED_AE_FUNCTIONS } =
+const { assertAllowedAeQuery, findDisallowedAeFunctions, findUnsupportedAeConstructs, ALLOWED_AE_FUNCTIONS, runAeQuery } =
   await import("../workers/o11y/src/alerts/ae-query.ts");
 const { inboxKeyStorageKey, AE_COLUMNS } = await import("@handsontable/demo-runtime/telemetry");
 const { newFingerprintWrites } = await import("../workers/o11y/src/inbox/registry.ts");
@@ -167,6 +167,41 @@ test("ae-query: a quoted identifier named like a keyword is not a construct", ()
     assert.deepEqual(findUnsupportedAeConstructs(sql), [], sql);
   }
   assert.ok(findUnsupportedAeConstructs("SELECT a FROM runner_events JOIN t ON 1 = 1").includes("JOIN"));
+});
+
+// ---- alerts/ae-query.ts: transient SQL API failures ------------------------
+
+const AE_ENV = { CLOUDFLARE_ACCOUNT_ID: "acct", AE_SQL_TOKEN: "token" };
+const AE_SQL = "SELECT blob1 AS a FROM runner_events WHERE index1 = 'x'";
+
+function scriptedFetch(...responses) {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    const next = responses.shift();
+    return new Response(JSON.stringify(next.body ?? { data: next.data ?? [] }), { status: next.status });
+  };
+  return { fetchImpl, calls };
+}
+
+test("ae-query: one 5xx from the SQL API is retried, so a transient blip does not fail the rule", async () => {
+  const { fetchImpl, calls } = scriptedFetch(
+    { status: 500, body: { success: false, errors: [{ code: 10500, message: "Internal authentication error" }] } },
+    { status: 200, data: [{ a: "ok" }] },
+  );
+  const rows = await runAeQuery(AE_ENV, AE_SQL, fetchImpl, 0);
+  assert.deepEqual(rows, [{ a: "ok" }]);
+  assert.equal(calls.length, 2);
+});
+
+test("ae-query: a second 5xx still throws, and a 4xx is never retried", async () => {
+  const twice = scriptedFetch({ status: 500 }, { status: 503 });
+  await assert.rejects(runAeQuery(AE_ENV, AE_SQL, twice.fetchImpl, 0), /Analytics Engine SQL API failed, 503/);
+  assert.equal(twice.calls.length, 2);
+
+  const badRequest = scriptedFetch({ status: 400 }, { status: 200 });
+  await assert.rejects(runAeQuery(AE_ENV, AE_SQL, badRequest.fetchImpl, 0), /Analytics Engine SQL API failed, 400/);
+  assert.equal(badRequest.calls.length, 1);
 });
 
 // ---- alerts/inbox-state.ts: pure InboxWriter helpers ----------------------
@@ -1287,6 +1322,29 @@ test("previewSlowRule: Tier-2 ready p95 above 180 s fires with 10 ready previews
     ...Array.from({ length: 10 }, () => ({ metric: "preview.ready_ms", tier: "2", outcome: "timeout", duration_ms: 600_000 })),
   ]).queryFn);
   assert.equal(errorsExcluded.firing, false, "timeouts carry long durations but are not ready times");
+});
+
+// PR preview builds (pkg.pr.new refs) and `-next` prereleases both report
+// `ht_major = 'next'`. Their traffic is mostly a link-opening bot whose
+// requests never reach a container, so it must not page the release rules.
+const asNext = (rows) => rows.map((r) => ({ ...r, ht_major: "next" }));
+
+test("preview rules: failures on ht_major 'next' never page, release failures in the same window still do", async () => {
+  const nextOnly = makeFakeAeQuery(asNext(tier2Rows(0, 30)));
+  const rate = await previewReadyRateRule({}, nextOnly.queryFn);
+  assert.equal(rate.firing, false, `0/30 on next builds must not fire: ${rate.detail}`);
+  assert.ok(nextOnly.calls.every((sql) => sql.includes(`${AE_COLUMNS.ht_major} NOT IN ('next')`)), "every query excludes next");
+
+  const liveness = await tier2LivenessRule({}, makeFakeAeQuery(asNext(tier2Rows(0, 30))).queryFn);
+  assert.equal(liveness.firing, false, `next-only attempts are not a dead tier: ${liveness.detail}`);
+
+  const slow = await previewSlowRule({}, makeFakeAeQuery(asNext(readyDurations(20, 500_000))).queryFn);
+  assert.equal(slow.firing, false, `slow next builds do not feed the p95: ${slow.detail}`);
+
+  const mixed = makeFakeAeQuery([...asNext(tier2Rows(0, 30)), ...tier2Rows(7, 3).map((r) => ({ ...r, ht_major: "18" }))]);
+  const mixedRate = await previewReadyRateRule({}, mixed.queryFn);
+  assert.equal(mixedRate.firing, true, mixedRate.detail);
+  assert.match(mixedRate.detail, /tier 2: 70\.0% ready over the last 6 h \(7\/10, 3 failed/);
 });
 
 test("sessionStartP95Rule: over 20s fires, under does not; outcome='ready' filter is real, not decorative", async () => {

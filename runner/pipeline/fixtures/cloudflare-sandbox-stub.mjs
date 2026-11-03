@@ -10,7 +10,17 @@
 // `runBuild` directly (pipeline/snapshot-build.test.mjs). Unset — the default
 // — keeps the loud throw every route spec relies on.
 
-export class Sandbox {}
+export class Sandbox {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+  }
+
+  /** The SDK stops the container here; `idleStops` lets a spec see it was reached. */
+  async onActivityExpired() {
+    this.idleStops = (this.idleStops ?? 0) + 1;
+  }
+}
 
 let factory = null;
 
