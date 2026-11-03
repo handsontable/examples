@@ -21,7 +21,7 @@
 export const BLANK_FRAMEWORKS = ["blank", "blank-ts", "blank-react"];
 
 const LICENSE_KEY = "non-commercial-and-evaluation";
-const LICENSE_KEY_DOCS = "https://handsontable.com/docs/javascript-data-grid/license-key/";
+const LICENSE_KEY_URL = "https://handsontable.com/pricing/";
 
 /**
  * The `next` bucket (19+) runs keyless on handsontable.com, so it carries a
@@ -30,8 +30,8 @@ const LICENSE_KEY_DOCS = "https://handsontable.com/docs/javascript-data-grid/lic
 function licenseKeyLine(bucket, { jsx }) {
   if (bucket === "next") {
     return jsx
-      ? `    // licenseKey="your-license-key" // get a key at ${LICENSE_KEY_DOCS}`
-      : `  // licenseKey: 'your-license-key', // get a key at ${LICENSE_KEY_DOCS}`;
+      ? `    // licenseKey="your-license-key" // get a key at ${LICENSE_KEY_URL}`
+      : `  // licenseKey: 'your-license-key', // get a key at ${LICENSE_KEY_URL}`;
   }
   return jsx ? `    licenseKey="${LICENSE_KEY}"` : `  licenseKey: '${LICENSE_KEY}',`;
 }

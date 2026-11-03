@@ -77,7 +77,7 @@ export default function App() {
           autoWrapRow={true}
           width="100%"
           height="auto"
-          // licenseKey="your-license-key" // get a key at https://handsontable.com/docs/javascript-data-grid/license-key/
+          // licenseKey="your-license-key" // get a key at https://handsontable.com/pricing/
         >
           <HotColumn data="name" width={160} />
           <HotColumn data="age" type="numeric" width={100} />

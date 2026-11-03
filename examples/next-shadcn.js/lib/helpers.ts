@@ -72,7 +72,7 @@ export const config: Partial<HotTableProps> = {
   navigableHeaders: true,
   imeFastEdit: true,
   pagination: true,
-  // licenseKey: 'your-license-key', // get a key at https://handsontable.com/docs/javascript-data-grid/license-key/
+  // licenseKey: 'your-license-key', // get a key at https://handsontable.com/pricing/
 };
 
 export const data = [

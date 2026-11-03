@@ -22,7 +22,7 @@ export default function FluentHotTable() {
       height="auto"
       dropdownMenu={true}
       filters={true}
-      // licenseKey="your-license-key" // get a key at https://handsontable.com/docs/javascript-data-grid/license-key/
+      // licenseKey="your-license-key" // get a key at https://handsontable.com/pricing/
     >
       <HotColumn data="team" width={180} />
       <HotColumn data="owner" width={140} />

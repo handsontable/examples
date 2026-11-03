@@ -111,7 +111,7 @@ test("buckets below 19 carry the non-commercial key, next carries only the place
         assert.doesNotMatch(source, /non-commercial-and-evaluation/, `${where}: no live key`);
         assert.match(
           source,
-          /^\s*\/\/ licenseKey[:=]\s*['"]?your-license-key['"]?,? ?\/\/ get a key at https:\/\/handsontable\.com\/docs\/javascript-data-grid\/license-key\/$/m,
+          /^\s*\/\/ licenseKey[:=]\s*['"]?your-license-key['"]?,? ?\/\/ get a key at https:\/\/handsontable\.com\/pricing\/$/m,
           `${where}: commented placeholder line`,
         );
       } else {

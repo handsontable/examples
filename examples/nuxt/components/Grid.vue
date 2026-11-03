@@ -75,7 +75,7 @@ const hotSettings = computed<GridSettings>(() => {
     autoWrapCol: true,
     height: 363,
     imeFastEdit: true,
-    // licenseKey: 'your-license-key', // get a key at https://handsontable.com/docs/javascript-data-grid/license-key/
+    // licenseKey: 'your-license-key', // get a key at https://handsontable.com/pricing/
   };
 });
 </script>

@@ -39,7 +39,7 @@ export default defineComponent({
 
 <template>
   <div id="example">
-    <!-- licenseKey="your-license-key" - get a key at https://handsontable.com/docs/javascript-data-grid/license-key/ -->
+    <!-- licenseKey="your-license-key" - get a key at https://handsontable.com/pricing/ -->
     <HotTable
       :theme="mainThemeProp"
       :data="dataProp"

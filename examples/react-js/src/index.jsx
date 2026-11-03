@@ -38,7 +38,7 @@ const App = () => {
       autoWrapRow={true}
       navigableHeaders={true}
       theme={{ ...mainTheme, colorScheme: 'light' }}
-      // licenseKey="your-license-key" // get a key at https://handsontable.com/docs/javascript-data-grid/license-key/
+      // licenseKey="your-license-key" // get a key at https://handsontable.com/pricing/
     >
       <HotColumn data={1} />
       <HotColumn data={3} />
