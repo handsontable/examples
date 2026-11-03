@@ -122,7 +122,7 @@ function AntLikeGrid() {
       height="auto"
       autoRowSize={false}
       autoColumnSize={false}
-      licenseKey="non-commercial-and-evaluation"
+      // licenseKey="your-license-key" // get a key at https://handsontable.com/docs/javascript-data-grid/license-key/
       cells={readOnlyCell}
     >
       <HotColumn data="name" width={160} renderer={NameCell} />

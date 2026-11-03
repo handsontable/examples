@@ -52,7 +52,7 @@ if (example) {
     afterGetColHeader: alignHeaders,
     beforeRenderer: addClassesToRows,
     theme: { ...mainTheme, colorScheme: 'light' },
-    licenseKey: 'non-commercial-and-evaluation',
+    // licenseKey: 'your-license-key', // get a key at https://handsontable.com/docs/javascript-data-grid/license-key/
   });
 
   console.log(

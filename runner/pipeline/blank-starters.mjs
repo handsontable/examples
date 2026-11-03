@@ -21,6 +21,20 @@
 export const BLANK_FRAMEWORKS = ["blank", "blank-ts", "blank-react"];
 
 const LICENSE_KEY = "non-commercial-and-evaluation";
+const LICENSE_KEY_DOCS = "https://handsontable.com/docs/javascript-data-grid/license-key/";
+
+/**
+ * The `next` bucket (19+) runs keyless on handsontable.com, so it carries a
+ * commented placeholder; older buckets still need the non-commercial key.
+ */
+function licenseKeyLine(bucket, { jsx }) {
+  if (bucket === "next") {
+    return jsx
+      ? `    // licenseKey="your-license-key" // get a key at ${LICENSE_KEY_DOCS}`
+      : `  // licenseKey: 'your-license-key', // get a key at ${LICENSE_KEY_DOCS}`;
+  }
+  return jsx ? `    licenseKey="${LICENSE_KEY}"` : `  licenseKey: '${LICENSE_KEY}',`;
+}
 
 // Pinned for the same reason every real starter pins it: the importer resolves
 // the pnpm lockfile through corepack, and the Tier-2 image bakes pnpm 10.34.5.
@@ -99,7 +113,7 @@ function vanillaEntry(bucket, { typescript }) {
     "new Handsontable(container, {",
     ...GRID_OPTIONS.map((o) => `  ${o},`),
     legacy ? "  themeName: 'ht-theme-main'," : "  theme: { ...mainTheme, colorScheme: 'light' },",
-    `  licenseKey: '${LICENSE_KEY}',`,
+    licenseKeyLine(bucket, { jsx: false }),
     "});",
     "",
   );
@@ -128,7 +142,7 @@ function reactEntry(bucket) {
       return `    ${key}={${value}}`;
     }),
     legacy ? '    themeName="ht-theme-main"' : "    theme={{ ...mainTheme, colorScheme: 'light' }}",
-    `    licenseKey="${LICENSE_KEY}"`,
+    licenseKeyLine(bucket, { jsx: true }),
     "  />,",
     ");",
     "",

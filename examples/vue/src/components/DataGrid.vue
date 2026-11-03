@@ -39,6 +39,7 @@ export default defineComponent({
 
 <template>
   <div id="example">
+    <!-- licenseKey="your-license-key" - get a key at https://handsontable.com/docs/javascript-data-grid/license-key/ -->
     <HotTable
       :theme="mainThemeProp"
       :data="dataProp"
@@ -66,7 +67,6 @@ export default defineComponent({
       :manualRowMove="true"
       :autoWrapRow="true"
       :autoWrapCol="true"
-      licenseKey="non-commercial-and-evaluation"
     >
       <HotColumn data="companyName" />
       <HotColumn data="name" />

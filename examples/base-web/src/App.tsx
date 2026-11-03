@@ -203,7 +203,7 @@ export default function App() {
           height={304}
           rowHeaders={false}
           colHeaders={['', 'title', 'categorical', 'three', 'neg std', 'accounting', 'custom color']}
-          licenseKey="non-commercial-and-evaluation"
+          // licenseKey="your-license-key" // get a key at https://handsontable.com/docs/javascript-data-grid/license-key/
           autoWrapRow={false}
           autoWrapCol={false}
           columns={[

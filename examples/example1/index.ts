@@ -490,5 +490,5 @@ new Handsontable(container, {
       width: 180,
     },
   ],
-  licenseKey: "non-commercial-and-evaluation",
+  // licenseKey: 'your-license-key', // get a key at https://handsontable.com/docs/javascript-data-grid/license-key/
 });
