@@ -28,7 +28,7 @@ import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, postMonitorReset, truncateMessage } from "./monitor.js";
 import { isSchemeGrid, isSchemeReady } from "./scheme.js";
-import { injectPreviewLicenseKey } from "./license-key.js";
+import { injectPreviewLicenseKey, injectPreviewLicenseKeySource } from "./license-key.js";
 import { failureDetail, RUNNER_PROGRESS_MARKER, STDERR_MARKERS } from "./failure-log.js";
 
 /**
@@ -1276,7 +1276,7 @@ export class ContainerRuntime implements DemoRuntime {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             path: relativePath(path),
-            contents: injectPreviewLicenseKey({ [path]: contents })[path],
+            contents: injectPreviewLicenseKeySource(path, contents),
           }),
         });
       } catch (e) {

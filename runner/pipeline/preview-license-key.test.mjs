@@ -1,9 +1,6 @@
-// The `next` starters and docs examples ship a commented-out `licenseKey` placeholder.
-// Core skips the license check only on handsontable.com and one-label subdomains, but
-// the live previews run on `*-sandpack.codesandbox.io` (Tier 1) and
-// `<port>-<session>.demos.handsontable.com` (Tier 2), so the grid showed the lock
-// screen. The runtime swaps the placeholder for the internal test key in the files the
-// preview executes, and only there.
+// The runtime swaps the commented-out `licenseKey` placeholder for the internal test key in the
+// files a live preview executes, and only there: previews run on hosts outside core's keyless
+// bypass (`*-sandpack.codesandbox.io`, `<port>-<session>.demos.handsontable.com`).
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -19,6 +16,7 @@ import { ContainerRuntime } from "../packages/runtime/dist/container.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEXT_STARTERS = path.join(HERE, "../apps/authoring/public/starter-examples/next");
+const NEXT_DOCS = path.join(HERE, "../apps/authoring/public/docs-examples/next");
 const PLACEHOLDER = "your-license-key";
 
 function starter(name) {
@@ -130,6 +128,47 @@ test("every placeholder in every next starter is replaced", () => {
     }
   }
   assert.ok(seen >= 16, `guard: expected the placeholder in every next starter, saw ${seen}`);
+});
+
+test("every placeholder in every next docs example is replaced", () => {
+  let seen = 0;
+  for (const file of fs.readdirSync(NEXT_DOCS)) {
+    if (!file.endsWith(".json") || file === "manifest.json") continue;
+    const { files } = JSON.parse(fs.readFileSync(path.join(NEXT_DOCS, file), "utf8"));
+    const out = injectPreviewLicenseKey(files);
+    for (const [p, src] of Object.entries(files)) {
+      if (!src.includes(PLACEHOLDER) || p.endsWith(".json")) continue;
+      seen++;
+      assert.equal(out[p].includes(PLACEHOLDER), false, `${file}:${p}`);
+    }
+  }
+  assert.ok(seen >= 1000, `guard: expected the placeholder across the docs bucket, saw ${seen}`);
+});
+
+test("an option after a property with no trailing comma stays a comment, so the preview still parses", () => {
+  const src = "export default {\n  theme: {},\n  height: 400\n  // licenseKey: 'your-license-key', // get a key\n};\n";
+  const out = injectPreviewLicenseKey({ "/src/index.js": src })["/src/index.js"];
+  assert.equal(out, src);
+});
+
+test("a placeholder in a top-level comment block stays a comment", () => {
+  const src = "// Set your key:\n// licenseKey: 'your-license-key',\nexport const x = 1;\n";
+  assert.equal(injectPreviewLicenseKey({ "/src/index.js": src })["/src/index.js"], src);
+});
+
+test("a JSX placeholder among element children stays text", () => {
+  const src = '<div>\n  <p>Note</p>\n  // licenseKey="your-license-key"\n</div>\n';
+  assert.equal(injectPreviewLicenseKey({ "/src/a.jsx": src })["/src/a.jsx"], src);
+});
+
+test("a key the user set next to the kept placeholder is not overridden or duplicated", () => {
+  const files = {
+    "/src/a.js": "new Handsontable(el, {\n  licenseKey: 'customer-key',\n  // licenseKey: 'your-license-key', // get a key\n});\n",
+    "/src/b.vue":
+      '<template>\n  <!-- licenseKey="your-license-key" - get a key -->\n  <HotTable license-key="mine" />\n</template>\n',
+    "/src/c.ts": "useValue: {\n  license: 'customer-key',\n  // license: 'your-license-key', // get a key\n},\n",
+  };
+  assert.equal(injectPreviewLicenseKey(files), files);
 });
 
 test("a key the user typed, or a file with no placeholder, is left alone", () => {
