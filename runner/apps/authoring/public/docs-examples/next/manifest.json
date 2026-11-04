@@ -2,8 +2,8 @@
   "bucket": "next",
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
-  "hotVersion": "0.0.0-next-ffc7ee5-20261104",
-  "count": 1689,
+  "hotVersion": "0.0.0-next-944e67e-20261104",
+  "count": 1694,
   "examples": [
     {
       "bucket": "next",
@@ -12519,6 +12519,86 @@
       "guideTitle": "Column headers",
       "exampleId": "example7",
       "exampleTitle": "Column header height",
+      "docPermalink": "/column-header",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-header/angular/example8.ts",
+      "file": "guides__columns__column-header__angular__example8.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example8",
+      "exampleTitle": "Add a tooltip to a column header",
+      "docPermalink": "/column-header",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-header/javascript/example8.js",
+      "file": "guides__columns__column-header__javascript__example8.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example8",
+      "exampleTitle": "Add a tooltip to a column header",
+      "docPermalink": "/column-header",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-header/react/example8.tsx",
+      "file": "guides__columns__column-header__react__example8.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example8",
+      "exampleTitle": "Add a tooltip to a column header",
+      "docPermalink": "/column-header",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-header/javascript/example8.ts",
+      "file": "guides__columns__column-header__javascript__example8.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example8",
+      "exampleTitle": "Add a tooltip to a column header",
+      "docPermalink": "/column-header",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-header/vue/example8.vue",
+      "file": "guides__columns__column-header__vue__example8.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column headers"
+      ],
+      "guide": "guides/columns/column-header/column-header.md",
+      "guideTitle": "Column headers",
+      "exampleId": "example8",
+      "exampleTitle": "Add a tooltip to a column header",
       "docPermalink": "/column-header",
       "framework": "vue",
       "displayName": "Vue 3"
