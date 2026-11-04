@@ -32,15 +32,8 @@ function buildUrl(params: DataProviderQueryParameters): string {
   }
 
   if (params.filters?.length) {
-    query.set(
-      'filters',
-      JSON.stringify(
-        params.filters.map(f => ({
-          column: f.prop,
-          value: f.conditions?.[0]?.args?.[0] ?? '',
-        }))
-      )
-    );
+    // Send Handsontable's filter array as-is: { prop, operation, conditions }.
+    query.set('filters', JSON.stringify(params.filters));
   }
 
   return `${API_BASE}?${query.toString()}`;

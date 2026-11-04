@@ -129,7 +129,7 @@ spring/
 | `pageSize` | `10` | Rows per page |
 | `sortProp` | `price` | Column to sort by |
 | `sortOrder` | `desc` | `asc` or `desc` |
-| `filters` | `[{"column":"category","value":"Electronics"}]` | JSON-encoded filter array (column + first condition value) |
+| `filters` | `[{"prop":"category","operation":"conjunction","conditions":[{"name":"eq","args":["Electronics"]}]}]` | Handsontable's filter array, JSON-encoded as-is |
 
 Response shape:
 ```json
@@ -148,7 +148,7 @@ Browser (Vite :5173)
   │                                 └── ProductService.findAll()
   │                                       ├── PageRequest (0-based index)
   │                                       ├── Sort (whitelisted columns)
-  │                                       └── Specification (LIKE filters)
+  │                                       └── Specification (filter conditions)
   │                                 └── PostgreSQL
   │  ◀──────── { rows, totalRows } ─────────
 Handsontable renders page, pagination controls update
