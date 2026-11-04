@@ -183,7 +183,7 @@ export default function App() {
     emptyDataState: true,
     notification: true,
     contextMenu: true,
-    licenseKey: 'non-commercial-and-evaluation',
+    // licenseKey: 'your-license-key', // get a key at https://handsontable.com/pricing/
   }), []);
 
   return (
