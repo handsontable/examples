@@ -28,6 +28,7 @@ import { mintSessionId } from "./session.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
 import { MONITOR_EVENT_CEILING, normalizeMonitorMessage, postMonitorReset, truncateMessage } from "./monitor.js";
 import { isSchemeGrid, isSchemeReady } from "./scheme.js";
+import { injectPreviewLicenseKey } from "./license-key.js";
 import { failureDetail, RUNNER_PROGRESS_MARKER, STDERR_MARKERS } from "./failure-log.js";
 
 /**
@@ -844,7 +845,8 @@ export class ContainerRuntime implements DemoRuntime {
       // measured window — the one thing the measurement is defined to exclude.
       const body = JSON.stringify({
         framework: this.entry.framework,
-        files: relativeFiles(this.files),
+        // The container gets the key, `this.files` (downloads, save) keeps the placeholder.
+        files: relativeFiles(injectPreviewLicenseKey(this.files)),
         sessionId,
         htVersion: this.opts.version?.ref,
       });
@@ -1272,7 +1274,10 @@ export class ContainerRuntime implements DemoRuntime {
         await fetch(`${this.opts.apiBase}/api/session/${this.sessionId}/file`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: relativePath(path), contents }),
+          body: JSON.stringify({
+            path: relativePath(path),
+            contents: injectPreviewLicenseKey({ [path]: contents })[path],
+          }),
         });
       } catch (e) {
         this.emitError(e instanceof Error ? e : new Error(String(e)));
