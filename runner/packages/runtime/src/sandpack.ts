@@ -41,6 +41,7 @@ import {
   truncateMessage,
 } from "./monitor.js";
 import { injectSchemeReceiver } from "./scheme.js";
+import { injectPreviewLicenseKey } from "./license-key.js";
 import { ensureEntryScript } from "./entry-script.js";
 import { injectHeadAssets, stripInjectedHeadAssets } from "./head-assets.js";
 import { applyHandsontableCss, applyHandsontableVersion } from "./version.js";
@@ -463,9 +464,12 @@ export class SandpackRuntime implements DemoRuntime {
    * pay for them once.
    */
   private sandboxFiles(): Promise<FilesMap> | FilesMap {
+    // Before the pre-transpile: the JSX placeholder is a comment inside the opening
+    // tag, and babel drops it.
+    const source = injectPreviewLicenseKey(this.files);
     return this.env === "parcel"
-      ? transpileFilesForParcel(this.files).then(applyDepShims).then((f) => this.withInjections(f))
-      : this.withInjections(this.files);
+      ? transpileFilesForParcel(source).then(applyDepShims).then((f) => this.withInjections(f))
+      : this.withInjections(source);
   }
 
   /**
