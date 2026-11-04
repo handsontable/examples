@@ -74,7 +74,7 @@ nestjs/
 │       ├── ticket.entity.ts                 # TypeORM entity (UUID PK)
 │       ├── fetch-tickets.dto.ts             # Query-param DTOs with class-validator
 │       ├── tickets.controller.ts            # GET / POST / PATCH / DELETE /tickets
-│       ├── tickets.service.ts               # Filtering, sorting, pagination, CRUD
+│       ├── tickets.service.ts               # Body DTOs, filtering, sorting, CRUD
 │       └── migrations/
 │           └── 1700000000000-CreateTickets.ts  # Schema + seed data
 │

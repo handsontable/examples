@@ -1,19 +1,22 @@
 import { plainToInstance, Transform, Type } from 'class-transformer';
 import { IsArray, IsIn, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
 
+// Column names are interpolated into SQL, so only known columns are accepted.
+// Condition names are not whitelisted: the service skips names it doesn't handle.
 const ALLOWED_COLUMNS = ['id', 'subject', 'status', 'priority', 'assignee', 'createdAt'] as const;
-const ALLOWED_CONDITIONS = ['eq', 'neq', 'contains', 'not_contains', 'begins_with', 'ends_with', 'empty', 'not_empty'] as const;
 
 export class FilterConditionDto {
   @IsIn(ALLOWED_COLUMNS)
   prop: string;
 
-  @IsIn(ALLOWED_CONDITIONS)
+  @IsString()
   condition: string;
 
+  // Absent for conditions that take no argument, such as 'empty'.
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
-  value: string[];
+  value: string[] = [];
 }
 
 export class SortDto {
