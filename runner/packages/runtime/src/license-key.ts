@@ -22,7 +22,7 @@ const OPTION_LINE = /^([ \t]*)\/\/[ \t]*(licenseKey|license):[ \t]*(['"])your-li
 /** `// licenseKey="your-license-key" // …` inside a JSX opening tag. */
 const JSX_LINE = /^([ \t]*)\/\/[ \t]*licenseKey="your-license-key"[^\r\n]*/gm;
 /** `<!-- licenseKey="your-license-key" … -->` written above a Vue `<HotTable` tag. */
-const VUE_COMMENT = /<!--[ \t]*licenseKey="your-license-key"[\s\S]*?-->(\s*)<(HotTable|hot-table)\b/g;
+const VUE_COMMENT = /<!--[ \t]*licenseKey="your-license-key"(?:(?!-->)[\s\S])*-->(\s*)<(HotTable|hot-table)\b/g;
 
 function inject(source: string): string {
   return source

@@ -99,6 +99,20 @@ test("the Vue template placeholder becomes a license-key attribute on the HotTab
   assert.equal(out.includes(PLACEHOLDER), false);
 });
 
+test("a Vue placeholder not directly above the HotTable tag is left alone, with the markup between", () => {
+  const src = [
+    "<template>",
+    '  <!-- licenseKey="your-license-key" - get a key at https://handsontable.com/pricing/ -->',
+    "  <div class=\"toolbar\">Toolbar</div>",
+    "  <!-- note -->",
+    "  <HotTable :data=\"data\" />",
+    "</template>",
+    "",
+  ].join("\n");
+  const files = { "/src/App.vue": src };
+  assert.equal(injectPreviewLicenseKey(files), files);
+});
+
 test("every placeholder in every next starter is replaced", () => {
   const names = fs
     .readdirSync(NEXT_STARTERS)
