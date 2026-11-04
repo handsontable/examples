@@ -1,13 +1,13 @@
 /**
  * Handsontable theme colors mapped to shadcn CSS variables (globals.css).
- * Structure must match what tokens/main expects: palette (50–950), primary (100–600), white, black, transparent.
- * Uses var(--…) so the grid follows your shadcn theme and dark mode.
+ * Structure must match what the Horizon tokens expect: palette (50–950), primary (100–600), white, black, transparent.
+ * Uses var(--…) so the grid picks up your shadcn light theme values.
  */
 export const colorsShadcn = {
   palette: {
     50: "var(--color-neutral-50)",
-    100: "var(--color-neutral-200)",
-    200: "var(--color-neutral-100)",
+    100: "var(--color-neutral-100)",
+    200: "var(--color-neutral-200)",
     300: "var(--color-neutral-300)",
     400: "var(--color-neutral-400)",
     500: "var(--color-neutral-500)",

@@ -1,27 +1,33 @@
+import { webLightTheme } from '@fluentui/react-components';
+
+// Fluent's CSS variables are camelCase (`--colorNeutralBackground1`), and the Theme API
+// converts color values to kebab case, so `var(--colorNeutralBackground1)` would point to a
+// variable that doesn't exist. Read the values from the Fluent theme object instead.
+
 const colorsFluent = {
   palette: {
-    50: 'var(--colorNeutralBackground1)',
-    100: 'var(--colorNeutralBackground2)',
-    200: 'var(--colorNeutralBackground3)',
-    300: 'var(--colorNeutralBackground4)',
-    400: 'var(--colorNeutralStroke1)',
-    500: 'var(--colorNeutralStroke2)',
-    600: 'var(--colorNeutralForeground3)',
-    700: 'var(--colorNeutralForeground2)',
-    800: 'var(--colorNeutralForeground1)',
-    900: 'var(--colorNeutralForegroundOnBrand)',
-    950: 'var(--colorNeutralForegroundOnBrand)',
+    50: webLightTheme.colorNeutralBackground1,
+    100: webLightTheme.colorNeutralBackground2,
+    200: webLightTheme.colorNeutralBackground3,
+    300: webLightTheme.colorNeutralBackground4,
+    400: webLightTheme.colorNeutralStroke1,
+    500: webLightTheme.colorNeutralStroke2,
+    600: webLightTheme.colorNeutralForeground3,
+    700: webLightTheme.colorNeutralForeground2,
+    800: webLightTheme.colorNeutralForeground1,
+    900: webLightTheme.colorNeutralForeground1,
+    950: webLightTheme.colorNeutralForeground1,
   },
   primary: {
-    100: 'var(--colorBrandBackground)',
-    200: 'var(--colorBrandBackground2)',
-    300: 'var(--colorBrandBackgroundInverted)',
-    400: 'var(--colorBrandStroke1)',
-    500: 'var(--colorBrandForeground1)',
-    600: 'var(--colorBrandForeground2)',
+    100: webLightTheme.colorBrandBackground,
+    200: webLightTheme.colorBrandBackground2,
+    300: webLightTheme.colorBrandBackgroundInverted,
+    400: webLightTheme.colorBrandStroke1,
+    500: webLightTheme.colorBrandForeground1,
+    600: webLightTheme.colorBrandForeground2,
   },
-  white: 'var(--colorNeutralBackground1)',
-  black: 'var(--colorNeutralForeground1)',
+  white: webLightTheme.colorNeutralBackground1,
+  black: webLightTheme.colorNeutralForeground1,
   transparent: 'transparent',
 };
 
