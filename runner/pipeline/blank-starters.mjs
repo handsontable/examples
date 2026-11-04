@@ -45,7 +45,7 @@ const PACKAGE_MANAGER = "pnpm@10.34.5";
 
 // Toolchain pins, matched to what the real starters already resolve so a blank
 // demo installs from the same warm registry surface.
-const VITE = "^8.1.1";
+const VITE = "^8.1.4";
 const TYPESCRIPT = "~6.0.3";
 const REACT = "^19.2.7";
 const REACT_DOM = "^19.2.6";
