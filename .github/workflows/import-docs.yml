@@ -155,24 +155,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The download below only adds and overwrites files, so an example removed
-      # or renamed upstream would stay in the bucket forever. Clear the buckets
-      # this run re-imported first; buckets outside the matrix are left alone.
-      - name: Clear the re-imported buckets
-        env:
-          MATRIX: ${{ needs.prepare.outputs.matrix }}
-        run: |
-          jq -r '.[].bucket' <<<"$MATRIX" | while read -r bucket; do
-            [ -n "$bucket" ] || { echo "empty bucket in matrix: $MATRIX" >&2; exit 1; }
-            rm -rf "runner/apps/authoring/public/docs-examples/$bucket"
-          done
-
-      - name: Download generated buckets
-        uses: actions/download-artifact@v7
+      - name: Replace the generated buckets
+        uses: ./.github/actions/replace-buckets
         with:
           pattern: docs-examples-*
-          merge-multiple: true
-          path: runner/apps/authoring/public/docs-examples
+          dest: runner/apps/authoring/public/docs-examples
 
       - name: Regenerate the docs bucket index
         working-directory: runner
