@@ -123,6 +123,8 @@ nestjs/
 | `filters[0][condition]` | `eq` | Filter condition |
 | `filters[0][value][0]` | `open` | Filter value |
 
+`filters[N][condition]` accepts the conditions the grid offers for these columns: `empty`, `not_empty`, `eq`, `neq`, `begins_with`, `ends_with`, `contains`, `not_contains`, and, for the `createdAt` date column, `date_before`, `date_before_or_equal`, `date_after`, `date_after_or_equal`, `between`, `date_today`, `date_tomorrow`, and `date_yesterday`. Date values are `YYYY-MM-DD`, and "today" is the server's local date. Any other condition name returns `400`.
+
 ### Response shape
 
 ```json

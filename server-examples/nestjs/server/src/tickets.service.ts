@@ -1,18 +1,44 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength, ValidateIf } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsIn, IsISO8601, IsOptional, IsString, IsUUID, isISO8601, Matches, MaxLength, ValidateIf } from 'class-validator';
 import { Repository } from 'typeorm';
 import { FetchTicketsDto } from './fetch-tickets.dto';
 import { TICKET_PRIORITIES, TICKET_STATUSES, TicketEntity, TicketPriority, TicketStatus } from './ticket.entity';
 
 // Request bodies for POST and PATCH. MaxLength values match the VARCHAR
-// columns in the migration; createdAt is a 'YYYY-MM-DD' string.
+// columns in the migration; createdAt is a 'YYYY-MM-DD' string. @Matches
+// checks the shape and @IsISO8601 rejects impossible dates such as 2025-02-30.
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Like @IsOptional(), but rejects null: every column is NOT NULL.
 const IfPresent = () => ValidateIf((_object, value) => value !== undefined);
 
+// Clearing a text cell sends null. Store it as an empty string.
+const NullToEmpty = () => Transform(({ value }) => (value === null ? '' : value));
+
+// Date filter values come from the grid's date inputs as 'YYYY-MM-DD'. A full
+// ISO 8601 date-time is cut to its date part, anything else returns 400. An
+// empty input becomes null, which matches no row, as in the grid's own filter.
+function toIsoDate(value: string | undefined): string | null {
+  if (value === undefined || value === '') return null;
+  if (!isISO8601(value, { strict: true }) || !ISO_DATE.test(value.slice(0, 10))) {
+    throw new BadRequestException(`Invalid date filter value: ${value}`);
+  }
+  return value.slice(0, 10);
+}
+
+// date_today, date_tomorrow and date_yesterday send no value, so "today" is
+// the server's local date. The grid's own filter uses the browser's time zone.
+function localIsoDate(offsetDays: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 export class CreateTicketDto {
+  @NullToEmpty()
   @IsString()
   @MaxLength(500)
   subject: string;
@@ -23,12 +49,14 @@ export class CreateTicketDto {
   @IsIn(TICKET_PRIORITIES)
   priority: TicketPriority;
 
+  @NullToEmpty()
   @IsString()
   @MaxLength(200)
   assignee: string;
 
   @IsOptional()
   @Matches(ISO_DATE)
+  @IsISO8601({ strict: true })
   createdAt?: string;
 }
 
@@ -36,6 +64,7 @@ export class UpdateTicketDto {
   @IsUUID()
   id: string;
 
+  @NullToEmpty()
   @IfPresent()
   @IsString()
   @MaxLength(500)
@@ -49,6 +78,7 @@ export class UpdateTicketDto {
   @IsIn(TICKET_PRIORITIES)
   priority?: TicketPriority;
 
+  @NullToEmpty()
   @IfPresent()
   @IsString()
   @MaxLength(200)
@@ -56,6 +86,7 @@ export class UpdateTicketDto {
 
   @IfPresent()
   @Matches(ISO_DATE)
+  @IsISO8601({ strict: true })
   createdAt?: string;
 }
 
@@ -73,6 +104,9 @@ export class TicketsService {
       for (const [i, filter] of dto.filters.entries()) {
         const param = `val${i}`;
         const col = `ticket.${filter.prop}`;
+        // CAST(... AS text), not ::text: TypeORM maps ticket.createdAt to the
+        // created_at column only when a space, "=", ")", or "," follows the name.
+        const text = `CAST(${col} AS text)`;
 
         const val = filter.value[0];
         // Escape LIKE metacharacters so user input is treated literally.
@@ -82,29 +116,61 @@ export class TicketsService {
 
         switch (filter.condition) {
           case 'eq':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) = LOWER(:${param})`, { [param]: val });
+            if (val !== undefined) qb.andWhere(`LOWER(${text}) = LOWER(:${param})`, { [param]: val });
             break;
           case 'neq':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) != LOWER(:${param})`, { [param]: val });
+            if (val !== undefined) qb.andWhere(`LOWER(${text}) != LOWER(:${param})`, { [param]: val });
             break;
           case 'contains':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) ${like}`, { [param]: `%${esc(val)}%` });
+            if (val !== undefined) qb.andWhere(`LOWER(${text}) ${like}`, { [param]: `%${esc(val)}%` });
             break;
           case 'not_contains':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) ${notLike}`, { [param]: `%${esc(val)}%` });
+            if (val !== undefined) qb.andWhere(`LOWER(${text}) ${notLike}`, { [param]: `%${esc(val)}%` });
             break;
           case 'begins_with':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) ${like}`, { [param]: `${esc(val)}%` });
+            if (val !== undefined) qb.andWhere(`LOWER(${text}) ${like}`, { [param]: `${esc(val)}%` });
             break;
           case 'ends_with':
-            if (val !== undefined) qb.andWhere(`LOWER(${col}::text) ${like}`, { [param]: `%${esc(val)}` });
+            if (val !== undefined) qb.andWhere(`LOWER(${text}) ${like}`, { [param]: `%${esc(val)}` });
             break;
           case 'empty':
-            qb.andWhere(`(${col} IS NULL OR ${col}::text = '')`);
+            qb.andWhere(`(${col} IS NULL OR ${text} = '')`);
             break;
           case 'not_empty':
-            qb.andWhere(`(${col} IS NOT NULL AND ${col}::text != '')`);
+            qb.andWhere(`(${col} IS NOT NULL AND ${text} != '')`);
             break;
+          // created_at holds 'YYYY-MM-DD' text, so string order is date order.
+          case 'date_before':
+            qb.andWhere(`${col} < :${param}`, { [param]: toIsoDate(val) });
+            break;
+          case 'date_before_or_equal':
+            qb.andWhere(`${col} <= :${param}`, { [param]: toIsoDate(val) });
+            break;
+          case 'date_after':
+            qb.andWhere(`${col} > :${param}`, { [param]: toIsoDate(val) });
+            break;
+          case 'date_after_or_equal':
+            qb.andWhere(`${col} >= :${param}`, { [param]: toIsoDate(val) });
+            break;
+          case 'between':
+            // Inclusive on both ends. The grid offers it only for createdAt.
+            qb.andWhere(`${col} >= :${param}from AND ${col} <= :${param}to`, {
+              [`${param}from`]: toIsoDate(val),
+              [`${param}to`]: toIsoDate(filter.value[1]),
+            });
+            break;
+          case 'date_today':
+            qb.andWhere(`${col} = :${param}`, { [param]: localIsoDate(0) });
+            break;
+          case 'date_tomorrow':
+            qb.andWhere(`${col} = :${param}`, { [param]: localIsoDate(1) });
+            break;
+          case 'date_yesterday':
+            qb.andWhere(`${col} = :${param}`, { [param]: localIsoDate(-1) });
+            break;
+          default:
+            // Unreachable: FilterConditionDto accepts only the names handled above.
+            throw new BadRequestException(`Unsupported condition: ${filter.condition satisfies never}`);
         }
       }
     }
