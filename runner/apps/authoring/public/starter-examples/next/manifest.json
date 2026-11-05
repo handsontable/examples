@@ -2,7 +2,7 @@
   "bucket": "next",
   "sourceRef": "master",
   "generatedFrom": "handsontable/examples examples/",
-  "hotVersion": "0.0.0-next-ffc7ee5-20261104",
+  "hotVersion": "0.0.0-next-eb40b40-20261105",
   "count": 19,
   "examples": [
     {
