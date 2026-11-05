@@ -1,13 +1,16 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
   HttpCode,
+  ParseArrayPipe,
   Patch,
   Post,
   Query,
 } from '@nestjs/common';
+import { isUUID } from 'class-validator';
 import { FetchTicketsDto } from './fetch-tickets.dto';
 import { CreateTicketDto, TicketsService, UpdateTicketDto } from './tickets.service';
 
@@ -26,12 +29,14 @@ export class TicketsController {
 
   /**
    * POST /tickets
-   * Body: single CreateTicketDto or array of CreateTicketDto
+   * Body: [{ subject, status, priority, assignee, createdAt }, ...]
+   *
+   * The global ValidationPipe skips array bodies, so ParseArrayPipe validates
+   * each item against the DTO and strips undeclared keys.
    */
   @Post()
   @HttpCode(201)
-  async create(@Body() body: CreateTicketDto | CreateTicketDto[]) {
-    const rows = Array.isArray(body) ? body : [body];
+  async create(@Body(new ParseArrayPipe({ items: CreateTicketDto, whitelist: true })) rows: CreateTicketDto[]) {
     return Promise.all(rows.map((dto) => this.ticketsService.create(dto)));
   }
 
@@ -40,8 +45,8 @@ export class TicketsController {
    * Body: [{ id: 'uuid', status: 'resolved' }, ...]
    */
   @Patch()
-  async updateMany(@Body() body: UpdateTicketDto[]) {
-    return this.ticketsService.updateMany(body);
+  async updateMany(@Body(new ParseArrayPipe({ items: UpdateTicketDto, whitelist: true })) rows: UpdateTicketDto[]) {
+    return this.ticketsService.updateMany(rows);
   }
 
   /**
@@ -50,7 +55,10 @@ export class TicketsController {
    */
   @Delete()
   @HttpCode(204)
-  async removeMany(@Body() ids: string[]) {
+  async removeMany(@Body(new ParseArrayPipe({ items: String })) ids: string[]) {
+    if (!ids.every((id) => isUUID(id))) {
+      throw new BadRequestException('Each id must be a UUID');
+    }
     await this.ticketsService.removeMany(ids);
   }
 }
