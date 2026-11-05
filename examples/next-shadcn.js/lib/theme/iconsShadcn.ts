@@ -9,7 +9,7 @@ function icon(svgContent: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`<svg ${lucideAttrs}>${svgContent}</svg>`)}`;
 }
 
-// Lucide: ChevronRight, ChevronLeft, ChevronDown, ChevronUp, ChevronsRight, ChevronsLeft, Check, Menu, Plus, Minus, Circle (filled for radio), X, Search
+// Lucide: ChevronRight, ChevronLeft, ChevronDown, ChevronUp, ChevronsRight, ChevronsLeft, Check, Menu, Plus, Minus, Circle (filled for radio), X, Search, List
 export const iconsShadcn = {
   arrowRight: icon('<path d="m9 18 6-6-6-6"/>'),
   arrowRightWithBar: icon('<path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/>'),
@@ -31,4 +31,6 @@ export const iconsShadcn = {
   radio: icon('<circle cx="12" cy="12" r="6" fill="currentColor"/>'),
   chipClose: icon('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
   search: icon('<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>'),
+  plus: icon('<path d="M5 12h14"/><path d="M12 5v14"/>'),
+  menuList: icon('<path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/>'),
 } as const;
