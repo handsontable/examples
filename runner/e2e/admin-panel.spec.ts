@@ -83,7 +83,7 @@ function liveSessionsSection(page: Page) {
 }
 
 test("signed in, the header links to Grafana through the o11y worker's own broker login", async ({ page }) => {
-  // Nothing else in the app links to Grafana (ADR-0043's dashboards are
+  // Nothing else in the app links to Grafana (the dashboards are
   // otherwise unreachable except by typing the URL), so this pins the one
   // discoverable entry point: a same-origin anchor, opened in a new tab —
   // `target="_blank"` so a signed-out visit there doesn't lose the
