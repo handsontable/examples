@@ -41,7 +41,6 @@ in its deploy script (ADR-0020), never in `wrangler.jsonc`:
 | `POST /grafana/_o11y/logout` | clear both cookies | same-origin `Origin` |
 | `/grafana/*` | Grafana UI, waking page | the Worker's own session cookie (`O11Y_SESSION_SECRET`, K1 — not Access) |
 | `POST /grafana/_o11y/reopen` | manual ledger re-open | session cookie, same-origin `Origin` |
-| `GET /grafana/_o11y/admin/<name>` | ADR-0043 read forwarder (after launch) | session cookie, name allowlist, GET only |
 
 There is no trace route: traces are not exported (ADR-0041 §C.4).
 The API worker's `api.request` line carries the active span's `trace.id` (a 32-hex W3C trace

@@ -173,8 +173,7 @@ export interface Env {
 
   RUNNER_EVENTS: AnalyticsEngineDataset;
 
-  /** `handsontable-demos-api` — o11y usage metering, o11y spend, later
-   *  `AdminReads` (ADR-0043). */
+  /** `handsontable-demos-api` — o11y usage metering and o11y spend. */
   API: Fetcher;
 
   O11Y_ENV: "production" | "local";
