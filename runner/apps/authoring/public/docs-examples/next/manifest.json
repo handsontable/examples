@@ -3,7 +3,7 @@
   "docsBranch": "develop",
   "generatedFrom": "handsontable/docs content/guides/** + content/recipes/**",
   "hotVersion": "0.0.0-next-8d9e830-20261113",
-  "count": 1694,
+  "count": 1699,
   "examples": [
     {
       "bucket": "next",
@@ -13597,6 +13597,70 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/columns/column-summary/javascript/example13.js",
+      "file": "guides__columns__column-summary__javascript__example13.js.json",
+      "breadcrumb": [
+        "Columns",
+        "Column summary"
+      ],
+      "guide": "guides/columns/column-summary/column-summary.md",
+      "guideTitle": "Column summary",
+      "exampleId": "example13",
+      "exampleTitle": "Include nested summary results",
+      "docPermalink": "/column-summary",
+      "framework": "javascript",
+      "displayName": "JavaScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-summary/react/example13.tsx",
+      "file": "guides__columns__column-summary__react__example13.tsx.json",
+      "breadcrumb": [
+        "Columns",
+        "Column summary"
+      ],
+      "guide": "guides/columns/column-summary/column-summary.md",
+      "guideTitle": "Column summary",
+      "exampleId": "example13",
+      "exampleTitle": "Include nested summary results",
+      "docPermalink": "/column-summary",
+      "framework": "react",
+      "displayName": "React (TS)"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-summary/javascript/example13.ts",
+      "file": "guides__columns__column-summary__javascript__example13.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column summary"
+      ],
+      "guide": "guides/columns/column-summary/column-summary.md",
+      "guideTitle": "Column summary",
+      "exampleId": "example13",
+      "exampleTitle": "Include nested summary results",
+      "docPermalink": "/column-summary",
+      "framework": "typescript",
+      "displayName": "TypeScript"
+    },
+    {
+      "bucket": "next",
+      "docsPath": "guides/columns/column-summary/vue/example13.vue",
+      "file": "guides__columns__column-summary__vue__example13.vue.json",
+      "breadcrumb": [
+        "Columns",
+        "Column summary"
+      ],
+      "guide": "guides/columns/column-summary/column-summary.md",
+      "guideTitle": "Column summary",
+      "exampleId": "example13",
+      "exampleTitle": "Include nested summary results",
+      "docPermalink": "/column-summary",
+      "framework": "vue",
+      "displayName": "Vue 3"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/columns/column-summary/angular/example1.ts",
       "file": "guides__columns__column-summary__angular__example1.ts.json",
       "breadcrumb": [
@@ -13798,7 +13862,7 @@
       "guide": "guides/columns/column-summary/column-summary.md",
       "guideTitle": "Column summary",
       "exampleId": "example5",
-      "exampleTitle": "Implement a custom summary function (2)",
+      "exampleTitle": "Implement a custom summary function",
       "docPermalink": "/column-summary",
       "framework": "angular",
       "displayName": "Angular"
@@ -13981,6 +14045,22 @@
     },
     {
       "bucket": "next",
+      "docsPath": "guides/columns/column-summary/angular/example9.ts",
+      "file": "guides__columns__column-summary__angular__example9.ts.json",
+      "breadcrumb": [
+        "Columns",
+        "Column summary"
+      ],
+      "guide": "guides/columns/column-summary/column-summary.md",
+      "guideTitle": "Column summary",
+      "exampleId": "example9",
+      "exampleTitle": "Include nested summary results (2)",
+      "docPermalink": "/column-summary",
+      "framework": "angular",
+      "displayName": "Angular"
+    },
+    {
+      "bucket": "next",
       "docsPath": "guides/columns/column-summary/javascript/example9.js",
       "file": "guides__columns__column-summary__javascript__example9.js.json",
       "breadcrumb": [
@@ -13990,7 +14070,7 @@
       "guide": "guides/columns/column-summary/column-summary.md",
       "guideTitle": "Column summary",
       "exampleId": "example9",
-      "exampleTitle": "Implement a custom summary function",
+      "exampleTitle": "Include nested summary results (2)",
       "docPermalink": "/column-summary",
       "framework": "javascript",
       "displayName": "JavaScript"
@@ -14006,7 +14086,7 @@
       "guide": "guides/columns/column-summary/column-summary.md",
       "guideTitle": "Column summary",
       "exampleId": "example9",
-      "exampleTitle": "Implement a custom summary function",
+      "exampleTitle": "Include nested summary results (2)",
       "docPermalink": "/column-summary",
       "framework": "react",
       "displayName": "React (TS)"
@@ -14022,7 +14102,7 @@
       "guide": "guides/columns/column-summary/column-summary.md",
       "guideTitle": "Column summary",
       "exampleId": "example9",
-      "exampleTitle": "Implement a custom summary function",
+      "exampleTitle": "Include nested summary results (2)",
       "docPermalink": "/column-summary",
       "framework": "typescript",
       "displayName": "TypeScript"
@@ -14038,7 +14118,7 @@
       "guide": "guides/columns/column-summary/column-summary.md",
       "guideTitle": "Column summary",
       "exampleId": "example9",
-      "exampleTitle": "Implement a custom summary function",
+      "exampleTitle": "Include nested summary results (2)",
       "docPermalink": "/column-summary",
       "framework": "vue",
       "displayName": "Vue 3"
