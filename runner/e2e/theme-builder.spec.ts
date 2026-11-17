@@ -81,6 +81,31 @@ test.describe("Theme builder chat", () => {
     expect(bodies[2].history ?? []).toEqual([]);
   });
 
+  test("Reset clears the conversation, so the next request does not refine a theme that is gone", async ({ page }) => {
+    await stubVersions(page);
+    const bodies: { history?: unknown[] }[] = [];
+    await page.route("**/api/theme", async (route) => {
+      bodies.push(route.request().postDataJSON());
+      await route.fulfill({ json: { message: "Green brand ramp.", tokens: {}, palette: GREEN_RAMP, config: {} } });
+    });
+
+    await page.goto("/?example=react&theme-builder&tab=ai");
+    const panel = page.locator(PANEL);
+    await send(page, "make it green");
+    await expect(panel.getByText("Green brand ramp.")).toBeVisible();
+
+    // Reset lives in the footer, which the AI tab gives to the composer.
+    await panel.getByRole("tab", { name: "Foundation" }).click();
+    await panel.locator("footer").getByRole("button", { name: "Reset", exact: true }).click();
+    await panel.locator("footer").getByRole("button", { name: "Reset the theme" }).click();
+    await panel.getByRole("tab", { name: "AI" }).click();
+    await expect(panel.getByText("Green brand ramp.")).toHaveCount(0);
+
+    await send(page, "darker");
+    await expect.poll(() => bodies.length).toBe(2);
+    expect(bodies[1].history ?? []).toEqual([]);
+  });
+
   test("a failed request takes its question back out of the conversation", async ({ page }) => {
     await stubVersions(page);
     await page.route("**/api/theme", (route) => route.fulfill({ status: 503, json: { error: "unavailable" } }));
@@ -96,6 +121,8 @@ test.describe("Theme builder chat", () => {
     // above it to be sent as history with the retry.
     await expect(panel.getByLabel("Describe the style you want")).toHaveValue("make it green");
     await expect(panel.locator(".hot-chat-bubble")).toHaveCount(0);
+    // Focus stays in the composer, so a keyboard user can retry from there.
+    await expect(panel.getByLabel("Describe the style you want")).toBeFocused();
   });
 });
 
@@ -114,7 +141,8 @@ test.describe("Theme builder layout", () => {
     await expect.poll(width).toBe(400);
   });
 
-  test("opening a component widens it into list and detail side by side", async ({ page }) => {
+  test("on a wide screen, opening a component widens it into list and detail side by side", async ({ page }) => {
+    await page.setViewportSize({ width: 1700, height: 900 });
     await stubVersions(page);
     await page.goto("/?example=react&theme-builder&tab=component");
     const panel = page.locator(PANEL);
@@ -128,6 +156,21 @@ test.describe("Theme builder layout", () => {
     await panel.getByRole("button", { name: "Pagination", exact: true }).click();
     await expect(panel.getByRole("button", { name: "Pagination", exact: true })).toHaveAttribute("aria-current", "true");
   });
+
+  test("on a laptop screen, opening a component keeps the preview in view", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await stubVersions(page);
+    await page.goto("/?example=react&theme-builder&tab=component");
+    const panel = page.locator(PANEL);
+    const width = () => panel.evaluate((el) => Math.round(el.getBoundingClientRect().width));
+
+    await panel.getByRole("button", { name: "Buttons", exact: true }).click();
+    await expect(panel.getByRole("button", { name: "All components" })).toBeVisible();
+    // Not widened behind the user's back; the toggle still does it on request.
+    expect(await width()).toBe(400);
+    await panel.getByRole("button", { name: "Widen the theme builder" }).click();
+    await expect.poll(width).toBe(720);
+  });
 });
 
 test.describe("Theme builder link", () => {
@@ -139,6 +182,22 @@ test.describe("Theme builder link", () => {
     await expect(panel).toBeVisible();
     await expect(panel.getByRole("tab", { name: "AI" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("button", { name: "Theme builder", exact: true })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("the tab follows the panel in the address bar, and leaves with it", async ({ page }) => {
+    await stubVersions(page);
+    await page.goto("/?example=react&theme-builder&tab=ai");
+    const panel = page.locator(PANEL);
+    const tab = () => new URL(page.url()).searchParams.get("tab");
+
+    await panel.getByRole("tab", { name: "Common" }).click();
+    await expect.poll(tab).toBe("common");
+    await panel.getByRole("button", { name: "Close theme builder" }).click();
+    await expect.poll(tab).toBe(null);
+
+    // Reopened, it starts where a fresh open does, not on the old link's tab.
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
+    await expect(panel.getByRole("tab", { name: "Foundation" })).toHaveAttribute("aria-selected", "true");
   });
 
   test("?panel=theme-builder is the same link", async ({ page }) => {
@@ -181,6 +240,6 @@ test.describe("Theme builder link", () => {
     expect(copied.searchParams.has("theme-builder")).toBe(true);
     expect(copied.searchParams.get("example")).toBe("react");
     // The playground's link is honest that an unsaved theme is not in it.
-    await expect(panel.locator("[data-theme-builder-link-note]")).toContainText("not in it until you save");
+    await expect(panel.locator("[data-theme-builder-link-note]")).toContainText("fork or share the demo");
   });
 });

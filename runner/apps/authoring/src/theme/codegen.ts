@@ -19,11 +19,15 @@
 import {
   COLOR_SCHEMES,
   COLORS_PRESETS,
+  DENSITY_SIZE_KEYS,
   DENSITY_VARIANTS,
   googleFontFamily,
   ICONS_PRESETS,
   isPristine,
   migrateThemeState,
+  NEUTRAL_STEPS,
+  PRIMARY_STEPS,
+  TOKEN_KEYS,
   TOKENS_PRESETS,
   type ThemeState,
   type TokenValue,
@@ -71,12 +75,14 @@ const lit = (v: TokenValue) => jsSafe(JSON.stringify(v));
 /** Dotted palette keys -> a nested object, deep-merged over the preset so
  *  editing one step never drops the ten the preset supplied. */
 function paletteSource(entries: [string, string][], presetVar: string, typescript: boolean): string {
-  const ramps: Record<string, Record<string, string>> = {};
-  const scalars: Record<string, string> = {};
+  // Prototype-free, so a key like `__proto__` is a plain property, never a
+  // write to Object.prototype in the page that builds the module.
+  const ramps: Record<string, Record<string, string>> = Object.create(null);
+  const scalars: Record<string, string> = Object.create(null);
   for (const [key, value] of entries) {
     const dot = key.indexOf(".");
     if (dot === -1) scalars[key] = value;
-    else (ramps[key.slice(0, dot)] ??= {})[key.slice(dot + 1)] = value;
+    else (ramps[key.slice(0, dot)] ??= Object.create(null))[key.slice(dot + 1)] = value;
   }
 
   const lines = [`    ...${presetVar},`];
@@ -233,10 +239,27 @@ function embeddedStateLine(state: ThemeState): string {
   return `${STATE_MARKER}${json}`;
 }
 
-const isStringMap = (v: unknown): v is Record<string, TokenValue> =>
+/** The worker's rule for a CSS value (`theme-ai.ts`), plus no `url(`: a value
+ *  read from a shared module reaches swatch styles on the app's own origin. */
+const CSS_VALUE = /^[a-zA-Z0-9\s#(),./_%+\-'"]+$/;
+const isCssValue = (v: unknown): v is string =>
+  typeof v === "string" && v.length <= 200 && CSS_VALUE.test(v) && !/url\s*\(/i.test(v);
+const isTokenValue = (v: unknown): v is TokenValue =>
+  isCssValue(v) || (Array.isArray(v) && v.length <= 20 && v.every(isCssValue));
+
+const PALETTE_KEYS: ReadonlySet<string> = new Set([
+  ...PRIMARY_STEPS.map((s) => `primary.${s}`),
+  ...NEUTRAL_STEPS.map((s) => `palette.${s}`),
+  "white",
+  "black",
+]);
+const TOKEN_KEY_SET: ReadonlySet<string> = new Set(TOKEN_KEYS);
+const DENSITY_KEY_SET: ReadonlySet<string> = new Set(DENSITY_SIZE_KEYS);
+
+/** A plain object whose every key is in `keys` and every value passes `ok`. */
+const isMapOf = (v: unknown, keys: ReadonlySet<string>, ok: (x: unknown) => boolean): boolean =>
   Boolean(v) && typeof v === "object" && !Array.isArray(v)
-  && Object.values(v as object).every((x) => typeof x === "string"
-    || (Array.isArray(x) && x.every((y) => typeof y === "string")));
+  && Object.entries(v as object).every(([k, x]) => keys.has(k) && ok(x));
 
 /**
  * The state a generated theme module carries, or null when the files hold no
@@ -265,10 +288,10 @@ export function readEmbeddedThemeState(files: Record<string, string>): ThemeStat
       && (ICONS_PRESETS as readonly string[]).includes(state.icons)
       && (COLOR_SCHEMES as readonly string[]).includes(state.colorScheme)
       && (DENSITY_VARIANTS as readonly string[]).includes(state.density)
-      && isStringMap(state.params)
-      && isStringMap(state.palette)
+      && isMapOf(state.params, TOKEN_KEY_SET, isTokenValue)
+      && isMapOf(state.palette, PALETTE_KEYS, isCssValue)
       && Object.entries(state.densitySizes).every(([k, v]) =>
-        (DENSITY_VARIANTS as readonly string[]).includes(k) && isStringMap(v));
+        (DENSITY_VARIANTS as readonly string[]).includes(k) && isMapOf(v, DENSITY_KEY_SET, isCssValue));
     return known ? state : null;
   }
   return null;

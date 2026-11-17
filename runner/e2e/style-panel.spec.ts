@@ -87,14 +87,15 @@ test("all 18 components are reachable, and each opens a sub-panel with token row
   // 18 exactly — a vendored-catalogue regression (a lost component is silent).
   await expect(drawer.locator("button.hot-panel-row")).toHaveCount(COMPONENTS.length);
 
-  // Opening a component widens the panel and keeps the list beside the detail
-  // (DEV-4070), so the next one is a click on the list, not a trip back.
+  // At the default 1280px the panel stays narrow (DEV-4070: a wide drawer
+  // would cover the preview), so each component is a trip there and back.
   for (const name of COMPONENTS) {
     await drawer.getByRole("button", { name, exact: true }).click();
     await expect(
       drawer.locator(`[data-component-detail="${name}"] span[title]`).first(),
       `the ${name} sub-panel renders at least one token row`,
     ).toBeVisible();
+    await drawer.getByRole("button", { name: "All components" }).click();
   }
 });
 
@@ -208,8 +209,8 @@ test("linked header tokens move together, and reset together", async ({ page }) 
   }).toPass();
 
   // The linked override is visible from the other side too: Rows carries an
-  // override badge without ever having been opened. The list stays beside the
-  // open component in the wide layout (DEV-4070), so the badge is right there.
+  // override badge without ever having been opened.
+  await drawer.getByRole("button", { name: "All components" }).click();
   await expect(drawer.getByRole("button", { name: "Rows", exact: true })).toContainText("1");
 
   // Reset from the Header side must clear both.
@@ -337,6 +338,9 @@ test("the theme survives a reload", async ({ page }) => {
   // panel by itself (DEV-4070) — clicking the trigger now would close it.
   drawer = page.locator(STYLE);
   await expect(drawer).toBeVisible();
+  // On the tab it was left on: the address bar carries that too.
+  await expect(drawer.getByRole("tab", { name: "Common" })).toHaveAttribute("aria-selected", "true");
+  await drawer.getByRole("tab", { name: "Foundation" }).click();
 
   // Restored, and re-applied: on mount a non-pristine theme rebuilds the
   // module into the current demo, so the file row reappears without a touch.

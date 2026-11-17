@@ -1231,6 +1231,8 @@ function Authoring({
     else {
       url.searchParams.delete(THEME_BUILDER_PARAM);
       if (url.searchParams.get("panel") === THEME_BUILDER_PARAM) url.searchParams.delete("panel");
+      // The panel's tab, which StylePanel keeps current while it is open.
+      url.searchParams.delete("tab");
     }
     history.replaceState(null, "", url.pathname + url.search + url.hash);
   }, [styleOpen]);

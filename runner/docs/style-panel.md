@@ -10,32 +10,54 @@ Component and AI tabs, and a styling chat.
 `?theme-builder` opens the panel on load, on every route
 (`/?example=react&theme-builder`, `/share/<id>?theme-builder`).
 `?panel=theme-builder` is an alias, and `&tab=foundation|common|component|ai`
-picks the tab. The address bar follows the panel while it is open or closed, so
-the URL is always a link to what is on screen. A token session (ADR-0037) ignores
+picks the tab. The address bar follows the panel and its tab, and closing the
+panel removes both, so the URL is always a link to what is on screen. A token session (ADR-0037) ignores
 the param: its toolbar has no button to close the panel with.
 
 The panel's share button copies that link. In the playground it is the example
-itself, and an unsaved theme is not part of it; the panel says so. For a saved
+itself, and an unsaved theme is not part of it; the panel says so and points to
+Fork or Share, since the playground has no Save. For a saved
 demo it is `/share/<id>?theme-builder`, which carries the theme as last saved.
 
 A shared themed demo opens with the sender's theme in the controls, not the
 recipient's. The generated module carries the panel's state on a
 `// @hot-runner-theme-state {…}` line, and on each new workspace the panel adopts
 that state instead of applying the visitor's stored one, which would overwrite
-the sender's module. `readEmbeddedThemeState` (`theme/codegen.ts`) checks the state
-before adopting it. Preset names are interpolated into import paths on the next
-regeneration, so any name outside the known lists means "no state". The line is
+the sender's module. The adopted theme is not written to `localStorage` until the
+visitor edits it, so the next example they open gets their own theme back. A demo
+themed before the state line existed has a wired module but no state; the panel
+leaves its module alone rather than apply the visitor's theme over it.
+
+`readEmbeddedThemeState` (`theme/codegen.ts`) checks the state before adopting
+it, because the files are whatever the link pointed at:
+
+- Preset names are interpolated into import paths on the next regeneration, so
+  any name outside the known lists means "no state".
+- Palette, token and density keys must be in the catalogue. A key like
+  `__proto__.x` would otherwise reach the object the module is built from.
+- Values must pass the worker's CSS-value rule, and `url(` is refused: a value
+  reaches swatch styles on the app's own origin.
+
+ The line is
 JSON with U+2028/U+2029 escaped, because JavaScript also ends a line comment on
 those. It is written into the demo's own copy only, never into "Copy for my app".
 See `pipeline/theme-embedded-state.test.mjs`.
 
 ## Layout
 
-The drawer is 400px, and widens to 720px (Theme Builder's 360 → 720) when a
-component opens. The Component tab then shows the list and the open component
-side by side. The header toggle pins either width. The Foundation tab links to
-the Theme customization docs and the Figma design system, as Theme Builder's
+The drawer is 400px. Opening a component widens it to 720px (Theme Builder's
+360 → 720) only on a screen at least 1600px wide; on a 1280px laptop a 720px
+drawer would cover the preview. Wide, the Component tab shows the list and the
+open component side by side, except below 800px, where they stack. The header
+toggle pins either width. The Foundation tab links to the Theme customization
+docs for the demo's framework and to the Figma design system, as Theme Builder's
 Learn-more cards did. Reset asks before it clears the theme.
+
+The chat is cleared by Reset, by a new workspace and by adopting a shared theme,
+so a follow-up never refines a theme that is no longer on screen. A question is
+stored with its answer, not before, so a reload mid-request leaves no unanswered
+turn. The conversation is a polite live region, and focus returns to the prompt
+after each send.
 
 ## What it covers
 

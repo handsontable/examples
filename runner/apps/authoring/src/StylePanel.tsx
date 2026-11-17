@@ -35,6 +35,7 @@ import {
   buildThemeChanges,
   buildThemeParams,
   buildThemeSnippet,
+  hasWiredTheme,
   isTypescript,
   manualImportHint,
   readEmbeddedThemeState,
@@ -106,13 +107,46 @@ function readStoredChat(): ThemeChatMessage[] {
     const raw = sessionStorage.getItem(CHAT_STORAGE_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((m): m is ThemeChatMessage =>
+    const kept = parsed.filter((m): m is ThemeChatMessage =>
       !!m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string",
     ).slice(-MAX_CHAT_MESSAGES);
+    // A reload mid-request leaves a question nobody answered; it would go out as
+    // history with the next one.
+    while (kept.at(-1)?.role === "user") kept.pop();
+    return kept;
   } catch {
     return [];
   }
 }
+
+/** The theme-customization guide in the demo's own framework's docs. */
+function themeDocsUrl(files: Record<string, string>): string {
+  const pkg = files["/package.json"] ?? "";
+  const framework = /@handsontable\/react/.test(pkg) ? "react"
+    : /@handsontable\/vue/.test(pkg) ? "vue"
+    : /@handsontable\/angular/.test(pkg) ? "angular"
+    : "javascript";
+  return `https://handsontable.com/docs/${framework}-data-grid/theme-customization/`;
+}
+
+/** Whether a media query matches, kept current as the window resizes. */
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => typeof matchMedia === "function" && matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const list = matchMedia(query);
+    const onChange = () => setMatches(list.matches);
+    onChange();
+    list.addEventListener("change", onChange);
+    return () => list.removeEventListener("change", onChange);
+  }, [query]);
+  return matches;
+}
+
+/** Wide enough that a 720px drawer still leaves the preview in view. */
+const ROOMY_QUERY = "(min-width: 1600px)";
+/** Too narrow for list and detail side by side, even in a wide drawer. */
+const NARROW_QUERY = "(max-width: 800px)";
 
 function writeStoredChat(messages: ThemeChatMessage[]) {
   try {
@@ -234,6 +268,8 @@ export function StylePanel({
    *  component opens. `null` = follow the component sub-panel; a click on the
    *  toggle pins it either way. */
   const [expandedPin, setExpandedPin] = useState<boolean | null>(null);
+  const roomy = useMediaQuery(ROOMY_QUERY);
+  const narrowScreen = useMediaQuery(NARROW_QUERY);
   /** Reset is two clicks — Theme Builder asks "Reset the theme to default?",
    *  and a theme is minutes of work. */
   const [confirmReset, setConfirmReset] = useState(false);
@@ -245,7 +281,7 @@ export function StylePanel({
       await navigator.clipboard.writeText(link.url);
       setLinkNote(link.carriesTheme
         ? "Link copied. It opens the saved demo with the Theme builder open — save first to include your latest changes."
-        : "Link copied. It opens this example with the Theme builder open; your theme is not in it until you save the demo.");
+        : "Link copied. It opens this example with the Theme builder open, without your theme — fork or share the demo, then copy the link again.");
     } catch {
       setLinkNote(`Copy this link: ${link.url}`);
     }
@@ -266,6 +302,16 @@ export function StylePanel({
     const asked = new URLSearchParams(location.search).get("tab");
     return (["foundation", "common", "component", "ai"] as const).find((t) => t === asked) ?? "foundation";
   });
+  // The address bar names the tab on screen, so a reload or a copied link
+  // reopens it rather than whichever tab the original link named.
+  useEffect(() => {
+    const url = new URL(location.href);
+    const current = url.searchParams.get("tab");
+    if (current === tab || (tab === "foundation" && current === null)) return;
+    if (tab === "foundation") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", tab);
+    history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+  }, [tab]);
   /** The component whose sub-panel is open, e.g. "Buttons". */
   const [component, setComponent] = useState<string | null>(null);
   const [openGroup, setOpenGroup] = useState<string>("");
@@ -292,6 +338,10 @@ export function StylePanel({
    * rebuild, and patching across one would go to an object no grid is listening to.
    */
   const bridgeReady = useRef(false);
+  /** The panel shows a theme the demo's files carried, not the visitor's own,
+   *  and nothing has been edited since — so nothing has been stored. */
+  const carriedRef = useRef(false);
+  const firstWorkspace = useRef(true);
   /** The current theme, readable from the unmount cleanup — which runs after the last
    *  render and so cannot see `state` through a stale closure. */
   const stateRef = useRef(state);
@@ -356,17 +406,34 @@ export function StylePanel({
   // would overwrite the sender's module, which is the whole point of the link —
   // and the controls take it up, so the first nudge refines it instead of
   // regenerating the module from somebody else's defaults.
+  //
+  // The sender's theme is only *shown*: it is not written to localStorage until
+  // the visitor edits it (`update()`), so opening a link never replaces their
+  // own theme, and the next example they open gets theirs back.
   useEffect(() => {
-    const carried = readEmbeddedThemeState(getFiles());
+    const first = firstWorkspace.current;
+    firstWorkspace.current = false;
+    // The chat is about the theme on screen; a different workspace is a
+    // different theme, and "darker" must not act on the last one.
+    if (!first) clearChat();
+
+    const files = getFiles();
+    const carried = readEmbeddedThemeState(files);
     if (carried) {
       if (JSON.stringify(carried) !== JSON.stringify(stateRef.current)) {
-        stateRef.current = carried;
-        setState(carried);
-        setDensityVariant(carried.density);
-        writeStorage(carried);
+        showState(carried);
+        clearChat();
       }
+      carriedRef.current = true;
       return;
     }
+    if (carriedRef.current) {
+      carriedRef.current = false;
+      showState(readStoredTheme());
+    }
+    // A demo themed before the state line existed: its module is the sender's
+    // theme too, just without a copy the panel can read. Leave it alone.
+    if (hasWiredTheme(files)) return;
     if (!isPristine(stateRef.current)) apply(stateRef.current);
     // Edits between loads go through update(), which applies as it goes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -508,7 +575,16 @@ export function StylePanel({
     }, FLUSH_DELAY_MS);
   }
 
+  /** Put a theme in the controls without storing or applying it. */
+  function showState(next: ThemeState) {
+    stateRef.current = next;
+    setState(next);
+    setDensityVariant(next.density);
+  }
+
   function update(patch: Partial<ThemeState>) {
+    // The first real edit makes a carried theme this visitor's own.
+    carriedRef.current = false;
     const next = { ...state, ...patch };
     setState(next);
     stateRef.current = next;
@@ -533,7 +609,8 @@ export function StylePanel({
     if (!request || thinking) return;
     const before = messages;
     const withQuestion: ThemeChatMessage[] = [...before, { role: "user", content: request }];
-    setMessages(withQuestion);
+    // On screen now, in sessionStorage only with its answer.
+    setMessagesState(withQuestion);
     setPrompt("");
     setThinking(true);
     setAiNote(null);
@@ -589,6 +666,8 @@ export function StylePanel({
       setAiNote("Couldn’t reach the styling assistant.");
     } finally {
       setThinking(false);
+      // Sending must not drop focus to <body>; the next turn starts here.
+      promptRef.current?.focus();
     }
   }
 
@@ -698,8 +777,9 @@ export function StylePanel({
     // bring it back too — otherwise Reset leaves it pointed at the old variant,
     // warning about a mismatch that no longer exists.
     setDensityVariant(DEFAULT_THEME.density);
+    carriedRef.current = false;
     setApplied(null);
-    setAiNote(null);
+    clearChat();
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch { /* nothing to clear */ }
@@ -726,7 +806,8 @@ export function StylePanel({
         placeholder="retro terminal, corporate blue, dark and compact…"
         rows={1}
         maxLength={300}
-        disabled={thinking}
+        readOnly={thinking}
+        aria-busy={thinking}
         aria-label="Describe the style you want"
       />
       <button
@@ -764,9 +845,13 @@ export function StylePanel({
     </>
   );
 
-  /** Wide when pinned wide, otherwise whenever a component's sub-panel is open —
-   *  the moment Theme Builder's own panel grows its second column. */
-  const expanded = expandedPin ?? component !== null;
+  /** Wide when pinned wide. Otherwise a component's sub-panel widens it — the
+   *  moment Theme Builder's own panel grows its second column — but only on a
+   *  screen with room to spare: at 1280px a 720px drawer covers the preview. */
+  const expanded = expandedPin ?? (component !== null && roomy);
+  /** List and detail side by side; stacked on a narrow screen, where two
+   *  columns leave the detail too thin to read. */
+  const sideBySide = expanded && !narrowScreen;
 
   /** The Component tab's two halves, laid out by `expanded` below. */
   const componentList = (
@@ -966,7 +1051,14 @@ export function StylePanel({
         )}
 
         {tab === "ai" && (
-          <div className="hot-chat-list" style={{ padding: BODY_PAD }} data-theme-chat>
+          <div
+            className="hot-chat-list"
+            style={{ padding: BODY_PAD }}
+            data-theme-chat
+            role="log"
+            aria-live="polite"
+            aria-label="Styling conversation"
+          >
             {messages.length === 0 && (
               <div>
                 <h3 className="hot-chat-welcome-title">Style it in your own words</h3>
@@ -982,8 +1074,8 @@ export function StylePanel({
                       type="button"
                       className="hot-panel-suggestion hot-panel-menu-item"
                       style={{ opacity: thinking ? 0.5 : 1 }}
-                      disabled={thinking}
-                      onClick={() => void describe(suggestion)}
+                      aria-disabled={thinking}
+                      onClick={() => { promptRef.current?.focus(); void describe(suggestion); }}
                     >
                       <span>{suggestion}</span>
                       <span className="hot-chat-arrow" aria-hidden="true">→</span>
@@ -1037,7 +1129,7 @@ export function StylePanel({
             demo: the design system in Figma, and the API it is written in. */}
         <p style={{ ...note, padding: `0 ${ui.space(6)}` }} data-theme-learn-more>
           Learn more:{" "}
-          <a href="https://handsontable.com/docs/javascript-data-grid/theme-customization/" target="_blank" rel="noreferrer">
+          <a href={themeDocsUrl(getFiles())} target="_blank" rel="noreferrer">
             Theme customization docs
           </a>
           {" · "}
@@ -1247,7 +1339,7 @@ export function StylePanel({
           // Wide, the list and the selected component sit side by side — Theme
           // Builder's second column (DEV-4070). Narrow, they stack: the list,
           // then the sub-panel with a way back.
-          expanded ? (
+          sideBySide ? (
             <div style={{ display: "grid", gridTemplateColumns: "220px minmax(0, 1fr)", gap: ui.space(4), padding: BODY_PAD }}>
               <div>{componentList}</div>
               <div>

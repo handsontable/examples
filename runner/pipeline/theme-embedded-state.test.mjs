@@ -87,10 +87,11 @@ test("a preset name outside the known lists is not adopted", () => {
       codegen.readEmbeddedThemeState(module({ ...vocabulary.DEFAULT_THEME, params: { x: { y: 1 } } })),
       codegen.readEmbeddedThemeState(module({ ...vocabulary.DEFAULT_THEME, densitySizes: { huge: { gap: "1" } } })),
       codegen.readEmbeddedThemeState({ "/handsontable-theme.js": marker + "{not json" }),
+      codegen.readEmbeddedThemeState(module({ ...vocabulary.DEFAULT_THEME, icons: evil })),
       codegen.readEmbeddedThemeState(module({ ...vocabulary.DEFAULT_THEME, colors: "horizon" })).colors,
     ];
   `);
-  assert.deepEqual(out, [null, null, null, null, null, "horizon"]);
+  assert.deepEqual(out, [null, null, null, null, null, null, "horizon"]);
 });
 
 test("the snippet for a real app carries no runner state", () => {
@@ -110,4 +111,32 @@ test("a value holding a JavaScript line terminator cannot end the comment early"
   `);
   assert.equal(out.raw, false);
   assert.equal(out.back, "Inter alert(1) x");
+});
+
+test("palette and token keys outside the catalogue, and unsafe values, are not adopted", () => {
+  const out = run(`
+    const marker = "// @hot-runner-theme-state ";
+    const read = (s) => codegen.readEmbeddedThemeState({ "/handsontable-theme.js": marker + JSON.stringify(s) + "\\n" });
+    const base = vocabulary.DEFAULT_THEME;
+    return [
+      read({ ...base, palette: { "__proto__.polluted": "yes" } }),
+      read({ ...base, palette: { "primary.500": "url(//x/p)" } }),
+      read({ ...base, palette: { "primary.500": "red; background: blue" } }),
+      read({ ...base, params: { notAToken: "red" } }),
+      read({ ...base, params: { fontFamily: "url(//x/f)" } }),
+      read({ ...base, densitySizes: { compact: { notASize: "2px" } } }),
+      read({ ...base, palette: { "primary.500": "#0b5d1e", white: "#fff" }, params: { fontFamily: "Inter" } }) !== null,
+      ({}).polluted === undefined,
+    ];
+  `);
+  assert.deepEqual(out, [null, null, null, null, null, null, true, true]);
+});
+
+test("building a module from a crafted palette key does not touch Object.prototype", () => {
+  const out = run(`
+    const state = { ...vocabulary.DEFAULT_THEME, palette: { "__proto__.polluted": "yes" } };
+    codegen.buildThemeModule(state, false, { bridge: true });
+    return ({}).polluted === undefined;
+  `);
+  assert.equal(out, true);
 });

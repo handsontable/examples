@@ -16,7 +16,7 @@ import { ctx, makeEnv } from "./fixtures/worker-harness.mjs";
 register("./fixtures/worker-hooks.mjs", import.meta.url);
 
 const { default: worker } = await import("../workers/api/src/index.ts");
-const { normaliseHistory, validateStylePrompt, MAX_HISTORY_TURNS } = await import("../workers/api/src/theme-ai.ts");
+const { normaliseHistory, validateStylePrompt } = await import("../workers/api/src/theme-ai.ts");
 
 const HOST = "https://demos.handsontable.com";
 
@@ -70,9 +70,11 @@ test("only the most recent turns are kept, each capped in length", () => {
     long.push({ role: "user", content: `ask ${i}` }, { role: "assistant", content: `answer ${i}` });
   }
   const out = normaliseHistory(long);
-  assert.ok(out.length <= MAX_HISTORY_TURNS);
+  // A literal, not the constant: the limit is what keeps a request's cost
+  // bounded, so raising it should take a test change.
+  assert.equal(out.length, 10);
+  assert.equal(out[0].content, "ask 25");
   assert.equal(out[out.length - 1].content, "answer 29");
-  assert.equal(out[0].role, "user");
 
   const [first] = normaliseHistory([
     { role: "user", content: "x".repeat(5000) },
