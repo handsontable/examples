@@ -1,7 +1,41 @@
-# Style this demo
+# Theme builder
 
-The **Style** panel restyles the example you have open with the same controls as
-[Theme Builder](https://theme-builder.handsontable.com/) (DEV-2047).
+The **Theme builder** panel restyles the example you have open with everything
+the standalone Theme Builder app offered (DEV-2047; renamed and completed in
+DEV-4070, which moves Theme Builder into the demo runner): Foundation, Common,
+Component and AI tabs, and a styling chat.
+
+## Opening it from a link
+
+`?theme-builder` opens the panel on load, on every route
+(`/?example=react&theme-builder`, `/share/<id>?theme-builder`).
+`?panel=theme-builder` is an alias, and `&tab=foundation|common|component|ai`
+picks the tab. The address bar follows the panel while it is open or closed, so
+the URL is always a link to what is on screen. A token session (ADR-0037) ignores
+the param: its toolbar has no button to close the panel with.
+
+The panel's share button copies that link. In the playground it is the example
+itself, and an unsaved theme is not part of it; the panel says so. For a saved
+demo it is `/share/<id>?theme-builder`, which carries the theme as last saved.
+
+A shared themed demo opens with the sender's theme in the controls, not the
+recipient's. The generated module carries the panel's state on a
+`// @hot-runner-theme-state {…}` line, and on each new workspace the panel adopts
+that state instead of applying the visitor's stored one, which would overwrite
+the sender's module. `readEmbeddedThemeState` (`theme/codegen.ts`) checks the state
+before adopting it. Preset names are interpolated into import paths on the next
+regeneration, so any name outside the known lists means "no state". The line is
+JSON with U+2028/U+2029 escaped, because JavaScript also ends a line comment on
+those. It is written into the demo's own copy only, never into "Copy for my app".
+See `pipeline/theme-embedded-state.test.mjs`.
+
+## Layout
+
+The drawer is 400px, and widens to 720px (Theme Builder's 360 → 720) when a
+component opens. The Component tab then shows the list and the open component
+side by side. The header toggle pins either width. The Foundation tab links to
+the Theme customization docs and the Figma design system, as Theme Builder's
+Learn-more cards did. Reset asks before it clears the theme.
 
 ## What it covers
 
@@ -12,7 +46,7 @@ The **Style** panel restyles the example you have open with the same controls as
 | Tokens | the full catalogue — 272 tokens across 5 common sections and 18 components |
 | Density sizes | per-measurement overrides on top of the preset |
 | Fonts | a bare family name is fetched from Google Fonts by the generated module |
-| Describe a style | natural language → theme, the Theme Builder feature |
+| Chat | natural language → theme, as a conversation: follow-ups refine the turn before |
 | Copy for my app | the same module source, to paste into a real project |
 | Reset | removes the module and the wiring |
 
@@ -414,6 +448,30 @@ by dropping a single malformed value, which no prompt wording protects against.
 Gaps are interpolated in sRGB, matching the panel's own brand-ramp generator
 (`StylePanel.tsx` `rampFrom`); a ramp with fewer than two steps is left alone,
 because one step is a deliberate single-colour change.
+
+### A conversation, not one-shot requests (DEV-4070)
+
+The AI tab is a chat, as in Theme Builder. "Make it green", then "darker",
+works because each request sends the earlier turns as `history`
+(`{ prompt, current, history? }`). The Worker's `normaliseHistory`
+(`workers/api/src/theme-ai.ts`) drops anything that is not a user or assistant
+turn with string content. It keeps the later of two turns in a row from the
+same side and caps each turn at 400 characters and the history at the last 10
+turns. It also starts the history on a user turn and ends it on an assistant
+turn, so a crafted `system` turn never reaches the model. The model sees
+`system, …history, user("Current theme: …\n\nRequest: …")`, and the current
+theme stays the authority over anything said earlier.
+
+The panel keeps the conversation in `sessionStorage` (`hot-runner-theme-chat`,
+last 40 messages). It drops a turn whose request failed, so a retry does not send
+an orphan question as history. Each answer is tagged with what actually changed
+(`describeChanges`: presets, scheme, density, ramps, token count). The welcome
+state offers Theme Builder's five suggestion chips, and "Clear conversation"
+empties the history without touching the theme. AI data generation for the
+table, the other half of Theme Builder's chat, is deliberately not ported: a
+demo's data is its code, which `/api/chat` already edits.
+Tests: `pipeline/theme-ai-history.test.mjs`, `pipeline/theme-suggestion.test.mjs`,
+`e2e/theme-builder.spec.ts`.
 
 ### A recolour has to be visible (DEV-2497)
 

@@ -36,7 +36,7 @@ import { workspaceFiles, abortSandpackHosts } from "./helpers";
 // a plain `vite preview` serves them. Tier 2 needs the API worker reachable on
 // the *same origin* — `vite dev` with `VITE_API_BASE` pointed at its own port.
 
-const STYLE = 'aside[aria-label="Style this demo"]';
+const STYLE = 'aside[aria-label="Theme builder for this demo"]';
 
 /**
  * Tier-2 sessions this file created, so they can be deleted even when a test
@@ -172,7 +172,7 @@ async function openAt(page: Page, url: string, label: string) {
 }
 
 async function openStylePanel(page: Page) {
-  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await page.getByRole("button", { name: "Theme builder", exact: true }).click();
   await expect(page.locator(STYLE)).toBeVisible();
 }
 
@@ -251,6 +251,7 @@ for (const { example, shape } of SHAPES) {
       // Scoped to the footer: the panel body carries per-row resets now, and an
       // unscoped exact-name match would be ambiguous with a group expanded.
       await drawer.locator("footer").getByRole("button", { name: "Reset", exact: true }).click();
+      await drawer.locator("footer").getByRole("button", { name: "Reset the theme" }).click();
       await expect(async () => {
         expect(await themeClass(page), "Reset left the demo on someone else's theme").toEqual(before);
       }).toPass({ timeout: 60_000 });
@@ -420,7 +421,7 @@ async function openWithThemeApi(page: Page, answer: unknown) {
   await page.route("**/api/theme", (route) => route.fulfill({ json: answer }));
 
   await page.goto("/?example=react");
-  await expect(page.getByRole("button", { name: "Style", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Theme builder", exact: true })).toBeVisible();
   await openStylePanel(page);
 
   const drawer = page.locator(STYLE);

@@ -2313,7 +2313,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
         }
       }
 
-      // POST /api/theme  { prompt, current } -> a theme (public, rate-limited)
+      // POST /api/theme  { prompt, current, history? } -> a theme (public, rate-limited)
       // "Describe a style" in the theme panel. Same guards as /api/chat — it
       // is the same gateway and the same money — but its own tool and its own
       // whitelist, so a styling request can never return file edits.
@@ -2345,7 +2345,7 @@ async function handleNonProxyRequest(request: Request, env: Env, ctx: ExecutionC
 
         const themeStartedAt = Date.now();
         try {
-          const { suggestion, usd } = await withSpan("theme.ai", () => requestTheme(env, parsed.prompt, body?.current ?? {}));
+          const { suggestion, usd } = await withSpan("theme.ai", () => requestTheme(env, parsed.prompt, body?.current ?? {}, parsed.history));
           ctx.waitUntil(Promise.all([
             recordLlmUsage(env, usd),
             recordUsageEvent(env, "theme_prompt", ""),

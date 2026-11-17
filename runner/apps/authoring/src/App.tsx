@@ -567,6 +567,16 @@ function GuideRoute() {
  * visitor **Sign in** — reintroducing the exact thing this split exists to remove,
  * clickable. Pending renders neither control.
  */
+/** The query param that opens the Theme builder on load (DEV-4070). */
+export const THEME_BUILDER_PARAM = "theme-builder";
+
+/** Does this query string ask for the Theme builder? `?theme-builder`, with or
+ *  without a value, or `?panel=theme-builder`. */
+export function wantsThemeBuilder(search: string): boolean {
+  const p = new URLSearchParams(search);
+  return p.has(THEME_BUILDER_PARAM) || p.get("panel") === THEME_BUILDER_PARAM;
+}
+
 function ShareRoute({ route }: { route: { mode: "share"; id: string } }) {
   const [accountUser, setAccountUser] = useState<User | null | undefined>(undefined);
   useEffect(() => {
@@ -1155,7 +1165,13 @@ function Authoring({
   // "Style this demo" — the Theme Builder controls, applied to the open
   // example. Mutually exclusive with the chat panel: they occupy the same edge
   // of the screen, and both are secondary to the code.
-  const [styleOpen, setStyleOpen] = useState(false);
+  //
+  // `?theme-builder` (or `?panel=theme-builder`) opens it on load, so a link can
+  // hand somebody a demo with the Theme builder already open (DEV-4070). Not in
+  // a token session, whose toolbar has no button to close it from.
+  const [styleOpen, setStyleOpen] = useState(
+    () => !isTokenSession() && wantsThemeBuilder(location.search),
+  );
   /** Can this demo's core be themed at all? `selectedReleaseMajor` answers null
    *  for the `next` dist-tag and for pkg.pr.new refs, which are post-18 builds —
    *  those pass, since refusing them would block exactly the people testing them.
@@ -1204,6 +1220,34 @@ function Authoring({
   useEffect(() => {
     if (!themingSupported) setStyleOpen(false);
   }, [themingSupported]);
+
+  // The URL says whether the Theme builder is open, on every route, so the
+  // address bar is always a link that reopens what is on screen. Bare
+  // `?theme-builder` is kept as typed; only a change rewrites it.
+  useEffect(() => {
+    const url = new URL(location.href);
+    if (wantsThemeBuilder(url.search) === styleOpen) return;
+    if (styleOpen) url.searchParams.set(THEME_BUILDER_PARAM, "");
+    else {
+      url.searchParams.delete(THEME_BUILDER_PARAM);
+      if (url.searchParams.get("panel") === THEME_BUILDER_PARAM) url.searchParams.delete("panel");
+    }
+    history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }, [styleOpen]);
+
+  /** The link the panel hands out. A saved demo's is its public `/share/:id`,
+   *  which carries the theme as last saved — the generated module holds the
+   *  panel's state (`readEmbeddedThemeState`). The playground's is the example
+   *  itself: nothing unsaved travels in a URL. */
+  const themeBuilderLink = (() => {
+    if (route.mode === "play") {
+      const url = new URL(location.href);
+      url.searchParams.delete("mode");
+      url.searchParams.set(THEME_BUILDER_PARAM, "");
+      return { url: url.toString(), carriesTheme: false };
+    }
+    return { url: `${location.origin}/share/${route.id}?${THEME_BUILDER_PARAM}`, carriesTheme: true };
+  })();
 
   // And on a core below the floor the panel is not the only thing that has to go
   // (DEV-2571, Sentry DEMOS-1P). The generated theme module is a real workspace
@@ -3514,6 +3558,7 @@ function Authoring({
           onPreviewMessage={onPreviewMessage}
           flushQuietEdits={flushQuietEdits}
           onClose={() => setStyleOpen(false)}
+          link={themeBuilderLink}
         />
       )}
       {chatOpen && (

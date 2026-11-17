@@ -57,7 +57,7 @@ const GREEN_RAMP = {
 
 /** One child run covering every case, so the harness cost is paid once. */
 const RESULTS = inTheme(`
-  import { mergeSuggestion } from "./theme/suggestion.ts";
+  import { mergeSuggestion, describeChanges, historyForRequest } from "./theme/suggestion.ts";
   import { DEFAULT_THEME } from "./theme/vocabulary.ts";
 
   const GREEN_RAMP = ${JSON.stringify(GREEN_RAMP)};
@@ -106,6 +106,30 @@ const RESULTS = inTheme(`
       { message: "Darker header.", tokens: { headerBackgroundColor: "#0d5225" } },
       { ...DEFAULT_THEME, palette: GREEN_RAMP, params: { fontSize: "11px" } },
     ),
+    tags: {
+      refusal: describeChanges(DEFAULT_THEME, mergeSuggestion(DEFAULT_THEME, { message: "No." }).next),
+      recolour: describeChanges(DEFAULT_THEME, mergeSuggestion(DEFAULT_THEME, {
+        palette: GREEN_RAMP,
+        tokens: { headerBackgroundColor: "#e6f4ea", headerRowBackgroundColor: "#e6f4ea" },
+      }).next),
+      mood: describeChanges(DEFAULT_THEME, mergeSuggestion(DEFAULT_THEME, {
+        config: { colorScheme: "dark", density: "compact" },
+        tokens: { fontSize: "11px" },
+      }).next),
+      alreadySet: describeChanges(
+        { ...DEFAULT_THEME, palette: GREEN_RAMP, params: { fontSize: "11px" } },
+        mergeSuggestion(
+          { ...DEFAULT_THEME, palette: GREEN_RAMP, params: { fontSize: "11px" } },
+          { palette: GREEN_RAMP, tokens: { fontSize: "11px", lineHeight: "18px" } },
+        ).next,
+      ),
+    },
+    history: historyForRequest([
+      { role: "user", content: "a" },
+      { role: "assistant", content: "b", tags: ["brand ramp"], note: "n" },
+      { role: "user", content: "c" },
+      { role: "assistant", content: "d" },
+    ], 3),
   }));
 `);
 
@@ -168,4 +192,30 @@ test("a follow-up refines rather than resets", () => {
   assert.equal(RESULTS.followUp.effect, "visible");
   assert.equal(RESULTS.followUp.params.fontSize, "11px", "the earlier token survives");
   assert.equal(RESULTS.followUp.palette["primary.500"], "#1a7a38", "and so does the earlier ramp");
+});
+
+// Change tags under each chat reply (DEV-4070). They are computed from the two
+// states, not taken from the answer: a value the theme already had is not a change.
+test("a refusal gets no change tags", () => {
+  assert.deepEqual(RESULTS.tags.refusal, []);
+});
+
+test("a recolour is tagged as a brand ramp plus the tokens it set", () => {
+  assert.deepEqual(RESULTS.tags.recolour, ["brand ramp", "2 tokens"]);
+});
+
+test("presets are tagged by what they became", () => {
+  assert.deepEqual(RESULTS.tags.mood, ["dark scheme", "compact density", "1 token"]);
+});
+
+test("values the theme already had are not tagged as changed", () => {
+  assert.deepEqual(RESULTS.tags.alreadySet, ["1 token"]);
+});
+
+test("history sent to the server is the latest turns, text only", () => {
+  assert.deepEqual(RESULTS.history, [
+    { role: "assistant", content: "b" },
+    { role: "user", content: "c" },
+    { role: "assistant", content: "d" },
+  ]);
 });

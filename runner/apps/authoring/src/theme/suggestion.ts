@@ -136,3 +136,58 @@ export const NOTHING_CHANGED_NOTE =
  *  until the grid is touched. */
 export const INTERACTION_ONLY_NOTE =
   "It shows on selection, focus and active headers — nothing the grid paints at rest uses the brand colour.";
+
+/**
+ * Short tags for what an answer changed — the "primary ramp updated, 3 tokens"
+ * line Theme Builder puts under each chat reply (DEV-4070).
+ *
+ * Computed from the two states rather than from the answer, for the same reason
+ * `mergeSuggestion` is: the answer is a claim, and a value the theme already had
+ * is not a change. Order follows the panel's tabs — presets, ramps, tokens.
+ */
+export function describeChanges(prev: ThemeState, next: ThemeState): string[] {
+  const tags: string[] = [];
+  if (prev.tokens !== next.tokens) tags.push(`${next.tokens} token mapping`);
+  if (prev.colors !== next.colors) tags.push(`${next.colors} colors`);
+  if (prev.icons !== next.icons) tags.push(`${next.icons} icons`);
+  if (prev.colorScheme !== next.colorScheme) tags.push(`${next.colorScheme} scheme`);
+  if (prev.density !== next.density) tags.push(`${next.density} density`);
+
+  const changedKeys = (a: Record<string, TokenValue>, b: Record<string, TokenValue>) =>
+    Object.keys(b).filter((key) => !sameValue(a[key], b[key]));
+  const palette = changedKeys(prev.palette, next.palette);
+  if (palette.some((key) => key.startsWith("primary."))) tags.push("brand ramp");
+  if (palette.some((key) => key.startsWith("palette."))) tags.push("neutral ramp");
+  if (palette.includes("white") || palette.includes("black")) tags.push("white/black");
+
+  const tokens = changedKeys(prev.params, next.params).length;
+  if (tokens) tags.push(tokens === 1 ? "1 token" : `${tokens} tokens`);
+  return tags;
+}
+
+/** One message in the Theme builder's styling chat. */
+export interface ThemeChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  /** Assistant only: `describeChanges` for the answer, empty when nothing moved. */
+  tags?: string[];
+  /** Assistant only: what the panel adds to the model's claim — the
+   *  nothing-changed and interaction-only notes. */
+  note?: string;
+}
+
+/** What the server is sent as conversation history: the turns before the
+ *  current request, text only. The server normalises the shape again, so this
+ *  only has to be sensible, not authoritative. */
+export function historyForRequest(messages: readonly ThemeChatMessage[], limit = 10): { role: "user" | "assistant"; content: string }[] {
+  return messages.slice(-limit).map(({ role, content }) => ({ role, content }));
+}
+
+/** Theme Builder's empty-state chips, so an empty chat is not a blank box. */
+export const CHAT_SUGGESTIONS: readonly string[] = [
+  "Retro terminal theme",
+  "Change brand color to green",
+  "Dark mode",
+  "Pastel color palette",
+  "Change font to Playfair Display",
+];

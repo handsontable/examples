@@ -529,7 +529,7 @@ test("re-applying a saved Style theme to the example that loads is not an exampl
   const engaged = () => events.filter((e) => e.name === "example.engaged");
 
   await page.goto(`${BASE_URL}/?example=react&v=18.0.0`);
-  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await page.getByRole("button", { name: "Theme builder", exact: true }).click();
   release();
   await expect(page.locator(".hot-file-row", { hasText: "index.tsx" })).toBeVisible();
   // Precondition: the panel did write the theme into the example that arrived.
@@ -538,7 +538,7 @@ test("re-applying a saved Style theme to the example that loads is not an exampl
   await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
   expect(engaged()).toHaveLength(0);
 
-  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await page.getByRole("button", { name: "Theme builder", exact: true }).click();
   await page.locator('[data-pane-active="true"] .cm-content').click();
   await page.keyboard.type("// edit");
   await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));

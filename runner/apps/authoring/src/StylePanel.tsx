@@ -19,7 +19,11 @@ import {
   IconChevronLeft,
   IconChevronRight,
   IconPalette,
+  IconShare,
+  IconWindowMaximize,
+  IconWindowMinimize,
   IconX,
+  DRAWER_WIDTH,
   theme as ui,
 } from "@handsontable/demo-editor-shell";
 import { reportError } from "./sentry.js";
@@ -33,6 +37,7 @@ import {
   buildThemeSnippet,
   isTypescript,
   manualImportHint,
+  readEmbeddedThemeState,
   THEME_BRIDGE_SOURCE,
   themeModulePath,
 } from "./theme/codegen.js";
@@ -58,10 +63,14 @@ import {
   type TokenValue,
 } from "./theme/vocabulary.js";
 import {
+  CHAT_SUGGESTIONS,
+  describeChanges,
+  historyForRequest,
   INTERACTION_ONLY_NOTE,
   mergeSuggestion,
   NOTHING_CHANGED_NOTE,
   type ThemeAnswer,
+  type ThemeChatMessage,
 } from "./theme/suggestion.js";
 import { type ColorsMap } from "./theme/presets.js";
 import { bundledPresets, loadPresets, type PresetSet } from "./theme/presetsFor.js";
@@ -79,6 +88,38 @@ import { DensitySizeControl, TokenControl, type ControlContext } from "./theme/c
 type Tab = "foundation" | "common" | "component" | "ai";
 
 const STORAGE_KEY = "hot-runner-theme";
+
+/** The styling conversation (DEV-4070). `sessionStorage`, not `localStorage`:
+ *  the theme is worth keeping across days, a chat about it is worth keeping
+ *  across a reload — and a stale one greeting you next week is noise. */
+const CHAT_STORAGE_KEY = "hot-runner-theme-chat";
+/** Messages kept on screen and in storage. The server only ever sees the last
+ *  ten turns; this is about scrollback. */
+const MAX_CHAT_MESSAGES = 40;
+
+/** Theme Builder's own panel widens from 360 to 720 when a component's
+ *  sub-panel opens; the expanded drawer is that second column's room. */
+const EXPANDED_WIDTH = 720;
+
+function readStoredChat(): ThemeChatMessage[] {
+  try {
+    const raw = sessionStorage.getItem(CHAT_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((m): m is ThemeChatMessage =>
+      !!m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string",
+    ).slice(-MAX_CHAT_MESSAGES);
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredChat(messages: ThemeChatMessage[]) {
+  try {
+    if (messages.length) sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
+    else sessionStorage.removeItem(CHAT_STORAGE_KEY);
+  } catch { /* the chat still works for this page's lifetime */ }
+}
 
 /**
  * How long a live patch may take to be acknowledged before the panel gives up on
@@ -154,6 +195,9 @@ export interface StylePanelProps {
    *  patch does not land. */
   flushQuietEdits: () => void;
   onClose: () => void;
+  /** A link to this demo with the Theme builder open (DEV-4070). `carriesTheme`
+   *  is false in the playground, where nothing unsaved travels in a URL. */
+  link?: { url: string; carriesTheme: boolean };
 }
 
 export function StylePanel({
@@ -167,6 +211,7 @@ export function StylePanel({
   onPreviewMessage,
   flushQuietEdits,
   onClose,
+  link,
 }: StylePanelProps) {
   // Restored across reloads, as theme-builder does — a theme is worth several
   // minutes of fiddling and losing it to a refresh is its own small tragedy.
@@ -176,6 +221,35 @@ export function StylePanel({
   const promptRef = useAutoGrow(prompt);
   const [thinking, setThinking] = useState(false);
   const [aiNote, setAiNote] = useState<string | null>(null);
+  /** The styling chat — Theme Builder's AI tab is a conversation, so "darker"
+   *  can follow "make it green" (DEV-4070). */
+  const [messages, setMessagesState] = useState<ThemeChatMessage[]>(readStoredChat);
+  const setMessages = (next: ThemeChatMessage[]) => {
+    const kept = next.slice(-MAX_CHAT_MESSAGES);
+    setMessagesState(kept);
+    writeStoredChat(kept);
+  };
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  /** Wide mode: two columns' worth of room, as Theme Builder's panel gets when a
+   *  component opens. `null` = follow the component sub-panel; a click on the
+   *  toggle pins it either way. */
+  const [expandedPin, setExpandedPin] = useState<boolean | null>(null);
+  /** Reset is two clicks — Theme Builder asks "Reset the theme to default?",
+   *  and a theme is minutes of work. */
+  const [confirmReset, setConfirmReset] = useState(false);
+  /** What the last "Copy link" did, said once under the header. */
+  const [linkNote, setLinkNote] = useState<string | null>(null);
+  async function copyLink() {
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link.url);
+      setLinkNote(link.carriesTheme
+        ? "Link copied. It opens the saved demo with the Theme builder open — save first to include your latest changes."
+        : "Link copied. It opens this example with the Theme builder open; your theme is not in it until you save the demo.");
+    } catch {
+      setLinkNote(`Copy this link: ${link.url}`);
+    }
+  }
   // The intro blurb is a dismissible notice: once someone knows what the panel
   // is, the paragraph is four lines of scroll on every open. Dismissal sticks
   // across sessions; storage can throw (Safari private mode), and a notice that
@@ -187,7 +261,11 @@ export function StylePanel({
     setIntroDismissed(true);
     try { localStorage.setItem(INTRO_DISMISSED_KEY, "1"); } catch { /* keep the session's dismissal */ }
   };
-  const [tab, setTab] = useState<Tab>("foundation");
+  // A link may name the tab to open on (`?theme-builder&tab=ai`, DEV-4070).
+  const [tab, setTab] = useState<Tab>(() => {
+    const asked = new URLSearchParams(location.search).get("tab");
+    return (["foundation", "common", "component", "ai"] as const).find((t) => t === asked) ?? "foundation";
+  });
   /** The component whose sub-panel is open, e.g. "Buttons". */
   const [component, setComponent] = useState<string | null>(null);
   const [openGroup, setOpenGroup] = useState<string>("");
@@ -271,7 +349,24 @@ export function StylePanel({
   // have — reopening the panel, or opening a different example, must reconcile
   // the two rather than wait for the next edit to notice. A load replaces every
   // file, so this runs again on each new workspace.
+  //
+  // Unless the files carry a theme of their own (DEV-4070): somebody sent a link
+  // to a demo they styled, and the module they generated says what they set.
+  // That theme wins over this visitor's stored one — applying the stored one
+  // would overwrite the sender's module, which is the whole point of the link —
+  // and the controls take it up, so the first nudge refines it instead of
+  // regenerating the module from somebody else's defaults.
   useEffect(() => {
+    const carried = readEmbeddedThemeState(getFiles());
+    if (carried) {
+      if (JSON.stringify(carried) !== JSON.stringify(stateRef.current)) {
+        stateRef.current = carried;
+        setState(carried);
+        setDensityVariant(carried.density);
+        writeStorage(carried);
+      }
+      return;
+    }
     if (!isPristine(stateRef.current)) apply(stateRef.current);
     // Edits between loads go through update(), which applies as it goes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -436,6 +531,10 @@ export function StylePanel({
   async function describe(text: string) {
     const request = text.trim();
     if (!request || thinking) return;
+    const before = messages;
+    const withQuestion: ThemeChatMessage[] = [...before, { role: "user", content: request }];
+    setMessages(withQuestion);
+    setPrompt("");
     setThinking(true);
     setAiNote(null);
     try {
@@ -445,35 +544,63 @@ export function StylePanel({
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         }),
-        body: JSON.stringify({ prompt: request, current: state }),
+        // The turns *before* this one: the server appends the request itself,
+        // with the current theme attached.
+        body: JSON.stringify({ prompt: request, current: state, history: historyForRequest(before) }),
       });
       const body = (await res.json().catch(() => ({}))) as ThemeAnswer & { error?: string };
       if (!res.ok) {
+        // Theme Builder's behaviour: a failed turn is taken back out, so the
+        // history never carries a question nobody answered, and the prompt goes
+        // back in the box to retry.
+        setMessages(before);
+        setPrompt(request);
         setAiNote(body.message ?? `Unavailable (${res.status}).`);
         return;
       }
 
       const { next, effect } = mergeSuggestion(state, body);
+      const message = body.message ?? "Done.";
       if (effect === "none") {
         // Nothing to apply, so nothing is applied: `update()` here would write the
         // theme module and order a rebuild to land a theme identical to the one
-        // already running. The prompt is left in the box, because the next thing
-        // the user does is edit it.
-        setAiNote(NOTHING_CHANGED_NOTE);
+        // already running. The prompt goes back in the box, because the next
+        // thing the user does is edit it.
+        setMessages([...withQuestion, { role: "assistant", content: message, tags: [], note: NOTHING_CHANGED_NOTE }]);
+        setPrompt(request);
         return;
       }
 
+      const tags = describeChanges(state, next);
       update(next);
-      const message = body.message ?? "Done.";
-      setAiNote(effect === "interactionOnly" ? `${message} ${INTERACTION_ONLY_NOTE}` : message);
-      setPrompt("");
+      setMessages([
+        ...withQuestion,
+        {
+          role: "assistant",
+          content: message,
+          tags,
+          ...(effect === "interactionOnly" ? { note: INTERACTION_ONLY_NOTE } : {}),
+        },
+      ]);
     } catch (err) {
       reportError(err, "theme-ai");
+      setMessages(before);
+      setPrompt(request);
       setAiNote("Couldn’t reach the styling assistant.");
     } finally {
       setThinking(false);
     }
   }
+
+  function clearChat() {
+    setMessages([]);
+    setAiNote(null);
+  }
+
+  // Keep the newest message in view, as the Ask AI panel does.
+  useEffect(() => {
+    if (tab === "ai") chatEndRef.current?.scrollIntoView?.({ block: "end" });
+  }, [messages.length, thinking, tab]);
 
   /**
    * Set a token, and every token it is linked to.
@@ -637,6 +764,57 @@ export function StylePanel({
     </>
   );
 
+  /** Wide when pinned wide, otherwise whenever a component's sub-panel is open —
+   *  the moment Theme Builder's own panel grows its second column. */
+  const expanded = expandedPin ?? component !== null;
+
+  /** The Component tab's two halves, laid out by `expanded` below. */
+  const componentList = (
+    <>
+      <p style={{ ...note, marginTop: 0 }}>
+        Per-component tokens. Pick a part of the grid to style it on its own.
+      </p>
+      <div className="hot-panel-menu">
+        {COMPONENT_SECTIONS.map((section) => {
+          const set = overrideCount(section.groups.flatMap((g) => g.tokens));
+          return (
+            <button
+              key={section.label}
+              type="button"
+              className="hot-panel-row hot-panel-menu-item"
+              // Test contract (DEV-2203): a stable accessible name. The
+              // computed name otherwise concatenates the override badge
+              // ("Header 2"), so a role query breaks the moment a token
+              // is overridden — and "Buttons" collides with "Radio
+              // Buttons" without an exact match to hang it on.
+              aria-label={section.label}
+              aria-current={component === section.label || undefined}
+              onClick={() => setComponent(section.label)}
+            >
+              <span>{section.label}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: ui.space(2) }}>
+                {set > 0 && <span style={badge}>{set}</span>}
+                <IconChevronRight size={14} style={{ color: ui.color.textMuted }} />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+  const componentDetail = COMPONENT_SECTIONS.filter((s) => s.label === component).map((section) => (
+    <div key={section.label} data-component-detail={section.label}>
+      <div style={sectionTitle}>{section.label}</div>
+      {section.description && <p style={{ ...note, marginTop: 0 }}>{section.description}</p>}
+      {section.groups.map((group) => (
+        <div key={group.label}>
+          {group.label && <div style={subGroup}>{group.label}</div>}
+          {group.tokens.map(tokenRow)}
+        </div>
+      ))}
+    </div>
+  ));
+
   /** Pinned under the scroll body by `Drawer` — the panel's own actions, plus
    *  whatever the last apply had to say about it. */
   const footer = (
@@ -646,9 +824,29 @@ export function StylePanel({
         <button type="button" className="hot-btn-ghost" onClick={() => setShowCode((v) => !v)}>
           {showCode ? "Hide code" : "Copy for my app"}
         </button>
-        <button type="button" className="hot-btn-ghost" onClick={reset} disabled={pristine}>
-          Reset
-        </button>
+        {confirmReset ? (
+          <>
+            <button
+              type="button"
+              className="hot-btn-ghost"
+              onClick={() => { setConfirmReset(false); reset(); }}
+            >
+              Reset the theme
+            </button>
+            <button type="button" className="hot-btn-ghost" onClick={() => setConfirmReset(false)}>
+              Keep it
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="hot-btn-ghost"
+            onClick={() => setConfirmReset(true)}
+            disabled={pristine}
+          >
+            Reset
+          </button>
+        )}
         {/* `textMuted`, not `success`. The literal `#1a8f5a` this replaced was a
             colour no token carries, and the obvious swap is wrong: `success`
             (#37bc6c) lands at ~2.3:1 on light `surfaceMuted`, worse than the
@@ -676,12 +874,39 @@ export function StylePanel({
 
   return (
     <Drawer
-      title="Style"
+      title="Theme builder"
       icon={<IconPalette size={18} />}
-      label="Style this demo"
+      label="Theme builder for this demo"
       onClose={onClose}
+      width={expanded ? EXPANDED_WIDTH : DRAWER_WIDTH}
+      headerActions={
+        <>
+        {link && (
+          <button
+            type="button"
+            className="hot-icon-btn"
+            onClick={() => void copyLink()}
+            aria-label="Copy a link to this demo with the Theme builder open"
+            title="Copy link"
+            data-theme-builder-link
+          >
+            <IconShare size={18} />
+          </button>
+        )}
+        <button
+          type="button"
+          className="hot-icon-btn"
+          onClick={() => setExpandedPin(!expanded)}
+          aria-pressed={expanded}
+          aria-label={expanded ? "Narrow the theme builder" : "Widen the theme builder"}
+          title={expanded ? "Narrow" : "Widen"}
+        >
+          {expanded ? <IconWindowMinimize size={18} /> : <IconWindowMaximize size={18} />}
+        </button>
+        </>
+      }
       subheader={
-        <nav className="hot-style-tabs" role="tablist" aria-label="Style panel sections">
+        <nav className="hot-style-tabs" role="tablist" aria-label="Theme builder sections">
           {([
             ["foundation", "Foundation"],
             ["common", "Common"],
@@ -709,14 +934,23 @@ export function StylePanel({
       {/* Top padding here, not on the notice: with the notice dismissed the first
           section otherwise starts flush against the tab strip's rule. */}
       <div style={{ paddingTop: ui.space(3) }}>
+        {linkNote && (
+          <div className="hot-panel-note" role="status" data-theme-builder-link-note>
+            <p style={{ overflowWrap: "anywhere" }}>{linkNote}</p>
+            <button
+              type="button"
+              className="hot-icon-btn hot-panel-note-close"
+              aria-label="Dismiss this note"
+              onClick={() => setLinkNote(null)}
+            >
+              <IconX size={16} />
+            </button>
+          </div>
+        )}
         {!introDismissed && (
           <div className="hot-panel-note" role="note">
             <p>
-              The same theme controls as{" "}
-              <a href="https://theme-builder.handsontable.com/" target="_blank" rel="noreferrer" style={{ color: ui.color.accentText }}>
-                Theme Builder
-              </a>
-              , applied to the example you have open. The theme is written into the demo as{" "}
+              Theme Builder&rsquo;s controls and chat, applied to the example you have open. The theme is written into the demo as{" "}
               <code style={code}>{themeModulePath(getFiles())}</code> and handed to the grid, so it
               travels with a download or a share.
             </p>
@@ -732,18 +966,55 @@ export function StylePanel({
         )}
 
         {tab === "ai" && (
-        <Section title="Describe a style">
-          <p style={{ ...note, marginTop: 0, marginBottom: 0 }}>
-            Describe the style in the box below — it sets the whole theme at once: presets,
-            ramps and tokens. Everything it sets shows up in the other tabs, where you can
-            nudge it by hand.
-          </p>
-          {aiNote && <div style={sectionNote}>{aiNote}</div>}
-          {thinking && <div style={sectionNote}>Styling…</div>}
-          {/* The footer's apply notes, which this tab replaced with the composer. */}
-          {applyNotes}
-          {applied && <p style={{ ...note, marginTop: 0, marginBottom: 0 }}>Applied to the preview</p>}
-        </Section>
+          <div className="hot-chat-list" style={{ padding: BODY_PAD }} data-theme-chat>
+            {messages.length === 0 && (
+              <div>
+                <h3 className="hot-chat-welcome-title">Style it in your own words</h3>
+                <p className="hot-chat-welcome-text">
+                  Describe a look and the whole theme follows — presets, ramps and tokens. Keep
+                  talking to refine it (&ldquo;darker&rdquo;, &ldquo;now the header too&rdquo;);
+                  everything it sets shows up in the other tabs, where you can nudge it by hand.
+                </p>
+                <div className="hot-panel-menu">
+                  {CHAT_SUGGESTIONS.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      className="hot-panel-suggestion hot-panel-menu-item"
+                      style={{ opacity: thinking ? 0.5 : 1 }}
+                      disabled={thinking}
+                      onClick={() => void describe(suggestion)}
+                    >
+                      <span>{suggestion}</span>
+                      <span className="hot-chat-arrow" aria-hidden="true">→</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {messages.map((m, i) => (
+              <div key={i} className={m.role === "user" ? "hot-chat-bubble" : "hot-chat-answer"}>
+                {m.role === "user" ? m.content : <p style={{ margin: 0 }}>{m.content}</p>}
+                {m.note && <p style={{ ...note, margin: `${ui.space(1)} 0 0` }}>{m.note}</p>}
+                {m.tags && m.tags.length > 0 && (
+                  <div style={tagRow} aria-label="What changed">
+                    {m.tags.map((t) => <span key={t} style={changeTag}>{t}</span>)}
+                  </div>
+                )}
+              </div>
+            ))}
+            {thinking && <div className="hot-chat-answer hot-chat-muted">Styling…</div>}
+            {aiNote && <div style={sectionNote} role="status">{aiNote}</div>}
+            {/* The footer's apply notes, which this tab replaced with the composer. */}
+            {applyNotes}
+            {messages.length > 0 && !thinking && (
+              <button type="button" className="hot-btn-ghost" style={{ alignSelf: "flex-start" }} onClick={clearChat}>
+                Clear conversation
+              </button>
+            )}
+            <div ref={chatEndRef} />
+          </div>
         )}
 
         {/* Which version's defaults are on screen (DEV-2560). Only shown once the
@@ -762,6 +1033,18 @@ export function StylePanel({
         )}
 
         {tab === "foundation" && (<>
+        {/* Theme Builder's "Learn more" cards — where a theme goes after the
+            demo: the design system in Figma, and the API it is written in. */}
+        <p style={{ ...note, padding: `0 ${ui.space(6)}` }} data-theme-learn-more>
+          Learn more:{" "}
+          <a href="https://handsontable.com/docs/javascript-data-grid/theme-customization/" target="_blank" rel="noreferrer">
+            Theme customization docs
+          </a>
+          {" · "}
+          <a href="https://www.figma.com/community/file/1487445656371116081" target="_blank" rel="noreferrer">
+            Figma design system
+          </a>
+        </p>
         <Section title="Token mapping">
           {/* Tiles, not a dropdown: the three token presets differ in how the
               grid *looks*, which a thumbnail conveys and the word "horizon"
@@ -961,59 +1244,27 @@ export function StylePanel({
         )}
 
         {tab === "component" && (
-          component === null ? (
-            /* The component list. A flat list of 243 tokens would be unusable, so
-               picking a component opens its own sub-panel — theme-builder's second
-               column, stacked instead of side-by-side because 420px has no room
-               for two. */
-            <div style={{ padding: BODY_PAD }}>
-              <p style={{ ...note, marginTop: 0 }}>
-                Per-component tokens. Pick a part of the grid to style it on its own.
-              </p>
-              <div className="hot-panel-menu">
-              {COMPONENT_SECTIONS.map((section) => {
-                const set = overrideCount(section.groups.flatMap((g) => g.tokens));
-                return (
-                  <button
-                    key={section.label}
-                    type="button"
-                    className="hot-panel-row hot-panel-menu-item"
-                    // Test contract (DEV-2203): a stable accessible name. The
-                    // computed name otherwise concatenates the override badge
-                    // ("Header 2"), so a role query breaks the moment a token
-                    // is overridden — and "Buttons" collides with "Radio
-                    // Buttons" without an exact match to hang it on.
-                    aria-label={section.label}
-                    onClick={() => setComponent(section.label)}
-                  >
-                    <span>{section.label}</span>
-                    <span style={{ display: "flex", alignItems: "center", gap: ui.space(2) }}>
-                      {set > 0 && <span style={badge}>{set}</span>}
-                      <IconChevronRight size={14} style={{ color: ui.color.textMuted }} />
-                    </span>
-                  </button>
-                );
-              })}
+          // Wide, the list and the selected component sit side by side — Theme
+          // Builder's second column (DEV-4070). Narrow, they stack: the list,
+          // then the sub-panel with a way back.
+          expanded ? (
+            <div style={{ display: "grid", gridTemplateColumns: "220px minmax(0, 1fr)", gap: ui.space(4), padding: BODY_PAD }}>
+              <div>{componentList}</div>
+              <div>
+                {component === null
+                  ? <p style={{ ...note, marginTop: 0 }}>Pick a component on the left to style it.</p>
+                  : componentDetail}
               </div>
             </div>
+          ) : component === null ? (
+            <div style={{ padding: BODY_PAD }}>{componentList}</div>
           ) : (
             <div style={{ padding: BODY_PAD }}>
               <button type="button" style={backBtn} onClick={() => setComponent(null)}>
                 <IconChevronLeft size={14} />
                 All components
               </button>
-              {COMPONENT_SECTIONS.filter((s) => s.label === component).map((section) => (
-                <div key={section.label}>
-                  <div style={sectionTitle}>{section.label}</div>
-                  {section.description && <p style={{ ...note, marginTop: 0 }}>{section.description}</p>}
-                  {section.groups.map((group) => (
-                    <div key={group.label}>
-                      {group.label && <div style={subGroup}>{group.label}</div>}
-                      {group.tokens.map(tokenRow)}
-                    </div>
-                  ))}
-                </div>
-              ))}
+              {componentDetail}
             </div>
           )
         )}
@@ -1304,9 +1555,12 @@ export function StyleButton({ open, onToggle, disabled = false, disabledReason }
         aria-pressed={open}
         aria-disabled={disabled || undefined}
         aria-describedby={show ? "style-hint" : undefined}
+        // The name is set here because the label hides on a phone-width top bar,
+        // where "Theme builder" alone pushed the cluster past the window.
+        aria-label="Theme builder"
       >
         <IconPalette />
-        Style
+        <span className="hot-style-btn-label">Theme builder</span>
       </button>
 
       {show && (
@@ -1318,12 +1572,12 @@ export function StyleButton({ open, onToggle, disabled = false, disabledReason }
             </>
           ) : (
             <>
-              <strong>Restyle this example</strong>
+              <strong>Theme builder</strong>
               <span className="hot-cta-tooltip-intro">
-                Everything Theme Builder does, applied to the demo you have open.
+                Restyle the demo you have open — by hand, or by chatting about the look you want.
               </span>
               <span className="hot-cta-tooltip-item">272 tokens — colours, sizes, typography, per component</span>
-              <span className="hot-cta-tooltip-item">“Retro amber terminal” — describe it and the grid becomes it</span>
+              <span className="hot-cta-tooltip-item">“Retro amber terminal”, then “darker” — style it in a conversation</span>
               <span className="hot-cta-tooltip-item">Presets, brand ramp, light/dark and density</span>
               <span className="hot-cta-tooltip-note">
                 Written into the demo as a real module, so it survives Download and Share — and
@@ -1444,6 +1698,16 @@ const backBtn: React.CSSProperties = {
   cursor: "pointer", padding: `${ui.space(2)} 0`, fontFamily: ui.font.ui,
 };
 const subGroup: React.CSSProperties = { ...headerLabel, display: "block", margin: `${ui.space(3)} 0 ${ui.space(2)}` };
+/** The change tags under a chat answer (DEV-4070). */
+const tagRow: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: ui.space(1), marginTop: ui.space(2) };
+const changeTag: React.CSSProperties = {
+  ...ui.type.small,
+  padding: `0 ${ui.space(2)}`,
+  borderRadius: ui.radius.md,
+  border: `1px solid ${ui.color.controlBorder}`,
+  color: ui.color.textMuted,
+};
+
 const note: React.CSSProperties = { ...ui.type.base, color: ui.color.textMuted, margin: `0 0 ${ui.space(3)}` };
 /** `localStorage` key remembering that the intro notice was dismissed. The
  *  notice itself is `.hot-panel-note` in panels.css. */

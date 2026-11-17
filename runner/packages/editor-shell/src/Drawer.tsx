@@ -53,6 +53,9 @@ export interface DrawerProps {
    *  `surfaceMuted` band. */
   footerStyle?: CSSProperties;
   width?: number;
+  /** Extra buttons in the title row, left of ✕ — the Theme builder's
+   *  expand/collapse toggle (DEV-4070). */
+  headerActions?: ReactNode;
 }
 
 export function Drawer({
@@ -65,6 +68,7 @@ export function Drawer({
   footer,
   footerStyle,
   width = DRAWER_WIDTH,
+  headerActions,
 }: DrawerProps) {
   const panelRef = useRef<HTMLElement | null>(null);
 
@@ -140,6 +144,7 @@ export function Drawer({
           {icon}
           {title}
         </h2>
+        {headerActions}
         <button
           type="button"
           className="hot-icon-btn hot-drawer-close"
@@ -187,10 +192,10 @@ export function Drawer({
 //  * `.hot-drawer-close` sets no background: it would outrank
 //    `.hot-icon-btn:hover` (ADR-0026).
 const DRAWER_CSS = `
-.hot-drawer{position:fixed;top:${s.topBar.height}px;right:0;height:calc(100% - ${s.topBar.height}px);max-width:95vw;z-index:900;display:flex;flex-direction:column;border-left:1px solid ${theme.color.controlBorder};background:${theme.color.surfaceRaised};box-shadow:${theme.shadow.panel};color:${theme.color.text};font-family:${theme.font.ui};transition:transform 0.2s ease;transform:translateX(100%)}
+.hot-drawer{position:fixed;top:${s.topBar.height}px;right:0;height:calc(100% - ${s.topBar.height}px);max-width:95vw;z-index:900;display:flex;flex-direction:column;border-left:1px solid ${theme.color.controlBorder};background:${theme.color.surfaceRaised};box-shadow:${theme.shadow.panel};color:${theme.color.text};font-family:${theme.font.ui};transition:transform 0.2s ease,width 0.2s ease;transform:translateX(100%)}
 .hot-drawer[data-entered]{transform:translateX(0)}
 .hot-drawer-header{display:flex;align-items:center;justify-content:space-between;gap:${theme.space(3)};flex:0 0 auto;padding:${theme.space(3)} ${theme.space(6)};border-bottom:1px solid ${theme.color.controlBorder}}
-.hot-drawer-title{display:flex;align-items:center;gap:${theme.space(2)};margin:0;font-size:${theme.type.base.fontSize}px;line-height:${theme.type.base.lineHeight};font-weight:600;color:${theme.color.text}}
+.hot-drawer-title{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:${theme.space(2)};margin:0;font-size:${theme.type.base.fontSize}px;line-height:${theme.type.base.lineHeight};font-weight:600;color:${theme.color.text}}
 .hot-drawer-close{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex:0 0 auto;margin-right:-4px;padding:0;border:none;border-radius:${theme.radius.md};color:${theme.color.textMuted};cursor:pointer}
 .hot-drawer-body{flex:1;min-height:0;overflow-y:auto}
 .hot-drawer-foot{flex:0 0 auto;padding:${theme.space(3)} ${theme.space(6)};border-top:1px solid ${theme.color.controlBorder};background:${theme.color.surfaceMuted}}
