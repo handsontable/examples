@@ -239,11 +239,14 @@ function embeddedStateLine(state: ThemeState): string {
   return `${STATE_MARKER}${json}`;
 }
 
-/** The worker's rule for a CSS value (`theme-ai.ts`), plus no `url(`: a value
- *  read from a shared module reaches swatch styles on the app's own origin. */
+/** The worker's rule for a CSS value (`theme-ai.ts`), plus no function that
+ *  fetches (`url(`, `image-set(`, `-webkit-image-set(`, `image(`, `cross-fade(`,
+ *  `src(`, `element(`): a value read from a shared module reaches swatch styles
+ *  on the app's own origin. */
 const CSS_VALUE = /^[a-zA-Z0-9\s#(),./_%+\-'"]+$/;
+const FETCHING_FN = /\b(?:url|image-set|image|cross-fade|src|element)\s*\(/i;
 const isCssValue = (v: unknown): v is string =>
-  typeof v === "string" && v.length <= 200 && CSS_VALUE.test(v) && !/url\s*\(/i.test(v);
+  typeof v === "string" && v.length <= 200 && CSS_VALUE.test(v) && !FETCHING_FN.test(v);
 const isTokenValue = (v: unknown): v is TokenValue =>
   isCssValue(v) || (Array.isArray(v) && v.length <= 20 && v.every(isCssValue));
 

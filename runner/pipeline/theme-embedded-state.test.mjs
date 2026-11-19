@@ -124,12 +124,14 @@ test("palette and token keys outside the catalogue, and unsafe values, are not a
       read({ ...base, palette: { "primary.500": "red; background: blue" } }),
       read({ ...base, params: { notAToken: "red" } }),
       read({ ...base, params: { fontFamily: "url(//x/f)" } }),
+      read({ ...base, palette: { "primary.500": 'image-set("//x.example/p" 1x)' } }),
+      read({ ...base, palette: { "primary.500": '-webkit-image-set("//x.example/p" 1x)' } }),
       read({ ...base, densitySizes: { compact: { notASize: "2px" } } }),
       read({ ...base, palette: { "primary.500": "#0b5d1e", white: "#fff" }, params: { fontFamily: "Inter" } }) !== null,
       ({}).polluted === undefined,
     ];
   `);
-  assert.deepEqual(out, [null, null, null, null, null, null, true, true]);
+  assert.deepEqual(out, [null, null, null, null, null, null, null, null, true, true]);
 });
 
 test("building a module from a crafted palette key does not touch Object.prototype", () => {

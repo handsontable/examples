@@ -969,7 +969,7 @@ export function StylePanel({
         {link && (
           <button
             type="button"
-            className="hot-icon-btn"
+            className="hot-icon-btn hot-drawer-action"
             onClick={() => void copyLink()}
             aria-label="Copy a link to this demo with the Theme builder open"
             title="Copy link"
@@ -980,7 +980,7 @@ export function StylePanel({
         )}
         <button
           type="button"
-          className="hot-icon-btn"
+          className="hot-icon-btn hot-drawer-action"
           onClick={() => setExpandedPin(!expanded)}
           aria-pressed={expanded}
           aria-label={expanded ? "Narrow the theme builder" : "Widen the theme builder"}
