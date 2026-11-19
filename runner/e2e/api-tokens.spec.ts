@@ -297,7 +297,7 @@ test.describe("/api-tokens", () => {
     // `exact` on both: role-name matching is substring by default, and the file
     // tree's `styles.css` button matches a bare "Style".
     await expect(page.getByRole("button", { name: "Ask AI", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Style", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Theme builder", exact: true })).toHaveCount(0);
   });
 
   test("a token session gets an explanation here, not controls that would 403", async ({ page }) => {
@@ -352,7 +352,7 @@ test.describe("/api-tokens", () => {
 
     await expect(page.getByRole("button", { name: `Account: ${EMAIL}` })).toBeVisible();
     await expect(page.getByRole("button", { name: "Ask AI", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Style", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Theme builder", exact: true })).toBeVisible();
   });
 
   test("an anonymous visitor is sent to the broker with /api-tokens preserved", async ({ page }) => {

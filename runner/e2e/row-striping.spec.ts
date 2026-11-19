@@ -290,8 +290,8 @@ for (const example of EXAMPLES) {
       );
       await expect(cell(page)).toBeVisible({ timeout: 120_000 });
 
-      const drawer = page.locator('aside[aria-label="Style this demo"]');
-      await page.getByRole("button", { name: "Style", exact: true }).click();
+      const drawer = page.locator('aside[aria-label="Theme builder for this demo"]');
+      await page.getByRole("button", { name: "Theme builder", exact: true }).click();
       await expect(drawer).toBeVisible();
 
       const panel: Partial<Record<"dark" | "light", Reading>> = {};

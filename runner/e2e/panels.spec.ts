@@ -11,7 +11,7 @@ import { abortSandpackHosts } from "./helpers";
 // in a picture — the first one shipped for a whole release cycle. Read the values.
 
 const CHAT = 'aside[aria-label="Ask about this example"]';
-const STYLE = 'aside[aria-label="Style this demo"]';
+const STYLE = 'aside[aria-label="Theme builder for this demo"]';
 // The hover CTA both toolbar buttons raise — one treatment, one class.
 const HINT = ".hot-cta-tooltip";
 
@@ -22,7 +22,7 @@ async function openPlayground(page: Page, mode: "light" | "dark") {
   );
   await abortSandpackHosts(page);
   await page.goto("/?example=react");
-  await expect(page.getByRole("button", { name: "Style", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Theme builder", exact: true })).toBeVisible();
   // The pre-paint script reads storage, so the attribute is already right; assert
   // it rather than setting it, or every colour below is measured in the wrong mode.
   await expect(page.locator("html")).toHaveAttribute("data-hot-theme", mode);
@@ -101,7 +101,7 @@ test.describe("drawer chrome", () => {
     const chat = await page.locator(CHAT).evaluate((el) => (el as HTMLElement).offsetWidth);
     await page.locator(CHAT).getByRole("button", { name: /^Close/ }).click();
 
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
     const style = await page.locator(STYLE).evaluate((el) => (el as HTMLElement).offsetWidth);
 
     expect(chat).toBe(style);
@@ -115,7 +115,7 @@ test.describe("drawer chrome", () => {
     await page.getByRole("button", { name: "Ask AI", exact: true }).click();
     await expect(page.locator(CHAT)).toBeVisible();
 
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
     await expect(page.locator(STYLE)).toBeVisible();
     await expect(page.locator(CHAT)).toHaveCount(0);
   });
@@ -123,7 +123,7 @@ test.describe("drawer chrome", () => {
   test("swapping drawers leaves focus on the trigger that was clicked", async ({ page }) => {
     await openPlayground(page, "light");
     const askAi = page.getByRole("button", { name: "Ask AI", exact: true });
-    const style = page.getByRole("button", { name: "Style", exact: true });
+    const style = page.getByRole("button", { name: "Theme builder", exact: true });
 
     await askAi.click();
     await style.click();
@@ -175,7 +175,7 @@ test.describe("drawer chrome", () => {
   // the top bar's right-hand cluster, and no ancestor scrolls, so the overflow
   // is simply cut off by the viewport. Measured, not screenshotted: a clipped
   // panel and a narrow one look the same in a picture.
-  for (const trigger of ["Ask AI", "Style"]) {
+  for (const trigger of ["Ask AI", "Theme builder"]) {
     test(`the ${trigger} tooltip stays inside the viewport`, async ({ page }) => {
       await openPlayground(page, "light");
       await page.getByRole("button", { name: trigger, exact: true }).hover();
@@ -203,7 +203,7 @@ test.describe("drawer chrome", () => {
   test("a window narrower than the tooltip shrinks it instead of clipping it", async ({ page }) => {
     await openPlayground(page, "light");
     await page.setViewportSize({ width: 320, height: 720 });
-    await page.getByRole("button", { name: "Style", exact: true }).hover();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).hover();
 
     const hint = page.locator(HINT);
     await expect(hint).toBeVisible();
@@ -260,7 +260,7 @@ test.describe("dark mode legibility", () => {
     expect(suggestion).toBeGreaterThanOrEqual(4.5);
 
     await page.locator(CHAT).getByRole("button", { name: /^Close/ }).click();
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
     // Same token, as a selected tab label and a link inside body copy.
     expect(await contrast(page, `${STYLE} [role=tab][aria-selected=true]`)).toBeGreaterThanOrEqual(4.5);
     expect(await contrast(page, `${STYLE} a`)).toBeGreaterThanOrEqual(4.5);
@@ -269,7 +269,7 @@ test.describe("dark mode legibility", () => {
   test("no control in either drawer is painted white", async ({ page }) => {
     await openPlayground(page, "dark");
 
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
     await page.locator(STYLE).getByRole("tab", { name: "Common" }).click();
     // The control every one of the 272 tokens is edited through. It rendered
     // `#ffffff` behind `#d1d1d4` text before DEV-2209 — about 1.4:1.
@@ -295,7 +295,7 @@ test.describe("dark mode legibility", () => {
 
   test("control outlines are visible against the surface they sit on", async ({ page }) => {
     await openPlayground(page, "dark");
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
 
     // The colour inputs live inside the Palette group, which starts collapsed.
     await page.locator(STYLE).getByRole("button", { name: /Palette/ }).click();
@@ -508,7 +508,7 @@ test.describe("interaction states", () => {
 
   test("panel rows have a live rollover", async ({ page }) => {
     await openPlayground(page, "dark");
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
     await page.locator(STYLE).getByRole("tab", { name: "Component" }).click();
 
     const rows = page.locator(`${STYLE} .hot-panel-row`);
@@ -525,7 +525,7 @@ test.describe("interaction states", () => {
 
   test("preset tiles keep their frame at rest and take the accent on hover", async ({ page }) => {
     await openPlayground(page, "light");
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
 
     const idle = page.locator(`${STYLE} .hot-panel-tile[data-active="false"]`).first();
     await expect(idle).toBeVisible();
@@ -549,7 +549,7 @@ test.describe("interaction states", () => {
 test.describe("behaviour survives the restyle", () => {
   test("picking a preset still writes the theme module, and Reset still removes it", async ({ page }) => {
     await openPlayground(page, "light");
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
 
     // The footer Reset, not a per-row one: the panel body grew its own in DEV-2560.
     const reset = page.locator(STYLE).locator("footer").getByRole("button", { name: "Reset", exact: true });
@@ -562,7 +562,9 @@ test.describe("behaviour survives the restyle", () => {
     await expect(page.locator(STYLE).getByText("Applied to the preview")).toBeVisible();
     await expect(reset).toBeEnabled();
 
+    // Two clicks: Reset asks first, as Theme Builder does (DEV-4070).
     await reset.click();
+    await page.locator(STYLE).locator("footer").getByRole("button", { name: "Reset the theme" }).click();
     await expect(reset).toBeDisabled();
     await expect(page.locator(`${STYLE} .hot-panel-tile[data-active="true"]`).first()).toContainText("main");
   });
@@ -574,7 +576,7 @@ test.describe("behaviour survives the restyle", () => {
     // the whole catalogue into the generated module. Node cannot render the
     // panel, so this is the assertion that actually covers it.
     await openPlayground(page, "light");
-    await page.getByRole("button", { name: "Style", exact: true }).click();
+    await page.getByRole("button", { name: "Theme builder", exact: true }).click();
 
     const panel = page.locator(STYLE);
 

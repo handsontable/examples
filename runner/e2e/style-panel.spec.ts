@@ -28,7 +28,7 @@ import { currentDocsRelease, pickFromMenu, stubShell, workspaceFiles } from "./h
 // bucket is read.
 const { version: DOCS_VERSION } = currentDocsRelease();
 
-const STYLE = 'aside[aria-label="Style this demo"]';
+const STYLE = 'aside[aria-label="Theme builder for this demo"]';
 
 const COMPONENTS = [
   "Cell", "Header", "Rows", "Buttons", "Links", "Inputs", "Checkboxes",
@@ -40,7 +40,7 @@ async function openPanel(page: Page, url = "/?example=react") {
   await stubShell(page);
   await page.route("**/api/versions/exists**", (route) => route.fulfill({ json: { exists: true } }));
   await page.goto(url);
-  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await page.getByRole("button", { name: "Theme builder", exact: true }).click();
   await expect(page.locator(STYLE)).toBeVisible();
   return page.locator(STYLE);
 }
@@ -87,10 +87,12 @@ test("all 18 components are reachable, and each opens a sub-panel with token row
   // 18 exactly — a vendored-catalogue regression (a lost component is silent).
   await expect(drawer.locator("button.hot-panel-row")).toHaveCount(COMPONENTS.length);
 
+  // At the default 1280px the panel stays narrow (DEV-4070: a wide drawer
+  // would cover the preview), so each component is a trip there and back.
   for (const name of COMPONENTS) {
     await drawer.getByRole("button", { name, exact: true }).click();
     await expect(
-      drawer.locator("span[title]").first(),
+      drawer.locator(`[data-component-detail="${name}"] span[title]`).first(),
       `the ${name} sub-panel renders at least one token row`,
     ).toBeVisible();
     await drawer.getByRole("button", { name: "All components" }).click();
@@ -303,6 +305,7 @@ for (const shape of [
     }).toPass();
 
     await drawer.getByRole("button", { name: "Reset", exact: true }).click();
+    await drawer.getByRole("button", { name: "Reset the theme" }).click();
 
     await expect(async () => {
       const after = await workspaceFiles(page);
@@ -331,8 +334,13 @@ test("the theme survives a reload", async ({ page }) => {
   }).toPass();
 
   await page.reload();
-  await page.getByRole("button", { name: "Style", exact: true }).click();
+  // No click: the address bar kept `?theme-builder`, so the reload reopens the
+  // panel by itself (DEV-4070) — clicking the trigger now would close it.
   drawer = page.locator(STYLE);
+  await expect(drawer).toBeVisible();
+  // On the tab it was left on: the address bar carries that too.
+  await expect(drawer.getByRole("tab", { name: "Common" })).toHaveAttribute("aria-selected", "true");
+  await drawer.getByRole("tab", { name: "Foundation" }).click();
 
   // Restored, and re-applied: on mount a non-pristine theme rebuilds the
   // module into the current demo, so the file row reappears without a touch.
@@ -393,7 +401,7 @@ test("a theme picked before the example loads lands in it after the panel is clo
   await drawer.locator("section").filter({ hasText: "Token mapping" }).first()
     .getByRole("button", { name: "horizon" }).click();
   await expect(drawer.getByText(UNRECOGNISED)).toBeVisible();
-  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await page.getByRole("button", { name: "Theme builder", exact: true }).click();
   await expect(drawer).toBeHidden();
 
   release();
@@ -413,8 +421,10 @@ test("a saved theme reopened before the example loads lands in the example", asy
 
   const release = await holdStarter(page);
   await page.reload();
-  await page.getByRole("button", { name: "Style", exact: true }).click();
+  // No click: the address bar kept `?theme-builder`, so the reload reopens the
+  // panel by itself (DEV-4070) — clicking the trigger now would close it.
   drawer = page.locator(STYLE);
+  await expect(drawer).toBeVisible();
   // Precondition: the mount reconcile ran against the placeholder.
   await expect(drawer.getByText(UNRECOGNISED)).toBeVisible();
 
@@ -546,7 +556,7 @@ async function openPanelAtVersions(page: Page, url: string, versions: string[]) 
     route.fulfill({ json: { latest: "18.0.0", next: "19.0.0-next.1", versions } }));
   await page.route("**/api/versions/exists**", (route) => route.fulfill({ json: { exists: true } }));
   await page.goto(url);
-  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await page.getByRole("button", { name: "Theme builder", exact: true }).click();
   await expect(page.locator(STYLE)).toBeVisible();
   return page.locator(STYLE);
 }
@@ -576,7 +586,7 @@ test("a downgrade below the theme API takes the theme module back out", async ({
   // with the panel closed — which is also the honest flow: nobody switches core
   // versions from inside the Style panel. Closing it flushes the panel's pending
   // quiet writes, so the theme is fully landed before the downgrade.
-  await page.getByRole("button", { name: "Style", exact: true }).click();
+  await page.getByRole("button", { name: "Theme builder", exact: true }).click();
   await expect(page.locator(STYLE)).toBeHidden();
   // The drawer hands focus back to its trigger as it unmounts, and the trigger
   // shows its tooltip on focus — a wide one, which then covers the version pill.
@@ -613,7 +623,7 @@ test("a downgrade below the theme API takes the theme module back out", async ({
   await expect(page.locator('span[title*="the custom theme was removed from this demo"]')).toBeVisible();
 
   // And the button says why it can no longer be opened.
-  await expect(page.getByRole("button", { name: "Style", exact: true }))
+  await expect(page.getByRole("button", { name: "Theme builder", exact: true }))
     .toHaveAttribute("aria-disabled", "true");
 });
 
@@ -629,7 +639,7 @@ test("a bare major deep link cannot open the Style panel", async ({ page }) => {
   // `aria-disabled` rather than `disabled`: the button stays focusable so its
   // tooltip is reachable by keyboard. Playwright reads it as not enabled, which
   // is the assertion — a click cannot be dispatched at all.
-  const style = page.getByRole("button", { name: "Style", exact: true });
+  const style = page.getByRole("button", { name: "Theme builder", exact: true });
   await expect(style).toHaveAttribute("aria-disabled", "true");
   await expect(style).toBeDisabled();
   await expect(page.locator(STYLE)).toBeHidden();
@@ -644,7 +654,7 @@ test("a version the validator refuses cannot open the Style panel either", async
   await stubShell(page);
   await page.goto("/?example=react&v=14.0.0");
 
-  const style = page.getByRole("button", { name: "Style", exact: true });
+  const style = page.getByRole("button", { name: "Theme builder", exact: true });
   await expect(style).toHaveAttribute("aria-disabled", "true");
   await expect(style).toBeDisabled();
   await expect(page.locator(STYLE)).toBeHidden();
@@ -694,7 +704,7 @@ test("an unusable version leaves a wired theme alone", async ({ page }) => {
   await page.goto("/?payload=thm16at0002&v=latest");
 
   // The Style button is still refused — that half is right.
-  await expect(page.getByRole("button", { name: "Style", exact: true }))
+  await expect(page.getByRole("button", { name: "Theme builder", exact: true }))
     .toHaveAttribute("aria-disabled", "true");
 
   // The files are untouched. Polled, so this cannot pass by reading the workspace
@@ -727,7 +737,7 @@ test("a workspace that arrives themed on a sub-17 pin is repaired on load", asyn
   }).toPass();
 
   await expect(page.locator('span[title*="the custom theme was removed from this demo"]')).toBeVisible();
-  await expect(page.getByRole("button", { name: "Style", exact: true }))
+  await expect(page.getByRole("button", { name: "Theme builder", exact: true }))
     .toHaveAttribute("aria-disabled", "true");
 
   // The notice is about the workspace that just lost its theme, so it must not
