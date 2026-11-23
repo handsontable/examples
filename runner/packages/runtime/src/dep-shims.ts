@@ -58,7 +58,7 @@ const CDN = "https://unpkg.com";
 // that use the blocking constructs are shadowed, so the rest of the package stays the
 // packager's copy. Stable releases up to HOT_LAST_KNOWN_GOOD are verified clean; anything newer
 // or any prerelease is scanned, because `develop` reaches a stable release eventually.
-const HOT_LAST_KNOWN_GOOD = [18, 1, 2] as const;
+const HOT_LAST_KNOWN_GOOD = [18, 1, 3] as const;
 const HOT_BLOCKING_SYNTAX = /(?:\?\?|\|\||&&)=|\(\?<[=!A-Za-z_$]/;
 const REGISTRY = "https://registry.npmjs.org";
 
