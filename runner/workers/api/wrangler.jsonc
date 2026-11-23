@@ -11,18 +11,20 @@
   // requests log nothing, and every other request emits exactly one
   // structured line rather than the platform's per-invocation logging. Loki
   // keeps 90 days of the exported stream (contract §E.4); Sentry, not
-  // Workers Logs, stays the fault channel. Traces sample at 1% into
-  // Cloudflare's dashboard only — no `destinations` (ADR §C.4 exports none).
+  // Workers Logs, stays the fault channel. Nothing is stored in Cloudflare
+  // (`persist: false`): logs reach Loki only. Traces stay enabled at 1% so
+  // the active span's trace id lands on `api.request`; they have no
+  // `destinations` (ADR §C.4 exports none).
   "observability": {
     "enabled": true,
     "logs": {
       "enabled": true,
       "head_sampling_rate": 1.0,
       "invocation_logs": false,
-      "persist": true,
+      "persist": false,
       "destinations": ["o11y-logs"]
     },
-    "traces": { "enabled": true, "head_sampling_rate": 0.01, "persist": true }
+    "traces": { "enabled": true, "head_sampling_rate": 0.01, "persist": false }
   },
 
   // Backstop for a runaway Worker invocation (default is 30s on Paid; stated

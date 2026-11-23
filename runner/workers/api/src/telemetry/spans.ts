@@ -11,7 +11,8 @@
 //
 // Traces are never exported to a destination (contract §1: "There is no trace
 // route"; `wrangler.jsonc`'s `observability.traces` sets no `destinations`) —
-// this only feeds Cloudflare's own 1%-sampled dashboard view (ADR §F.2).
+// and `persist` is false, so no span is stored either. The spans exist so
+// `spanContext()` returns a real trace id for the `api.request` line (ADR §C.4).
 
 import { traceIdOf } from "./trace-id.js";
 

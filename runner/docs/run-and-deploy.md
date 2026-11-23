@@ -1227,8 +1227,10 @@ walkthrough already showed.
    this contract exposes to a per-object cost), then read the SAME drain alarm's own
    CPU time from the Cloudflare dashboard's Workers → Observability → Logs view for the
    `handsontable-demos-o11y` worker (per-invocation CPU time is a supported field
-   there; `wrangler tail` does not report it). Record that CPU figure against the 500 ms
-   budget. **Peak isolate memory has no supported per-invocation reading anywhere in
+   there; `wrangler tail` does not report it). **Historical once the o11y worker's
+   `observability.logs.persist` is `false` (DEV-3096): that view then holds no new
+   lines, so repeating this step needs `persist` set back to `true` for the probe.**
+   Record that CPU figure against the 500 ms budget. **Peak isolate memory has no supported per-invocation reading anywhere in
    this stack** (dashboard or `wrangler tail`) — record the 64 MB half of this
    criterion as "no exceeded-memory/OOM outcome observed for the probe object," not as
    a measured figure, and say so explicitly in §L "Results" rather than implying a
@@ -1296,6 +1298,8 @@ table's rows for spurious `fp:` entries from an unrelated Tier-2 SSR authored
 
 - **Drop the export destinations** (Workers Logs → o11y ingest) if the o11y stack itself is
   the problem — this stops new data from reaching Loki/the inbox without touching the app.
+  With `persist: false` (DEV-3096) the API worker's lines then have no sink at all, so set
+  `observability.logs.persist` back to `true` in the same deploy if you still need them.
   **Caveat, unverified:** whether `wrangler deploy` rejects `workers/api/wrangler.jsonc`'s
   `observability.logs.destinations` once it still names `o11y-logs` but that destination is
   gone has not been checked — remove that entry from `wrangler.jsonc` before, or together
