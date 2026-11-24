@@ -10,10 +10,10 @@ importers:
     dependencies:
       '@handsontable/react-wrapper':
         specifier: latest
-        version: 18.1.0(handsontable@18.1.0)
+        version: 18.1.3(handsontable@18.1.3)
       handsontable:
         specifier: latest
-        version: 18.1.0
+        version: 18.1.3
       react:
         specifier: 19.2.7
         version: 19.2.7
@@ -30,8 +30,8 @@ importers:
 
 packages:
 
-  '@handsontable/react-wrapper@18.1.0':
-    resolution: {integrity: sha512-yCwjgroeP9vYE76ZjjtM/I2fHb6m0L1jYbWUHnbx7jP4PgBBI65DynaH1ou0Mm+bPojrJWcRU4zM2B4M7gOeFQ==}
+  '@handsontable/react-wrapper@18.1.3':
+    resolution: {integrity: sha512-1zepL4KUFmY6Cxkt/Djb30GpH6GlEJjnj4tUkYnPxFs1deQEQnNkSHY3FlwShbDrD+24DLSxAZXoqdUe/RsJrw==}
     peerDependencies:
       handsontable: ^18.0.0
 
@@ -168,8 +168,8 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
-  handsontable@18.1.0:
-    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
+  handsontable@18.1.3:
+    resolution: {integrity: sha512-Ipnr8T9hETDu8yLX45pfenCK5trJIMF1dWt1x/UaNQXj06umrPs0H19aKZeE8EgOrp329F5RG0Bidmd2EKtnAg==}
 
   lightningcss-android-arm64@1.33.0:
     resolution: {integrity: sha512-gEpRTalKdosp4Bb8qWtc2iOgE5SeIHlpS1up9bFq2wAyYhl1UdTObYiHe98zEM9SQvSoqQZ1IQD0JNpg3Ml5pg==}
@@ -331,9 +331,9 @@ packages:
 
 snapshots:
 
-  '@handsontable/react-wrapper@18.1.0(handsontable@18.1.0)':
+  '@handsontable/react-wrapper@18.1.3(handsontable@18.1.3)':
     dependencies:
-      handsontable: 18.1.0
+      handsontable: 18.1.3
 
   '@oxc-project/types@0.156.0': {}
 
@@ -398,7 +398,7 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
-  handsontable@18.1.0: {}
+  handsontable@18.1.3: {}
 
   lightningcss-android-arm64@1.33.0:
     optional: true
