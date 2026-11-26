@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
+import { isKnownNoise } from "./helpers";
 
 // Empirical starter-compatibility matrix (DEV-2102 / ADR-0021 decision 10):
 // boots every starter in catalog.json at the latest patch of each supported
@@ -50,16 +51,6 @@ const example1NumericCells = (major: number) => [
   major >= 17 ? "87%" : "87",
 ];
 
-// Console/page noise that isn't a real compatibility break. Extend as the
-// matrix surfaces new false positives.
-const NOISE = [
-  /non-commercial|evaluation license/i,
-  /Download the React DevTools/i,
-  /favicon\.ico/i,
-  /\[vite\] (connecting|connected)/i,
-  /ERR_BLOCKED_BY_CLIENT|third-party cookie/i,
-];
-const isKnownNoise = (message: string) => NOISE.some((re) => re.test(message));
 
 let latestByMajorPromise: Promise<Map<number, string>> | null = null;
 
