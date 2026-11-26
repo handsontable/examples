@@ -592,6 +592,10 @@ export const DOCS_GUIDES: readonly (readonly [guide: string, area: string])[] = 
  [
   "guides/rows/row-selection/row-selection.md",
   "Rows"
+ ],
+ [
+  "recipes/filtering-and-search/search-as-filter/search-as-filter.md",
+  "Recipes"
  ]
 ];
 
@@ -1380,6 +1384,7 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/columns/column-header/angular/example6.ts": 36,
  "guides/columns/column-header/angular/example7.ts": 36,
  "guides/columns/column-header/angular/example8.ts": 36,
+ "guides/columns/column-header/angular/example9.ts": 36,
  "guides/columns/column-header/javascript/example1.js": 36,
  "guides/columns/column-header/javascript/example1.ts": 36,
  "guides/columns/column-header/javascript/example2.js": 36,
@@ -1396,6 +1401,8 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/columns/column-header/javascript/example7.ts": 36,
  "guides/columns/column-header/javascript/example8.js": 36,
  "guides/columns/column-header/javascript/example8.ts": 36,
+ "guides/columns/column-header/javascript/example9.js": 36,
+ "guides/columns/column-header/javascript/example9.ts": 36,
  "guides/columns/column-header/react/example1.tsx": 36,
  "guides/columns/column-header/react/example2.tsx": 36,
  "guides/columns/column-header/react/example3.tsx": 36,
@@ -1404,6 +1411,7 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/columns/column-header/react/example6.tsx": 36,
  "guides/columns/column-header/react/example7.tsx": 36,
  "guides/columns/column-header/react/example8.tsx": 36,
+ "guides/columns/column-header/react/example9.tsx": 36,
  "guides/columns/column-header/vue/example1.vue": 36,
  "guides/columns/column-header/vue/example2.vue": 36,
  "guides/columns/column-header/vue/example3.vue": 36,
@@ -1412,6 +1420,7 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "guides/columns/column-header/vue/example6.vue": 36,
  "guides/columns/column-header/vue/example7.vue": 36,
  "guides/columns/column-header/vue/example8.vue": 36,
+ "guides/columns/column-header/vue/example9.vue": 36,
  "guides/columns/column-hiding/angular/example1.ts": 37,
  "guides/columns/column-hiding/angular/example2.ts": 37,
  "guides/columns/column-hiding/angular/example3.ts": 37,
@@ -2313,6 +2322,10 @@ export const DOCS_PATH_GUIDE: Readonly<Record<string, number>> = {
  "recipes/filtering-and-search/highlight-search-matches/javascript/example1.js": 98,
  "recipes/filtering-and-search/highlight-search-matches/javascript/example1.ts": 98,
  "recipes/filtering-and-search/highlight-search-matches/react/example1.tsx": 98,
+ "recipes/filtering-and-search/search-as-filter/angular/example1.ts": 147,
+ "recipes/filtering-and-search/search-as-filter/javascript/example1.js": 147,
+ "recipes/filtering-and-search/search-as-filter/javascript/example1.ts": 147,
+ "recipes/filtering-and-search/search-as-filter/react/example1.tsx": 147,
  "recipes/filtering-search/multi-column-filter-panel/angular/example1.ts": 99,
  "recipes/filtering-search/multi-column-filter-panel/javascript/example1.js": 99,
  "recipes/filtering-search/multi-column-filter-panel/javascript/example1.ts": 99,
