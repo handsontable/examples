@@ -14,6 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { newestReleaseBucket } from "./release-bucket.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER_DIR = path.resolve(__dirname, "..");
@@ -29,8 +30,9 @@ const allFrameworks: string[] = catalog.examples.map((e: { framework: string }) 
 const tier2: string[] = catalog.examples.filter((e: { tier: number }) => e.tier === 2).map((e: { framework: string }) => e.framework);
 
 // catalog.json is the files-free index (DEV-2213); container warming posts the
-// starter's actual files, which live in the bucket snapshot.
-const WARM_BUCKET = process.env.WARM_BUCKET || "18";
+// starter's actual files, which live in the bucket snapshot. Defaults to the
+// bucket baked into the image (see prepare-container.mjs).
+const WARM_BUCKET = process.env.WARM_BUCKET || newestReleaseBucket(catalog.bucketVersions);
 const starterFiles = (framework: string): Record<string, string> =>
   JSON.parse(
     fs.readFileSync(

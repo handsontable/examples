@@ -228,6 +228,16 @@ jobs:
           node scripts/sync-authoring-pin.mjs
           pnpm install --lockfile-only
 
+      # A bucket version past HOT_LAST_KNOWN_GOOD carries files the Tier-1 bundler's babel 6
+      # cannot parse. Their transpiled copies are built here, after the known-good version has
+      # moved, and served by the app, so a default mount never downloads the registry tarball.
+      - name: Prebuild Handsontable shims
+        working-directory: runner
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @handsontable/demo-runtime build
+          node pipeline/hot-shims.mjs
+
       - name: Create or update generated-content pull request
         # Pinned to an immutable SHA (v8.1.1): this job holds contents+PR
         # write permissions, so a retargeted upstream tag must not be able to
@@ -244,8 +254,10 @@ jobs:
             The workflow imported each starter bucket from its
             `prod-examples/<major>` branch (or `master` where no branch exists),
             pinned to concrete npm Handsontable versions, then rebuilt the
-            catalog index and the baked container contexts, and kept the authoring
+            catalog index and the baked container contexts, kept the authoring
             app's handsontable pin and the runtime's last-known-good version in
-            step with the new bucket versions.
+            step with the new bucket versions, and prebuilt the Handsontable
+            shims (`apps/authoring/public/hot-shims/`) for bucket versions past
+            the last-known-good one.
           labels: automated
           reviewers: ${{ vars.AUTO_PR_REVIEWERS }}

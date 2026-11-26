@@ -9,7 +9,8 @@
 // needs one `Sandbox` namespace). At session start the Worker hardlink-copies
 // the baked node_modules into /app, then runs fast frozen pnpm reconciliation.
 //
-// Usage: node scripts/prepare-container.mjs [--seed-bucket=18] [--generated-only]
+// Usage: node scripts/prepare-container.mjs [--seed-bucket=<major>] [--generated-only]
+// (the seed defaults to the newest release bucket in catalog.json)
 //
 // `--generated-only` rewrites frameworks.generated.ts and leaves the committed
 // baked contexts + Dockerfile untouched. Adding a Tier-1 starter (e.g. the blank
@@ -35,6 +36,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { newestReleaseBucket } from "./release-bucket.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER_DIR = path.resolve(__dirname, "..");
@@ -117,16 +119,19 @@ const extraContainer = (hotVersion) => [
 const PRIME_DEV_CACHE = new Set(["next.js", "next-shadcn.js"]);
 const EXPOSE_PORTS = [...new Set(Object.values(DEV).map((d) => d.port))].sort();
 
-// The one bucket whose node_modules is baked into the image. Every other
-// bucket's pristine session seeds it and lets the frozen reconciliation fetch
-// the Handsontable delta.
-const SEED_BUCKET =
-  process.argv.find((a) => a.startsWith("--seed-bucket="))?.slice("--seed-bucket=".length) ?? "18";
 const STARTER_EXAMPLES_DIR = path.join(RUNNER_DIR, "apps", "authoring", "public", "starter-examples");
 
 // catalog.json is the files-free index; full starter artifacts (with files)
 // come from the bucket snapshots.
 const catalog = JSON.parse(fs.readFileSync(path.join(RUNNER_DIR, "catalog.json"), "utf8"));
+
+// The one bucket whose node_modules is baked into the image: the newest
+// release, which a bare visit defaults to. Every other bucket's pristine
+// session seeds it and lets the frozen reconciliation fetch the Handsontable
+// delta.
+const SEED_BUCKET =
+  process.argv.find((a) => a.startsWith("--seed-bucket="))?.slice("--seed-bucket=".length)
+  ?? newestReleaseBucket(catalog.bucketVersions);
 const loadBucketManifest = (bucket) =>
   JSON.parse(fs.readFileSync(path.join(STARTER_EXAMPLES_DIR, bucket, "manifest.json"), "utf8"));
 const loadBucketArtifact = (bucket, framework) =>
