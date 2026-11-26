@@ -105,7 +105,7 @@ export interface Env {
    *  name and dataset the o11y worker writes to. */
   RUNNER_EVENTS?: AnalyticsEngineDataset;
   /** Service binding to `handsontable-demos-o11y` — `heartbeat()` for the
-   *  watchdog cron (ADR §F.3), later `AdminReads` (ADR-0043). */
+   *  watchdog cron (ADR §F.3). */
   O11Y?: Fetcher;
   /** `service.version` (contract §2/§D): the full deploy `GITHUB_SHA`, set
    *  by the `deploy` script's `--var`. See `telemetry/resource.ts#serviceVersion`

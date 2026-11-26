@@ -139,6 +139,9 @@ export interface AeQueryEnv {
 
 export type AeRow = Record<string, string | number>;
 
+/** The SQL API answers sporadic 500s (`code 10500`) that clear within seconds, so one retry keeps a blip from paging. */
+const AE_RETRY_DELAY_MS = 1000;
+
 /**
  * Runs `sql` and returns its rows. Refuses (throws, never silently drops)
  * any query using a construct from {@link findUnsupportedAeConstructs} or a
@@ -152,10 +155,11 @@ export async function runAeQuery(
   env: AeQueryEnv,
   sql: string,
   fetchImpl: typeof fetch = fetch,
+  retryDelayMs = AE_RETRY_DELAY_MS,
 ): Promise<AeRow[]> {
   assertAllowedAeQuery(sql);
   if (env.O11Y_ENV === "local") return runLocalClickHouseQuery(env, sql, fetchImpl);
-  return runAnalyticsEngineSqlApi(env, sql, fetchImpl);
+  return runAnalyticsEngineSqlApi(env, sql, fetchImpl, retryDelayMs);
 }
 
 async function runLocalClickHouseQuery(env: AeQueryEnv, sql: string, fetchImpl: typeof fetch): Promise<AeRow[]> {
@@ -176,16 +180,28 @@ async function runLocalClickHouseQuery(env: AeQueryEnv, sql: string, fetchImpl: 
     .map((line) => JSON.parse(line) as AeRow);
 }
 
-async function runAnalyticsEngineSqlApi(env: AeQueryEnv, sql: string, fetchImpl: typeof fetch): Promise<AeRow[]> {
+async function runAnalyticsEngineSqlApi(
+  env: AeQueryEnv,
+  sql: string,
+  fetchImpl: typeof fetch,
+  retryDelayMs: number,
+): Promise<AeRow[]> {
   const url = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/analytics_engine/sql`;
-  const res = await fetchImpl(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${env.AE_SQL_TOKEN ?? ""}`,
-      "Content-Type": "text/plain",
-    },
-    body: sql,
-  });
+  const send = () =>
+    fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.AE_SQL_TOKEN ?? ""}`,
+        "Content-Type": "text/plain",
+      },
+      body: sql,
+    });
+  let res = await send();
+  if (res.status >= 500) {
+    await res.body?.cancel();
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    res = await send();
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`ae-query: Analytics Engine SQL API failed, ${res.status}: ${body.slice(0, 200)}`);

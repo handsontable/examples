@@ -58,7 +58,7 @@ const CDN = "https://unpkg.com";
 // that use the blocking constructs are shadowed, so the rest of the package stays the
 // packager's copy. Stable releases up to HOT_LAST_KNOWN_GOOD are verified clean; anything newer
 // or any prerelease is scanned, because `develop` reaches a stable release eventually.
-const HOT_LAST_KNOWN_GOOD = [18, 1, 2] as const;
+const HOT_LAST_KNOWN_GOOD = [18, 1, 3] as const;
 const HOT_BLOCKING_SYNTAX = /(?:\?\?|\|\||&&)=|\(\?<[=!A-Za-z_$]/;
 const REGISTRY = "https://registry.npmjs.org";
 
@@ -153,23 +153,60 @@ async function timeSliced<T>(items: T[], work: (item: T) => Promise<void>, budge
 // open across a push keeps the older build until reload.
 const hotShimCache = new Map<string, Promise<Record<string, string>>>();
 
+/** The shadow files for one Handsontable tarball (`.tgz` bytes): every blocking file, or the
+ *  whole tree for a PR build, transpiled to the babel 6 floor. */
+export async function buildHandsontableShims(
+  tgz: ArrayBuffer,
+  { wholeTree = false }: { wholeTree?: boolean } = {},
+): Promise<Record<string, string>> {
+  const gz = new Blob([tgz]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const tar = new Uint8Array(await new Response(gz).arrayBuffer());
+  const shadowed = untarJs(tar, (s) => wholeTree || HOT_BLOCKING_SYNTAX.test(s));
+  const out: Record<string, string> = {};
+  await timeSliced(Object.entries(shadowed), async ([file, source]) => {
+    out[file] = await transpileDependencyDist(source, file);
+  });
+  return out;
+}
+
+// A stable release a starter or docs bucket pins has its shadow files built at import time
+// (`pipeline/hot-shims.mjs`) and served by the authoring app, so a mount fetches about 0.5 MB
+// (gzipped) from its own origin instead of downloading and transpiling the registry tarball.
+export const HOT_SHIMS_DIR = "hot-shims";
+
+export interface HotShimAsset {
+  version: string;
+  files: Record<string, string>;
+}
+
+async function fetchPrebuiltShims(version: string, fetchImpl: typeof fetch): Promise<Record<string, string> | null> {
+  if (!/^\d+\.\d+\.\d+$/.test(version)) return null;
+  try {
+    const res = await fetchImpl(`/${HOT_SHIMS_DIR}/${version}.json`);
+    // A missing asset comes back as the SPA's index.html with a 200, so the type decides.
+    if (!res.ok || !/\bjson\b/.test(res.headers?.get("content-type") ?? "")) return null;
+    const asset = (await res.json()) as Partial<HotShimAsset>;
+    if (asset.version !== version || !asset.files || typeof asset.files !== "object") return null;
+    return Object.values(asset.files).every((code) => typeof code === "string") ? asset.files : null;
+  } catch {
+    return null;
+  }
+}
+
 function shimHandsontable(version: string, fetchImpl: typeof fetch): Promise<Record<string, string>> {
   let cached = hotShimCache.get(version);
   if (!cached) {
     cached = (async () => {
       const prBuild = isPkgPrNewHandsontable(version);
+      if (!prBuild) {
+        const prebuilt = await fetchPrebuiltShims(version, fetchImpl);
+        if (prebuilt) return prebuilt;
+      }
       const url = prBuild ? version.trim() : `${REGISTRY}/handsontable/-/handsontable-${version}.tgz`;
       const res = await fetchImpl(url);
       const label = prBuild ? "handsontable PR build" : `handsontable@${version}`;
       if (!res.ok) throw new Error(`Failed to fetch ${label} tarball: ${url} returned ${res.status}`);
-      const gz = new Blob([await res.arrayBuffer()]).stream().pipeThrough(new DecompressionStream("gzip"));
-      const tar = new Uint8Array(await new Response(gz).arrayBuffer());
-      const shadowed = untarJs(tar, (s) => prBuild || HOT_BLOCKING_SYNTAX.test(s));
-      const out: Record<string, string> = {};
-      await timeSliced(Object.entries(shadowed), async ([file, source]) => {
-        out[file] = await transpileDependencyDist(source, file);
-      });
-      return out;
+      return buildHandsontableShims(await res.arrayBuffer(), { wholeTree: prBuild });
     })();
     // A failed download must not poison the cache — the next mount retries.
     cached.catch(() => hotShimCache.delete(version));

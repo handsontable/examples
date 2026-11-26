@@ -98,7 +98,25 @@ test("templates carry no sample data, helper modules or enabled plugins", () => 
       // The empty sheet, spelled the way Handsontable spells it.
       assert.match(source, /startRows/, `${where}: startRows`);
       assert.match(source, /startCols/, `${where}: startCols`);
-      assert.match(source, /non-commercial-and-evaluation/, `${where}: licenseKey`);
+    }
+  }
+});
+
+test("buckets below 19 carry the non-commercial key, next carries only the placeholder comment", () => {
+  for (const framework of BLANK_FRAMEWORKS) {
+    for (const bucket of [...LEGACY_BUCKETS, ...MODERN_BUCKETS]) {
+      const source = blankStarterFiles(framework, { bucket })[ENTRY[framework]];
+      const where = `${bucket}/${framework}`;
+      if (bucket === "next") {
+        assert.doesNotMatch(source, /non-commercial-and-evaluation/, `${where}: no live key`);
+        assert.match(
+          source,
+          /^\s*\/\/ licenseKey[:=]\s*['"]?your-license-key['"]?,? ?\/\/ get a key at https:\/\/handsontable\.com\/pricing\/$/m,
+          `${where}: commented placeholder line`,
+        );
+      } else {
+        assert.match(source, /non-commercial-and-evaluation/, `${where}: licenseKey`);
+      }
     }
   }
 });

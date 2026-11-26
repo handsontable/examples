@@ -137,17 +137,24 @@ Rename, save and delete stay with the owner, and an `/edit/` link to a demo that
 not yours opens the read-only view instead. So checking whether the answer already
 exists costs nothing.
 
-## 6. Ask AI, and the Style panel
+## 6. Ask AI, and the Theme builder
 
 - **Ask AI** answers questions about the open example — what it does, what an option
   means — grounded in the Handsontable documentation, with links. If it suggests a
   code change it *proposes* it; you apply it or you don't. Nothing is written behind
   your back, which makes it safe to use on a call.
-- **Style** is the Theme Builder's controls applied to the demo you have open: colours,
-  density, borders. It writes a real theme module into the demo, so what you share is
-  the styling you see. Useful when the question is "will it look like our app?".
+- **Theme builder** is everything the old Theme Builder app did, applied to the demo you
+  have open: colours, density, borders, per-component tokens, and a chat you can style
+  in ("retro amber terminal", then "darker"). It writes a real theme module into the
+  demo, so what you share is the styling you see. Useful when the question is "will it
+  look like our app?".
+- To send someone a demo with the Theme builder already open, use the share button in
+  the panel's header, or add `&theme-builder` to the demo's link, for example
+  `https://demos.handsontable.com/?example=react&theme-builder`. Save the demo first
+  if they should see your theme: a saved demo's link opens with it, and the panel shows
+  your settings.
 
-![The Style panel changing a grid's token mapping, icon set and density while the preview restyles itself](/guide/style-panel.gif)
+![The Theme builder changing a grid's token mapping, icon set and density while the preview restyles itself](/guide/style-panel.gif)
 
 *Recorded in the playground: three token mappings and an icon set, applied live to a
 100,000-row grid. The theme is written into the demo, so the styling travels with the

@@ -151,7 +151,10 @@ test("preview.ready_ms: onError reports outcome error", () => {
 test("preview.ready_ms: a timeout reports outcome timeout, and a later ready is ignored", async () => {
   const telemetry = recordingTelemetry();
   const runtime = fakeRuntime();
-  trackPreviewReady(runtime, CTX, telemetry, { timeoutMs: 5 });
+  // The clock is injected so the timer can never look early to the impossible-timeout guard.
+  let clock = 0;
+  trackPreviewReady(runtime, CTX, telemetry, { timeoutMs: 5, now: () => clock });
+  clock = 5;
 
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(telemetry.metrics.length, 1);
@@ -159,6 +162,21 @@ test("preview.ready_ms: a timeout reports outcome timeout, and a later ready is 
 
   runtime.fireReady();
   assert.equal(telemetry.metrics.length, 1, "guard: a ready arriving after the timeout must not re-emit");
+});
+
+test("preview.ready_ms: a timeout the page clock never reached is not reported", async () => {
+  // A fake or fast-forwarded timer fires the callback while the page clock has barely moved.
+  const telemetry = recordingTelemetry();
+  const runtime = fakeRuntime();
+  let clock = 1_000;
+  trackPreviewReady(runtime, CTX, telemetry, { timeoutMs: 5, now: () => clock });
+
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(telemetry.metrics.length, 0, "no timeout point when only 0 ms of the 5 ms elapsed");
+
+  clock += 10;
+  runtime.fireReady();
+  assert.equal(telemetry.metrics.length, 0, "the preview is settled; a later ready does not report a duration from the lying clock");
 });
 
 test("preview.ready_ms: a version with no ref attached reads ht_major as none", () => {

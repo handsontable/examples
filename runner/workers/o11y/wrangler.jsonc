@@ -15,11 +15,12 @@
   "preview_urls": false,
 
   // ADR §B.6: the observer does not observe itself — no exported Workers
-  // Logs, no traces, invocation logs off. Self-metrics go to Analytics
-  // Engine like every other metric, never through its own ingest routes.
+  // Logs, no traces, invocation logs off, nothing stored in Cloudflare.
+  // Self-metrics go to Analytics Engine like every other metric, never
+  // through its own ingest routes.
   "observability": {
     "enabled": true,
-    "logs": { "enabled": true, "invocation_logs": false, "persist": true, "destinations": [] },
+    "logs": { "enabled": true, "invocation_logs": false, "persist": false, "destinations": [] },
     "traces": { "enabled": false }
   },
 
@@ -66,7 +67,7 @@
   // worker's own `RUNNER_EVENTS` binding.
   "analytics_engine_datasets": [{ "binding": "RUNNER_EVENTS", "dataset": "runner_events" }],
 
-  // o11y usage metering/spend, later `AdminReads` (ADR-0043). Bound to the
+  // o11y usage metering/spend. Bound to the
   // named `O11yUsage` `WorkerEntrypoint`, not the default export — a named
   // RPC entrypoint has no HTTP route, unreachable even though the API
   // worker's own deploy routes are the wildcard `*.demos.handsontable.com/*`.

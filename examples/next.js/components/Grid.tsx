@@ -64,7 +64,7 @@ export default function Grid(props: GridProps) {
         autoWrapCol={true}
         height={363}
         imeFastEdit={true}
-        licenseKey="non-commercial-and-evaluation"
+        // licenseKey="your-license-key" // get a key at https://handsontable.com/pricing/
       >
         <HotColumn data={1} />
         <HotColumn data={2} />

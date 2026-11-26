@@ -394,6 +394,12 @@
   white-space: normal;
   cursor: default;
 }
+/* "Theme builder" is three times the width "Style" was; on a phone-width top bar
+   the icon alone stands in for it (the button keeps its aria-label). */
+@media (max-width: 480px) {
+  .hot-style-btn-label { display: none; }
+}
+
 .hot-cta-tooltip strong {
   display: block;
   margin-bottom: 8px;

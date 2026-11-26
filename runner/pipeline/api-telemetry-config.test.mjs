@@ -57,23 +57,34 @@ test("stripLineComments does not corrupt a string containing //", () => {
   );
 });
 
-test("observability.logs: full fidelity, invocation logs off, persisted, o11y-logs destination", () => {
+test("observability.logs: full fidelity, invocation logs off, not persisted, o11y-logs destination", () => {
   assert.deepEqual(wrangler.observability.logs, {
     enabled: true,
     head_sampling_rate: 1.0,
     invocation_logs: false,
-    persist: true,
+    persist: false,
     destinations: ["o11y-logs"],
   });
 });
 
-test("observability.traces: 1% sampled, persisted, no destination (ADR §C.4 — no trace export)", () => {
+test("observability.traces: 1% sampled, not persisted, no destination (ADR §C.4 — no trace export)", () => {
+  // Tracing stays on so the active span's trace id still reaches the
+  // `api.request` line; only Cloudflare's own copy is switched off.
   assert.deepEqual(wrangler.observability.traces, {
     enabled: true,
     head_sampling_rate: 0.01,
-    persist: true,
+    persist: false,
   });
   assert.equal("destinations" in wrangler.observability.traces, false);
+});
+
+test("the o11y worker keeps no Cloudflare-side copy of its own logs and runs no traces", () => {
+  const o11yDir = fileURLToPath(new URL("../workers/o11y/", import.meta.url));
+  const o11yWrangler = JSON.parse(
+    stripLineComments(fs.readFileSync(`${o11yDir}wrangler.jsonc`, "utf8")),
+  );
+  assert.equal(o11yWrangler.observability.logs.persist, false);
+  assert.equal(o11yWrangler.observability.traces.enabled, false);
 });
 
 test("the */5 cron runs alongside the unchanged nightly one", () => {

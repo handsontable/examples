@@ -76,14 +76,9 @@ const hot = new Handsontable(container, {
         pageSize,
         sortProp: sort?.prop,
         sortOrder: sort?.order,
-        // Transform HOT's { prop, conditions: [{ name, args }] } format into
-        // the { column, value } shape the Spring backend expects.
-        filters: filters ? JSON.stringify(
-          filters.map(f => ({
-            column: f.prop,
-            value: f.conditions?.[0]?.args?.[0] ?? '',
-          }))
-        ) : undefined,
+        // Send HOT's filter array as-is: [{ prop, operation, conditions: [{ name, args }] }].
+        // ProductService.buildFilters() parses this shape.
+        filters: filters?.length ? JSON.stringify(filters) : undefined,
       });
       const res = await fetch(url, { signal });
       if (!res.ok) throw new Error(`Failed to fetch products: ${res.status}`);

@@ -41,7 +41,6 @@ in its deploy script (ADR-0020), never in `wrangler.jsonc`:
 | `POST /grafana/_o11y/logout` | clear both cookies | same-origin `Origin` |
 | `/grafana/*` | Grafana UI, waking page | the Worker's own session cookie (`O11Y_SESSION_SECRET`, K1 — not Access) |
 | `POST /grafana/_o11y/reopen` | manual ledger re-open | session cookie, same-origin `Origin` |
-| `GET /grafana/_o11y/admin/<name>` | ADR-0043 read forwarder (after launch) | session cookie, name allowlist, GET only |
 
 There is no trace route: traces are not exported (ADR-0041 §C.4).
 The API worker's `api.request` line carries the active span's `trace.id` (a 32-hex W3C trace
@@ -290,9 +289,13 @@ never counted `accepted`. Cloudflare's exporter behaviour (timeout, retries and 
 back-pressure on the source Worker, what it treats as failure) is undocumented and remains a known
 unknown, watched through the "Observability self" dashboard.
 
-Two reasons in this table have no emitter and never produce data: `session.end` reason
-`sleep_after` (nothing observes the Sandbox SDK's idle-timeout stop) and `pool.gauge`
-reason `builder` (the builder pool is not metered; the `*/5` cron emits `live` only).
+`session.end` reason `sleep_after` comes from the live-preview Durable Object's
+`onActivityExpired`, just before the Sandbox SDK stops an idle container; it also
+tombstones the session so later `/api/session/:id/*` requests are refused instead of
+booting a new container.
+
+One reason in this table has no emitter and never produces data: `pool.gauge` reason
+`builder` (the builder pool is not metered; the `*/5` cron emits `live` only).
 
 `o11y.wake`'s `duration_ms` is wake-to-ready time — from the wake starting to the
 box's first successful `isReady()`, sourced from `wake:<wakeId>.readyMs` (§8) — on both

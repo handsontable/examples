@@ -253,6 +253,9 @@ const PREVIEW_READY_THRESHOLD_PCT: Record<string, number> = { "1": 97, "2": 95 }
 /** The window every preview rule reads: Tier-2 volume is a few previews an hour, so an hour rarely reaches the floors and only a failure burst did. */
 const PREVIEW_WINDOW_MS = 6 * HOUR_MS;
 
+/** Released versions only: PR preview builds, `-next` prereleases and unparsed refs all read `ht_major = 'next'`, and most of that traffic is a bot opening PR-comment links whose session requests never reach us. */
+const RELEASES_ONLY = `AND ${col("ht_major")} NOT IN ('next')`;
+
 /** Non-abandoned previews per tier in the window below which the tier is not evaluated, because one failure in two previews (50 %) says nothing about reliability. */
 export const PREVIEW_READY_MIN_SAMPLES = 10;
 
@@ -264,7 +267,7 @@ export async function previewReadyRateRule(env: Env, queryFn: AeQueryFn = runAeQ
   const results: string[] = [];
   let anyFiring = false;
   for (const [tier, thresholdPct] of Object.entries(PREVIEW_READY_THRESHOLD_PCT)) {
-    const counts = await countByOutcome(env, "preview.ready_ms", PREVIEW_WINDOW_MS, `AND ${tierCol} = '${tier}'`, queryFn);
+    const counts = await countByOutcome(env, "preview.ready_ms", PREVIEW_WINDOW_MS, `AND ${tierCol} = '${tier}' ${RELEASES_ONLY}`, queryFn);
     // `abandoned` (navigated away before the preview finished) is excluded
     // from both numerator and denominator — otherwise a burst of ordinary
     // navigation-aways would fire a false preview-reliability alert.
@@ -295,7 +298,7 @@ export const TIER2_LIVENESS_MIN_ATTEMPTS = 5;
 
 export async function tier2LivenessRule(env: Env, queryFn: AeQueryFn = runAeQuery): Promise<RuleResult> {
   const tierCol = col("tier");
-  const counts = await countByOutcome(env, "preview.ready_ms", PREVIEW_WINDOW_MS, `AND ${tierCol} = '2'`, queryFn);
+  const counts = await countByOutcome(env, "preview.ready_ms", PREVIEW_WINDOW_MS, `AND ${tierCol} = '2' ${RELEASES_ONLY}`, queryFn);
   const attempts = [...counts.entries()]
     .filter(([outcome]) => outcome !== "abandoned")
     .reduce((sum, [, c]) => sum + c, 0);
@@ -322,7 +325,7 @@ export async function previewSlowRule(env: Env, queryFn: AeQueryFn = runAeQuery)
   const tierCol = col("tier");
   const outcomeCol = col("outcome");
   // `ready` only: an error or timeout carries its own duration and would be counted by the reliability rules.
-  const where = `AND ${tierCol} = '2' AND ${outcomeCol} = 'ready'`;
+  const where = `AND ${tierCol} = '2' AND ${outcomeCol} = 'ready' ${RELEASES_ONLY}`;
   const [p95, byOutcome] = await Promise.all([
     weightedQuantile(env, "preview.ready_ms", PREVIEW_WINDOW_MS, 0.95, where, queryFn),
     countByOutcome(env, "preview.ready_ms", PREVIEW_WINDOW_MS, where, queryFn),

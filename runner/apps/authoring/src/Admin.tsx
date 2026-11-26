@@ -231,7 +231,7 @@ export function AdminPanel({ apiBase, token }: AdminPanelProps) {
           ))}
         </div>
         <button type="button" style={chip} onClick={() => load(days)}>Refresh</button>
-        {/* ADR-0043: dashboards live in Grafana behind the o11y worker's own
+        {/* Dashboards live in Grafana behind the o11y worker's own
          *  broker login, and nothing else in the app links there — a plain
          *  same-tab-avoiding anchor is enough, no client-side auth needed. */}
         <a

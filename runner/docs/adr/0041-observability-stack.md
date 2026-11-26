@@ -104,7 +104,8 @@ Alternatives considered and rejected:
 - **Serverless store (Pipelines → Iceberg → R2 SQL)** — no LogQL, two open-beta
   services. Kept as the escape hatch (§L).
 - **Cloudflare's own Workers Observability as the store** — 7-day, non-EU, not Grafana.
-  Kept as the temporary safety net (`persist: true`, §H).
+  Kept as a temporary safety net (`persist: true`) until 30 days after this ADR was
+  accepted, then switched off (`persist: false`, §H).
 - **Alloy with `faro.receiver` in the box** (revision 2's design) — `time.Now()`
   stamping makes every browser record land at drain time and never dedupe on re-replay;
   202-on-failure makes the drain's ledger lie; its rate limit refuses backlog replays; its
@@ -377,9 +378,13 @@ left under `index/index/` (follow-up, not before 90 days after `from`).
 Every drop writes an `o11y.ingest` point with the gate as the reason.
 
 **B.6 The observer does not observe itself**: the o11y worker exports no Workers Logs and
-no traces, with invocation logs off and its own lines persisted in Cloudflare's dashboard
-only. Its self-metrics (`o11y.*`) go to Analytics Engine like every other metric, which is
-not a loop: they never pass through its own ingest routes.
+no traces, with invocation logs off and nothing persisted in Cloudflare's dashboard
+(`persist: false`; its lines were kept there only while the §H safety net held). Its
+self-metrics (`o11y.*`) go to Analytics Engine like every other metric, which is not a
+loop: they never pass through its own ingest routes. The worker's own `console.*` lines
+(prune and ingest errors, dropped items, `o11y.symbolicate.skip`, the `o11y.reopen` audit
+line) therefore have no stored copy: they are visible only in a live `wrangler tail`, and
+its faults surface through the `o11y.*` points and the self dashboard.
 
 ### C. OTLP from the Worker inward
 
@@ -434,8 +439,10 @@ as they are. Maps expire with the browser tenant (30 days). Symbolication never 
 the public ingest route. Exit criterion L.5 bounds its cost.
 
 **C.4 Traces are not exported, and Tempo is not built.** No trace destination is configured.
-Worker traces are sampled at 1 % into Cloudflare's own dashboard for the 7-day view while
-`persist: true` holds (§H).
+Worker traces are sampled at 1 % with `persist: false` (§H), so no trace is stored anywhere:
+tracing stays enabled only so the active span's trace id can reach the `api.request` line.
+While the safety net held (`persist: true`), the 1 % also fed Cloudflare's own dashboard
+for a 7-day view.
 
 `Span.spanContext()` shipped in workerd 1.20261009.1 (wrangler 4.151.0 bundles 1.20261012.1) with
 no compatibility flag. It is read-only, and an untraced span returns an all-zero context, so
@@ -445,16 +452,19 @@ not a parent/child link: the API worker puts the active span's trace id, when re
 Worker with traces at 100 % returned a distinct, non-zero trace id per request, and the same id
 after an `await` inside `ctx.waitUntil`.
 
-*Decision: Tempo and trace export are dropped.* Cloudflare's dashboard already covers the
-7-day trace view, and the `trace.id` / `session.id` pair in Loki already joins a browser
-session to a Worker trace. Tempo would add a container and a new traces ingest route on the
-o11y worker (the span-attribute allowlist could not run on Cloudflare's native export path,
+*Decision: Tempo and trace export are dropped.* Cloudflare's dashboard covered the
+7-day trace view while `persist: true` held; with it off, no trace is stored, and the
+`trace.id` / `session.id` pair in Loki still joins a browser session to a Worker request
+(the id is a correlation key, not a link to a stored trace). Tempo would add a container
+and a new traces ingest route on the o11y worker (the span-attribute allowlist could not
+run on Cloudflare's native export path,
 which bypasses our Workers), and spans bill from the same 20 M pool as log lines, whose
 exported-logs half §D already projects as exceeded at 10x (about 6.6 M against 5 M). No
 production measurement of span volume exists, and the gain does not justify the cost and
 risk. `traceparent` propagation from the authoring app is dropped too: `spanContext()` is
 read-only, so the browser cannot parent a Worker span. Reopen this only with a concrete need
-for trace retention beyond 7 days, and then with measured production volumes.
+for trace retention (none exists once `persist` is off), and then with measured production
+volumes.
 
 **C.5 Lite beacon for `/d` and `/embed`.** The existing ES5 reporter in `monitor.ts` gains
 a standalone mode: with no parent runner frame, it sends uncaught errors (up to the
@@ -468,8 +478,8 @@ embeds are identified by demo id.
 ### D. Worker signals
 
 - `observability.logs`: `head_sampling_rate: 1.0`, `invocation_logs: false`,
-  `persist: true`, `destinations: ["o11y-logs"]`.
-- `observability.traces`: `head_sampling_rate: 0.01`, `persist: true`, no destination.
+  `persist: false`, `destinations: ["o11y-logs"]`.
+- `observability.traces`: `head_sampling_rate: 0.01`, `persist: false`, no destination.
 - One structured JSON line per non-proxy request (route class, status, duration,
   `cf.ray`, `session.id`, `hot.demo_id`, `service.version`), replacing the
   bracketed-prefix convention, plus an `api.request` Analytics Engine point. The preview
@@ -597,7 +607,7 @@ written by the API worker.
 | **Platform** | `api.request` (route class, status class, duration); `error.handled`; `budget.gauge` every 5 min; `reconcile.run`; o11y self: `o11y.ingest`, `o11y.drain`, `o11y.wake`, `o11y.backlog`, `o11y.alert` |
 
 Sampling: authoring Faro 100 %; beacon errors 100 %, vitals 10 %; Worker lines 100 %;
-Worker traces 1 % into Cloudflare's dashboard only.
+Worker traces 1 %, not stored (`trace.id` on `api.request` only).
 
 Dashboards, provisioned from git: Runner overview (with deploy annotations), Tier-2
 sessions, Tier-1 playground, Version health (framework × ht_major, `next` highlighted),
@@ -670,9 +680,13 @@ than 2 h.
   Loki and maps buckets.
 - **Deploy order** for the mutual service bindings: the o11y worker first (binding the
   existing API worker), then the API worker with its `O11Y` binding.
-- **Not EU-pinned, stated plainly**: Cloudflare's own Workers Observability store keeps
-  full lines and 1 % of spans for 7 days while `persist: true`, which is switched off 30
-  days after this ADR is accepted; Analytics Engine; the Workers edge; Sentry, whose
+- **Cloudflare's own Workers Observability store is off**: it held full lines and 1 % of
+  spans for 7 days while `persist: true`, the temporary safety net. `persist: false` on the
+  API worker (logs and traces) and the o11y worker (logs) switches it off from the DEV-3096
+  deploy. The ADR was accepted on 2026-10-21, so the 30-day mark was 2026-11-20. From the
+  deploy no new lines or spans are stored there; anything written before it ages out within
+  the 7 days.
+- **Not EU-pinned, stated plainly**: Analytics Engine; the Workers edge; Sentry, whose
   ingest host is `ingest.us.sentry.io` (unchanged); D1, which has an EEUR location hint,
   not a jurisdiction, and cannot gain one later.
 - **Retention**: Loki `browser` 30 days, `worker` 90 days (§B.4); inbox objects 7 days;

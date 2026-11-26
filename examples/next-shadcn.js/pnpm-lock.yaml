@@ -10,7 +10,7 @@ importers:
     dependencies:
       '@handsontable/react-wrapper':
         specifier: latest
-        version: 18.1.0(handsontable@18.1.0)
+        version: 19.0.0(handsontable@19.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tailwindcss/postcss':
         specifier: ^4.3.2
         version: 4.3.2
@@ -22,7 +22,7 @@ importers:
         version: 2.1.1
       handsontable:
         specifier: latest
-        version: 18.1.0
+        version: 19.0.0
       lucide-react:
         specifier: ^1.24.0
         version: 1.24.0(react@19.2.7)
@@ -269,10 +269,12 @@ packages:
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
 
-  '@handsontable/react-wrapper@18.1.0':
-    resolution: {integrity: sha512-yCwjgroeP9vYE76ZjjtM/I2fHb6m0L1jYbWUHnbx7jP4PgBBI65DynaH1ou0Mm+bPojrJWcRU4zM2B4M7gOeFQ==}
+  '@handsontable/react-wrapper@19.0.0':
+    resolution: {integrity: sha512-XaBwh8CTMZB4gp3K0TkVY+fqn4k8PUn5A9WWffhZsA6hVeLWOgGlxBAM9OZ8S9RmHFWO/fTUyu01yzBeqEHCcg==}
     peerDependencies:
-      handsontable: ^18.0.0
+      handsontable: ^19.0.0
+      react: '>=18.0.0'
+      react-dom: '>=18.0.0'
 
   '@hono/node-server@1.19.14':
     resolution: {integrity: sha512-GwtvgtXxnWsucXvbQXkRgqksiH2Qed37H9xHZocE5sA3N8O8O8/8FA3uclQXxXVzc9XBZuEOMK7+r02FmSpHtw==}
@@ -2323,8 +2325,8 @@ packages:
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
-  handsontable@18.1.0:
-    resolution: {integrity: sha512-23S/Jny67NRevaZgTXSAonhFW28du3J6DJm/TDN35Gj5hpztUxlRMEG0SugEEf0lQxdDhLRmz81Ikkt7xvuNRA==}
+  handsontable@19.0.0:
+    resolution: {integrity: sha512-sbje5yu/fhs+xVc6ojRoT6jyRAOjJpTBg9N1zie7T5a9N28KdAgw2RL/5p0kWVyebAGY7hh7QlJPbDf5TDh+Xg==}
 
   has-bigints@1.1.0:
     resolution: {integrity: sha512-R3pbpkcIqv2Pm3dUwgjclDRVmWpTJW2DcMzcIhEXEx1oh/CEMObMm3KLmRJOdvhM7o4uQBnwr8pzRK2sJWIqfg==}
@@ -3886,9 +3888,11 @@ snapshots:
 
   '@floating-ui/utils@0.2.12': {}
 
-  '@handsontable/react-wrapper@18.1.0(handsontable@18.1.0)':
+  '@handsontable/react-wrapper@19.0.0(handsontable@19.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      handsontable: 18.1.0
+      handsontable: 19.0.0
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
 
   '@hono/node-server@1.19.14(hono@4.12.30)':
     dependencies:
@@ -6062,7 +6066,7 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
-  handsontable@18.1.0: {}
+  handsontable@19.0.0: {}
 
   has-bigints@1.1.0: {}
 

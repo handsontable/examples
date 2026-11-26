@@ -22,8 +22,8 @@ registerAllModules();
 
 const API_BASE = '/api/products';
 
-// Spring Boot reads camelCase params (sortProp, sortOrder, pageSize) and a
-// simplified JSON filter array: [{ column, value }].
+// Spring Boot reads camelCase params (sortProp, sortOrder, pageSize) and the
+// filters as Handsontable's JSON array: [{ prop, operation, conditions }].
 function buildUrl(params: DataProviderQueryParameters): string {
   const query = new URLSearchParams({
     page: String(params.page),
@@ -36,15 +36,8 @@ function buildUrl(params: DataProviderQueryParameters): string {
   }
 
   if (params.filters?.length) {
-    query.set(
-      'filters',
-      JSON.stringify(
-        params.filters.map(f => ({
-          column: f.prop,
-          value: f.conditions?.[0]?.args?.[0] ?? '',
-        }))
-      )
-    );
+    // Send Handsontable's filter array as-is: { prop, operation, conditions }.
+    query.set('filters', JSON.stringify(params.filters));
   }
 
   return `${API_BASE}?${query.toString()}`;

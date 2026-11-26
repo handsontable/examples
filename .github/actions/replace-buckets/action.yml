@@ -1,0 +1,44 @@
+name: Replace generated buckets
+description: >-
+  Downloads the bucket artifacts an import job uploaded and swaps each bucket
+  into the checkout whole. Downloading straight over the checkout only adds and
+  overwrites files, so an example removed or renamed upstream would stay in the
+  bucket forever. A bucket with no artifact is left as it is.
+inputs:
+  pattern:
+    description: Artifact name pattern, for example `docs-examples-*`.
+    required: true
+  dest:
+    description: Directory that holds one subdirectory per bucket.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v7
+      with:
+        pattern: ${{ inputs.pattern }}
+        merge-multiple: true
+        path: ${{ runner.temp }}/replace-buckets
+
+    - shell: bash
+      env:
+        SRC: ${{ runner.temp }}/replace-buckets
+        DEST: ${{ inputs.dest }}
+        PATTERN: ${{ inputs.pattern }}
+      run: |
+        shopt -s nullglob
+        buckets=("$SRC"/*/)
+        if [ ${#buckets[@]} -eq 0 ]; then
+          echo "::error::no bucket artifacts matched $PATTERN"
+          exit 1
+        fi
+        for dir in "${buckets[@]}"; do
+          bucket=$(basename "$dir")
+          if [ ! -f "$dir/manifest.json" ]; then
+            echo "::error::bucket $bucket has no manifest.json in its artifact"
+            exit 1
+          fi
+          rm -rf "${DEST:?}/$bucket"
+          mv "$dir" "$DEST/$bucket"
+          echo "replaced $bucket"
+        done

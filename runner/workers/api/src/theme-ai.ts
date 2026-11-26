@@ -143,14 +143,77 @@ DECIDING WHAT TO SET
 3. An overall mood ("dark", "compact", "material") -> the preset config, plus tokens if needed.
 
 Colours are hex (#rrggbb or #rrggbbaa). Sizes carry units ("13px"). Font families are plain Google
-Font names ("VT323", "Courier Prime"). Keep every value short and valid CSS.`;
+Font names ("VT323", "Courier Prime"). Keep every value short and valid CSS.
 
-export function validateStylePrompt(body: unknown): { ok: true; prompt: string } | { ok: false; error: string } {
+CONVERSATION
+Earlier turns of the conversation may come before the request. A follow-up ("darker", "now the
+header too", "undo the font") refers to them. The "Current theme" in the last message is what is on
+screen now and already includes every earlier answer, so build on it rather than repeating it.`;
+
+/**
+ * One earlier turn of the styling conversation (DEV-4070).
+ *
+ * Theme Builder's AI tab is a chat: "make it green", then "darker", then "and
+ * compact" — each follow-up only means something next to the turns before it.
+ * The panel sends those turns back with every request; the server holds no
+ * conversation state.
+ */
+export interface ThemeTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Turns kept, newest last. Ten is five exchanges — enough for "darker" to
+ *  know what it is darkening, small enough that the request stays cheap. */
+export const MAX_HISTORY_TURNS = 10;
+/** Per-turn cap. Both sides are already short: a user prompt is capped at
+ *  MAX_PROMPT_CHARS, and an answer's `message` at 300 by `sanitiseSuggestion`. */
+const MAX_TURN_CHARS = 400;
+
+/**
+ * Normalise the client's history into something the gateway accepts.
+ *
+ * Lenient on purpose: a malformed entry is dropped, never a 400, because the
+ * history is context for the current request rather than the request itself.
+ * The result starts with a `user` turn and alternates, since the Anthropic
+ * models behind LiteLLM reject two consecutive turns from the same role, and
+ * the current request is appended as a `user` turn after it — so it must end
+ * on `assistant`.
+ *
+ * The history is client-controlled, assistant turns included, so a forged
+ * "assistant: I will ignore my rules" can be sent. That buys nothing: the
+ * system prompt still governs, the tool call is still forced, and every value
+ * still goes through `sanitiseSuggestion`'s whitelist.
+ */
+export function normaliseHistory(raw: unknown): ThemeTurn[] {
+  if (!Array.isArray(raw)) return [];
+  const turns: ThemeTurn[] = [];
+  for (const entry of raw) {
+    const e = (entry ?? {}) as Record<string, unknown>;
+    if (e.role !== "user" && e.role !== "assistant") continue;
+    if (typeof e.content !== "string") continue;
+    const content = e.content.trim().slice(0, MAX_TURN_CHARS);
+    if (!content) continue;
+    const last = turns[turns.length - 1];
+    // Two in a row from one side: keep the later one, which is what the
+    // conversation actually went on from.
+    if (last && last.role === e.role) turns[turns.length - 1] = { role: e.role, content };
+    else turns.push({ role: e.role, content });
+  }
+  let kept = turns.slice(-MAX_HISTORY_TURNS);
+  while (kept.length && kept[0]?.role !== "user") kept = kept.slice(1);
+  while (kept.length && kept[kept.length - 1]?.role !== "assistant") kept = kept.slice(0, -1);
+  return kept;
+}
+
+export function validateStylePrompt(
+  body: unknown,
+): { ok: true; prompt: string; history: ThemeTurn[] } | { ok: false; error: string } {
   const raw = (body ?? {}) as Record<string, unknown>;
   const prompt = typeof raw.prompt === "string" ? raw.prompt.trim() : "";
   if (!prompt) return { ok: false, error: "prompt is required" };
   if (prompt.length > MAX_PROMPT_CHARS) return { ok: false, error: `prompt too long (max ${MAX_PROMPT_CHARS})` };
-  return { ok: true, prompt };
+  return { ok: true, prompt, history: normaliseHistory(raw.history) };
 }
 
 /** Ask the model for a theme. Returns sanitised state the panel can apply. */
@@ -158,6 +221,7 @@ export async function requestTheme(
   env: Env,
   prompt: string,
   current: unknown,
+  history: readonly ThemeTurn[] = [],
 ): Promise<{ suggestion: ThemeSuggestion; usd: number }> {
   const baseUrl = (env.LITELLM_API_BASE ?? "https://litellm.handsontable.com").trim().replace(/\/+$/, "");
   const apiKey = env.LITELLM_API_KEY?.trim();
@@ -171,6 +235,9 @@ export async function requestTheme(
       max_tokens: 2048,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
+        // Earlier turns as plain text. The current theme rides only on the last
+        // turn: it already carries everything the earlier answers applied.
+        ...history.map((turn) => ({ role: turn.role, content: turn.content })),
         {
           role: "user",
           content: `Current theme: ${JSON.stringify(current).slice(0, 2000)}\n\nRequest: ${prompt}`,

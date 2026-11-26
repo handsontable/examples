@@ -94,8 +94,8 @@ function createHotTheme() {
       400: color('contentTertiary', '#6b7280'),
       500: color('contentSecondary', '#374151'),
       600: color('contentPrimary', '#111827'),
-      700: color('contentInverseSecondary', '#d1d5db'),
-      800: color('contentInversePrimary', '#f9fafb'),
+      700: color('contentPrimary', '#111827'),
+      800: color('backgroundInverseSecondary', '#1f2937'),
       900: color('backgroundInversePrimary', '#111827'),
       950: color('backgroundInverseSecondary', '#1f2937'),
     },
@@ -203,7 +203,7 @@ export default function App() {
           height={304}
           rowHeaders={false}
           colHeaders={['', 'title', 'categorical', 'three', 'neg std', 'accounting', 'custom color']}
-          licenseKey="non-commercial-and-evaluation"
+          // licenseKey="your-license-key" // get a key at https://handsontable.com/pricing/
           autoWrapRow={false}
           autoWrapCol={false}
           columns={[

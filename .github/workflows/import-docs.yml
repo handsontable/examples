@@ -155,12 +155,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Download generated buckets
-        uses: actions/download-artifact@v7
+      - name: Replace the generated buckets
+        uses: ./.github/actions/replace-buckets
         with:
           pattern: docs-examples-*
-          merge-multiple: true
-          path: runner/apps/authoring/public/docs-examples
+          dest: runner/apps/authoring/public/docs-examples
 
       - name: Regenerate the docs bucket index
         working-directory: runner
@@ -169,6 +168,26 @@ jobs:
       - name: Regenerate the docs taxonomy the API worker bundles
         working-directory: runner
         run: node --input-type=module -e 'import("./pipeline/import-docs.mjs").then(m => m.writeDocsTaxonomy())'
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          # setup-node v5 auto-enables pnpm caching from the root package.json
+          # `packageManager` field; pnpm only exists after `corepack enable` below.
+          package-manager-cache: false
+
+      - name: Enable corepack
+        run: corepack enable
+
+      # A docs release bucket can pin a version no starter bucket pins yet (a new minor before
+      # the weekly starter re-pin). Its prebuilt Handsontable shims ship in this PR, so the
+      # committed-asset guard stays green and its examples skip the registry tarball.
+      - name: Prebuild Handsontable shims
+        working-directory: runner
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm --filter @handsontable/demo-runtime build
+          node pipeline/hot-shims.mjs
 
       - name: Create or update generated-content pull request
         # SHA-pinned: this job holds contents+PR write permissions, so a retargeted
