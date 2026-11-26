@@ -12,56 +12,56 @@ RUN node /usr/local/lib/node_modules/corepack/dist/corepack.js enable --install-
 
 COPY prime-dev-cache.sh /usr/local/bin/prime-dev-cache.sh
 
-# react-js (bucket 18)
-COPY baked/react-js-18/package.json baked/react-js-18/pnpm-lock.yaml /baked/react-js-18/
-RUN cd /baked/react-js-18 && pnpm install --frozen-lockfile
+# react-js (bucket 19)
+COPY baked/react-js-19/package.json baked/react-js-19/pnpm-lock.yaml /baked/react-js-19/
+RUN cd /baked/react-js-19 && pnpm install --frozen-lockfile
 
-# ant-design (bucket 18)
-COPY baked/ant-design-18/package.json baked/ant-design-18/pnpm-lock.yaml /baked/ant-design-18/
-RUN cd /baked/ant-design-18 && pnpm install --frozen-lockfile
+# ant-design (bucket 19)
+COPY baked/ant-design-19/package.json baked/ant-design-19/pnpm-lock.yaml /baked/ant-design-19/
+RUN cd /baked/ant-design-19 && pnpm install --frozen-lockfile
 
-# mui (bucket 18)
-COPY baked/mui-18/package.json baked/mui-18/pnpm-lock.yaml /baked/mui-18/
-RUN cd /baked/mui-18 && pnpm install --frozen-lockfile
+# mui (bucket 19)
+COPY baked/mui-19/package.json baked/mui-19/pnpm-lock.yaml /baked/mui-19/
+RUN cd /baked/mui-19 && pnpm install --frozen-lockfile
 
-# base-web (bucket 18)
-COPY baked/base-web-18/package.json baked/base-web-18/pnpm-lock.yaml /baked/base-web-18/
-RUN cd /baked/base-web-18 && pnpm install --frozen-lockfile
+# base-web (bucket 19)
+COPY baked/base-web-19/package.json baked/base-web-19/pnpm-lock.yaml /baked/base-web-19/
+RUN cd /baked/base-web-19 && pnpm install --frozen-lockfile
 
-# fluent-ui (bucket 18)
-COPY baked/fluent-ui-18/package.json baked/fluent-ui-18/pnpm-lock.yaml /baked/fluent-ui-18/
-RUN cd /baked/fluent-ui-18 && pnpm install --frozen-lockfile
+# fluent-ui (bucket 19)
+COPY baked/fluent-ui-19/package.json baked/fluent-ui-19/pnpm-lock.yaml /baked/fluent-ui-19/
+RUN cd /baked/fluent-ui-19 && pnpm install --frozen-lockfile
 
-# angular (bucket 18)
-COPY baked/angular-18/package.json baked/angular-18/pnpm-lock.yaml /baked/angular-18/
-RUN cd /baked/angular-18 && pnpm install --frozen-lockfile
+# angular (bucket 19)
+COPY baked/angular-19/package.json baked/angular-19/pnpm-lock.yaml /baked/angular-19/
+RUN cd /baked/angular-19 && pnpm install --frozen-lockfile
 
-# next.js (bucket 18)
-COPY baked/next-js-18/package.json baked/next-js-18/pnpm-lock.yaml /baked/next-js-18/
-RUN cd /baked/next-js-18 && pnpm install --frozen-lockfile
-COPY baked/next-js-18/prime/ /prime/next-js-18/
-RUN prime-dev-cache.sh next-js-18 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0" && rm -rf /prime/next-js-18
+# next.js (bucket 19)
+COPY baked/next-js-19/package.json baked/next-js-19/pnpm-lock.yaml /baked/next-js-19/
+RUN cd /baked/next-js-19 && pnpm install --frozen-lockfile
+COPY baked/next-js-19/prime/ /prime/next-js-19/
+RUN prime-dev-cache.sh next-js-19 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0" && rm -rf /prime/next-js-19
 
-# next-shadcn.js (bucket 18)
-COPY baked/next-shadcn-js-18/package.json baked/next-shadcn-js-18/pnpm-lock.yaml /baked/next-shadcn-js-18/
-RUN cd /baked/next-shadcn-js-18 && pnpm install --frozen-lockfile
-COPY baked/next-shadcn-js-18/prime/ /prime/next-shadcn-js-18/
-RUN prime-dev-cache.sh next-shadcn-js-18 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0" && rm -rf /prime/next-shadcn-js-18
+# next-shadcn.js (bucket 19)
+COPY baked/next-shadcn-js-19/package.json baked/next-shadcn-js-19/pnpm-lock.yaml /baked/next-shadcn-js-19/
+RUN cd /baked/next-shadcn-js-19 && pnpm install --frozen-lockfile
+COPY baked/next-shadcn-js-19/prime/ /prime/next-shadcn-js-19/
+RUN prime-dev-cache.sh next-shadcn-js-19 3001 "pnpm exec next dev -p 3001 -H 0.0.0.0" && rm -rf /prime/next-shadcn-js-19
 
-# astro (bucket 18)
-COPY baked/astro-18/package.json baked/astro-18/pnpm-lock.yaml /baked/astro-18/
-RUN cd /baked/astro-18 && pnpm install --frozen-lockfile
+# astro (bucket 19)
+COPY baked/astro-19/package.json baked/astro-19/pnpm-lock.yaml /baked/astro-19/
+RUN cd /baked/astro-19 && pnpm install --frozen-lockfile
 
-# nuxt (bucket 18)
-COPY baked/nuxt-18/package.json baked/nuxt-18/pnpm-lock.yaml /baked/nuxt-18/
-RUN cd /baked/nuxt-18 && pnpm install --frozen-lockfile
+# nuxt (bucket 19)
+COPY baked/nuxt-19/package.json baked/nuxt-19/pnpm-lock.yaml /baked/nuxt-19/
+RUN cd /baked/nuxt-19 && pnpm install --frozen-lockfile
 
-# remix (bucket 18)
-COPY baked/remix-18/package.json baked/remix-18/pnpm-lock.yaml /baked/remix-18/
-RUN cd /baked/remix-18 && pnpm install --frozen-lockfile
+# remix (bucket 19)
+COPY baked/remix-19/package.json baked/remix-19/pnpm-lock.yaml /baked/remix-19/
+RUN cd /baked/remix-19 && pnpm install --frozen-lockfile
 
-# vue (bucket 18)
-COPY baked/vue-18/package.json baked/vue-18/pnpm-lock.yaml /baked/vue-18/
-RUN cd /baked/vue-18 && pnpm install --frozen-lockfile
+# vue (bucket 19)
+COPY baked/vue-19/package.json baked/vue-19/pnpm-lock.yaml /baked/vue-19/
+RUN cd /baked/vue-19 && pnpm install --frozen-lockfile
 
 EXPOSE 3001 4200 4321 5173
