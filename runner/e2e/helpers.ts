@@ -109,13 +109,16 @@ export async function expectGridRendered(page: Page) {
 }
 
 // Console/page noise that isn't a real break. Extend as live runs surface new
-// false positives (same list as starter-matrix.spec.ts).
+// false positives.
 export const NOISE = [
   /non-commercial|evaluation license/i,
   /Download the React DevTools/i,
   /favicon\.ico/i,
   /\[vite\] (connecting|connected)/i,
   /ERR_BLOCKED_BY_CLIENT|third-party cookie/i,
+  // Sandpack's own Babel logs this through console.error for any dependency file over
+  // 500 KB (Handsontable 19's core.js is 544 KB); the file still compiles and runs.
+  /\[BABEL\] Note: The code generator has deoptimised the styling of/,
 ];
 export const isKnownNoise = (message: string) => NOISE.some((re) => re.test(message));
 
