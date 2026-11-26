@@ -27,6 +27,22 @@ The grid loads 50 seed orders and supports:
 - Node.js 18+
 - npm
 
+## License key
+
+Handsontable needs a license key. Without one, the grid shows a lock screen ("The license key for Handsontable is missing") instead of your data.
+
+Each frontend has a commented-out placeholder. Uncomment it and paste in your key:
+
+```js
+// licenseKey: 'your-license-key', // get a key at https://handsontable.com/pricing/
+```
+
+- `frontend/src/main.js` (vanilla JS)
+- `frontend-react/src/App.tsx` (React)
+- `frontend-angular/src/app/app.component.ts` (Angular)
+
+Get a key at [handsontable.com/pricing](https://handsontable.com/pricing/).
+
 ## Quick start
 
 ```bash

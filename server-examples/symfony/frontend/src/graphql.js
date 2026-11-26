@@ -157,7 +157,7 @@ const hot = new Handsontable(container, {
     { data: 'price',    type: 'numeric', numericFormat: { style: 'currency', currency: 'USD' } },
     { data: 'stock',    type: 'numeric' },
   ],
-  licenseKey: 'non-commercial-and-evaluation',
+  // licenseKey: 'your-license-key', // get a key at https://handsontable.com/pricing/
 });
 
 document.getElementById('btn-filter-empty').addEventListener('click', () => {

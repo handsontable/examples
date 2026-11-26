@@ -69,6 +69,8 @@ too large to send to the browser at once.
 | [`spring`](./server-examples/spring) | Spring Boot (Java) |
 
 Each ships a `docker-compose.yml` and its own README with setup instructions.
+The frontends need your Handsontable license key; without one the grid shows a
+lock screen. Each README lists the files to paste it into.
 
 ## Quick start
 
