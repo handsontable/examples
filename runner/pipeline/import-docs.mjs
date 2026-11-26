@@ -266,14 +266,21 @@ function readRef(contentDir, ref) {
   }
 }
 
+// An `import`/`export … from '…'` or bare `import '…'` statement starting a line. Anchoring on the
+// keyword keeps prose such as `from "${oldValue}"` inside a template literal out of the deps.
+const IMPORT_STATEMENT_RE =
+  /^[ \t]*(?:(?:import|export)\b[^;'"`]*?\bfrom|import)\s*['"]([^'"\n]+)['"]/gm;
+const NPM_PACKAGE_NAME_RE = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/;
+
 /** Extract extra (non-builtin) npm package imports from source code. */
 function collectExtraDeps(codeStrings) {
   const deps = {};
   for (const code of codeStrings) {
-    for (const m of code.matchAll(/from\s+['"]([^'"]+)['"]/g)) {
+    for (const m of code.matchAll(IMPORT_STATEMENT_RE)) {
       const imp = m[1];
       if (imp.startsWith(".") || imp.startsWith("/")) continue;
       const pkg = imp.startsWith("@") ? imp.split("/").slice(0, 2).join("/") : imp.split("/")[0];
+      if (!NPM_PACKAGE_NAME_RE.test(pkg)) continue;
       if (!BUILTIN_PKGS.has(pkg) && !pkg.startsWith("handsontable/")) deps[pkg] = true;
     }
   }
