@@ -10,10 +10,10 @@ importers:
     dependencies:
       '@handsontable/react-wrapper':
         specifier: latest
-        version: 18.1.3(handsontable@18.1.3)
+        version: 19.0.0(handsontable@19.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       handsontable:
         specifier: latest
-        version: 18.1.3
+        version: 19.0.0
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -166,10 +166,12 @@ packages:
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@handsontable/react-wrapper@18.1.3':
-    resolution: {integrity: sha512-1zepL4KUFmY6Cxkt/Djb30GpH6GlEJjnj4tUkYnPxFs1deQEQnNkSHY3FlwShbDrD+24DLSxAZXoqdUe/RsJrw==}
+  '@handsontable/react-wrapper@19.0.0':
+    resolution: {integrity: sha512-XaBwh8CTMZB4gp3K0TkVY+fqn4k8PUn5A9WWffhZsA6hVeLWOgGlxBAM9OZ8S9RmHFWO/fTUyu01yzBeqEHCcg==}
     peerDependencies:
-      handsontable: ^18.0.0
+      handsontable: ^19.0.0
+      react: '>=18.0.0'
+      react-dom: '>=18.0.0'
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -575,8 +577,8 @@ packages:
     resolution: {integrity: sha512-Czmyns5dUsq4seFBR/Kdydhmo8y9kC79hiSkPn0YcGtNnYWnrgt0vjrSjx9tspoDGWm2CMarffRuLjM4xUz8xg==}
     engines: {node: '>=18'}
 
-  handsontable@18.1.3:
-    resolution: {integrity: sha512-Ipnr8T9hETDu8yLX45pfenCK5trJIMF1dWt1x/UaNQXj06umrPs0H19aKZeE8EgOrp329F5RG0Bidmd2EKtnAg==}
+  handsontable@19.0.0:
+    resolution: {integrity: sha512-sbje5yu/fhs+xVc6ojRoT6jyRAOjJpTBg9N1zie7T5a9N28KdAgw2RL/5p0kWVyebAGY7hh7QlJPbDf5TDh+Xg==}
 
   hermes-estree@0.25.1:
     resolution: {integrity: sha512-0wUoCcLp+5Ev5pDW2OriHC2MJCbwLwuRx+gAqMTOkGKJJiBCLjtrvy4PWUGn6MIVefecRpzoOZ/UV6iGdOr+Cw==}
@@ -1059,9 +1061,11 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@handsontable/react-wrapper@18.1.3(handsontable@18.1.3)':
+  '@handsontable/react-wrapper@19.0.0(handsontable@19.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
-      handsontable: 18.1.3
+      handsontable: 19.0.0
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
 
   '@humanfs/core@0.19.2':
     dependencies:
@@ -1432,7 +1436,7 @@ snapshots:
 
   globals@17.7.0: {}
 
-  handsontable@18.1.3: {}
+  handsontable@19.0.0: {}
 
   hermes-estree@0.25.1: {}
 
