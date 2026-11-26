@@ -228,9 +228,10 @@ jobs:
           node scripts/sync-authoring-pin.mjs
           pnpm install --lockfile-only
 
-      # A bucket version past HOT_LAST_KNOWN_GOOD carries files the Tier-1 bundler's babel 6
-      # cannot parse. Their transpiled copies are built here, after the known-good version has
-      # moved, and served by the app, so a default mount never downloads the registry tarball.
+      # For a bucket version past HOT_LAST_KNOWN_GOOD, the runtime shadows the files the Tier-1
+      # bundler's babel 6 cannot parse. Their transpiled copies are built here, after the
+      # known-good version has moved, and served by the app, so a mount does not need the
+      # registry tarball.
       - name: Prebuild Handsontable shims
         working-directory: runner
         run: |

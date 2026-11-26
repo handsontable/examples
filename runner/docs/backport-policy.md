@@ -177,8 +177,8 @@ silently overwritten — it only misleads readers.
    `gh workflow run import-starters.yml` instead of waiting for Monday. The
    generated PR also moves the container seed to the new bucket
    (`scripts/release-bucket.mjs`, so the image rebakes on merge) and, when the
-   new version carries syntax babel 6 cannot parse, adds its prebuilt shims
-   under `apps/authoring/public/hot-shims/` (`pipeline/hot-shims.mjs`).
+   new version is past `HOT_LAST_KNOWN_GOOD` (`packages/runtime/src/dep-shims.ts`),
+   adds its prebuilt shims under `apps/authoring/public/hot-shims/` (`pipeline/hot-shims.mjs`).
    The authoring app's own `handsontable` pin stays on its major on purpose
    (`theme-presets-version.test.mjs`); moving it is a separate job.
 2. Modernize master for the new major; the new bucket absorbs it on every

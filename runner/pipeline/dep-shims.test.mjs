@@ -473,34 +473,46 @@ test("prereleases and PR builds never ask for a prebuilt asset", async () => {
   const version = "0.0.0-next-testnoasset-20261126";
   await applyDepShims(filesWithDeps({ handsontable: version }), { fetchImpl: tarballFetch(version, HOT_TREE, requested) });
   assert.deepEqual(requested, [tarballUrl(version)]);
+
+  const url = "https://pkg.pr.new/handsontable@93384";
+  const prRequested = [];
+  await applyDepShims(filesWithDeps({ handsontable: url }), { fetchImpl: urlFetch(url, PR_TREE, prRequested) });
+  assert.deepEqual(prRequested, [url]);
 });
 
-test("hot-shims.mjs builds the bucket versions past known-good, keeps built ones, prunes the rest", async () => {
+test("hot-shims.mjs rebuilds every starter and docs version past known-good and prunes the rest", async () => {
   const { syncHotShims, versionsNeedingShims } = await import("./hot-shims.mjs");
   const { mkdtempSync, writeFileSync, readdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const outDir = mkdtempSync(join(tmpdir(), "hot-shims-"));
+  const starter = `${GM + 2}.1.0`;
   writeFileSync(join(outDir, "1.0.0.json"), "{}");
-  writeFileSync(join(outDir, `${PAST_GOOD}.json`), "kept");
-  const bucketVersions = { [GM - 1]: `${GM - 1}.0.0`, [GM]: KNOWN_GOOD, [GM + 1]: PAST_GOOD, [GM + 2]: `${GM + 2}.1.0`, next: HOT_VERSION };
+  writeFileSync(join(outDir, `${starter}.json`), "stale");
+  const bucketVersions = { [GM - 1]: `${GM - 1}.0.0`, [GM]: KNOWN_GOOD, [GM + 2]: starter, next: HOT_VERSION };
 
-  assert.deepEqual(versionsNeedingShims(bucketVersions), [PAST_GOOD, `${GM + 2}.1.0`], "stable and past known-good only");
+  assert.deepEqual(
+    versionsNeedingShims([...Object.values(bucketVersions), PAST_GOOD, starter]),
+    [PAST_GOOD, starter],
+    "stable, past known-good, unique",
+  );
 
+  const tarballs = { [starter]: tarballFetch(starter, HOT_TREE), [PAST_GOOD]: tarballFetch(PAST_GOOD, HOT_TREE) };
   const requested = [];
-  const result = await syncHotShims({
-    bucketVersions,
-    outDir,
-    fetchImpl: tarballFetch(`${GM + 2}.1.0`, HOT_TREE, requested),
-    log: () => {},
-  });
+  const fetchImpl = async (url) => {
+    requested.push(url);
+    const version = Object.keys(tarballs).find((v) => url === tarballUrl(v));
+    return version ? tarballs[version](url) : { ok: false, status: 404 };
+  };
+  const result = await syncHotShims({ bucketVersions, docsVersions: [PAST_GOOD], outDir, fetchImpl, log: () => {} });
 
-  assert.deepEqual(result.built, [`${GM + 2}.1.0`]);
+  assert.deepEqual(result.wanted, [PAST_GOOD, starter], "the docs bucket's version is built too");
   assert.deepEqual(result.removed, ["1.0.0.json"]);
-  assert.deepEqual(requested, [tarballUrl(`${GM + 2}.1.0`)], "an existing asset is not rebuilt");
-  assert.deepEqual(readdirSync(outDir).sort(), [`${GM + 2}.1.0.json`, `${PAST_GOOD}.json`].sort());
-  const asset = JSON.parse(readFileSync(join(outDir, `${GM + 2}.1.0.json`), "utf8"));
-  assert.equal(asset.version, `${GM + 2}.1.0`);
+  assert.deepEqual(requested.sort(), [tarballUrl(PAST_GOOD), tarballUrl(starter)].sort(), "an existing asset is rebuilt");
+  assert.deepEqual(readdirSync(outDir).sort(), [`${PAST_GOOD}.json`, `${starter}.json`].sort());
+  const text = readFileSync(join(outDir, `${starter}.json`), "utf8");
+  const asset = JSON.parse(text);
+  assert.equal(asset.version, starter);
   assert.deepEqual(Object.keys(asset.files), [
     "plugins/sheetsBar/sheetModel.js",
     "shortcuts/manager.js",
@@ -511,18 +523,23 @@ test("hot-shims.mjs builds the bucket versions past known-good, keeps built ones
   }
   const manager = new Function("module", `${asset.files["shortcuts/manager.js"]}; return module.exports;`)({ exports: {} });
   assert.ok(manager instanceof Set, "transpiled output still runs");
+
+  await syncHotShims({ bucketVersions, docsVersions: [PAST_GOOD], outDir, fetchImpl, log: () => {} });
+  assert.equal(readFileSync(join(outDir, `${starter}.json`), "utf8"), text, "a rebuild is byte-identical");
 });
 
+// Holds vacuously until a bucket pins a version past known-good (bucket 19 is the first); from
+// then on it fails the generated PR that adds one without its asset.
 test("every committed bucket version past known-good has its prebuilt shim asset", async () => {
-  const { versionsNeedingShims } = await import("./hot-shims.mjs");
+  const { versionsNeedingShims, docsBucketVersions } = await import("./hot-shims.mjs");
   const { existsSync } = await import("node:fs");
   const { bucketVersions } = JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8"));
-  for (const version of versionsNeedingShims(bucketVersions)) {
+  for (const version of versionsNeedingShims([...Object.values(bucketVersions), ...docsBucketVersions()])) {
     const asset = new URL(`../apps/authoring/public/hot-shims/${version}.json`, import.meta.url);
     assert.ok(
       existsSync(asset),
-      `bucket version ${version} is past HOT_LAST_KNOWN_GOOD and has no apps/authoring/public/hot-shims/${version}.json: `
-        + "run `node pipeline/hot-shims.mjs`, or every default mount downloads the registry tarball",
+      `version ${version} is past HOT_LAST_KNOWN_GOOD and has no apps/authoring/public/hot-shims/${version}.json: `
+        + "run `node pipeline/hot-shims.mjs`, or every mount of it downloads the registry tarball",
     );
   }
 });

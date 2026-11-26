@@ -270,7 +270,8 @@ function readRef(contentDir, ref) {
 // keyword keeps prose such as `from "${oldValue}"` inside a template literal out of the deps.
 const IMPORT_STATEMENT_RE =
   /^[ \t]*(?:(?:import|export)\b[^;'"`]*?\bfrom|import)\s*['"]([^'"\n]+)['"]/gm;
-const NPM_PACKAGE_NAME_RE = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/;
+// Case-insensitive: legacy packages such as `JSONStream` predate the lowercase rule.
+const NPM_PACKAGE_NAME_RE = /^(?:@[a-z0-9~-][a-z0-9._~-]*\/)?[a-z0-9~-][a-z0-9._~-]*$/i;
 
 /** Extract extra (non-builtin) npm package imports from source code. */
 function collectExtraDeps(codeStrings) {

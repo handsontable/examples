@@ -177,7 +177,10 @@ test("ignores `from \"…\"` text that is not an import statement", async (t) =>
       '  output.innerText = `Renamed the ${axis} header at index ${visualIndex} from "${oldValue}" to "${newValue}".`;',
       "};",
       "const note = 'copied from \"clipboard\"';",
-      "console.log(Chart, report, note);",
+      "export const label = 'Moved to the next sheet';",
+      'import template from "${templatePath}";',
+      "import Stream from 'JSONStream';",
+      "console.log(Chart, report, note, template, Stream);",
       "",
     ].join("\n"),
   );
@@ -193,6 +196,9 @@ test("ignores `from \"…\"` text that is not an import statement", async (t) =>
       if (url.endsWith("/chart.js")) {
         return { ok: true, json: async () => ({ "dist-tags": { latest: "4.4.8" } }) };
       }
+      if (url.endsWith("/JSONStream")) {
+        return { ok: true, json: async () => ({ "dist-tags": { latest: "1.3.5" } }) };
+      }
       return { ok: false, status: 404 };
     },
   });
@@ -202,8 +208,9 @@ test("ignores `from \"…\"` text that is not an import statement", async (t) =>
     fs.readFileSync(path.join(outDir, "18.0", manifest.examples[0].file), "utf8"),
   );
   const dependencies = Object.keys(JSON.parse(artifact.files["/package.json"]).dependencies);
-  assert.deepEqual(requests, ["https://registry.npmjs.org/chart.js"]);
+  assert.deepEqual(requests.sort(), ["https://registry.npmjs.org/JSONStream", "https://registry.npmjs.org/chart.js"]);
   assert.ok(dependencies.includes("chart.js"));
+  assert.ok(dependencies.includes("JSONStream"), "a legacy uppercase name is still a package");
   assert.equal(dependencies.some((d) => d.includes("$") || d === "clipboard"), false);
 });
 

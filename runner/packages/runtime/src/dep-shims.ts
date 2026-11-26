@@ -169,9 +169,9 @@ export async function buildHandsontableShims(
   return out;
 }
 
-// A stable release a starter bucket pins has its shadow files built at import time
-// (`pipeline/hot-shims.mjs`) and served by the authoring app, so a default mount fetches a few
-// hundred KB from its own origin instead of the whole registry tarball.
+// A stable release a starter or docs bucket pins has its shadow files built at import time
+// (`pipeline/hot-shims.mjs`) and served by the authoring app, so a mount fetches about 0.5 MB
+// (gzipped) from its own origin instead of downloading and transpiling the registry tarball.
 export const HOT_SHIMS_DIR = "hot-shims";
 
 export interface HotShimAsset {
