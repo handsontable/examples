@@ -19,6 +19,22 @@ The example wires a Handsontable grid to a NestJS REST API backed by PostgreSQL.
 - Node.js 18+
 - npm
 
+## License key
+
+Handsontable needs a license key. Without one, the grid shows a lock screen ("The license key for Handsontable is missing") instead of your data.
+
+Each frontend has a commented-out placeholder. Uncomment it and paste in your key:
+
+```js
+// licenseKey: 'your-license-key', // get a key at https://handsontable.com/pricing/
+```
+
+- `client/src/main.js` (vanilla JS)
+- `client-react/src/App.tsx` (React)
+- `client-angular/src/app/app.component.ts` (Angular)
+
+Get a key at [handsontable.com/pricing](https://handsontable.com/pricing/).
+
 ## Quick start
 
 ```bash
