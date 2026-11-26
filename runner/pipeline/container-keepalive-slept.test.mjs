@@ -38,6 +38,7 @@ const ENTRY = {
 };
 
 const PREVIEW_URL = "https://4200-angular-abc.preview.test/";
+const KEEPALIVE_MS = 5;
 
 const okResponse = () => ({
   ok: true,
@@ -59,8 +60,11 @@ const goneResponse = (body) => ({
   },
 });
 
-/** A pointed runtime whose keepalive ticks every 5 ms; `answerWith` switches what the status route returns. */
-async function pointedRuntime() {
+/** A pointed runtime whose keepalive runs on the test's fake `setInterval`, so a tick
+ *  happens when `answerWith` advances the clock, not when the machine gets to it.
+ *  `answerWith` switches what the status route returns. */
+async function pointedRuntime(t) {
+  t.mock.timers.enable({ apis: ["setInterval"] });
   const fetchBefore = globalThis.fetch;
   const windowBefore = globalThis.window;
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
@@ -73,7 +77,7 @@ async function pointedRuntime() {
   };
 
   const iframe = { src: "", addEventListener() {}, removeEventListener() {} };
-  const runtime = new ContainerRuntime(ENTRY, { iframe, apiBase: "https://api.test", renderGraceMs: 1, keepaliveMs: 5 });
+  const runtime = new ContainerRuntime(ENTRY, { iframe, apiBase: "https://api.test", renderGraceMs: 1, keepaliveMs: KEEPALIVE_MS });
   const restore = () => {
     try {
       runtime.dispose();
@@ -98,22 +102,23 @@ async function pointedRuntime() {
     throw err;
   }
 
-  /** Answer the next keepalive tick with `make()` and wait until it was consumed. */
+  const pings = () => fetches.filter((url) => url.includes("/status?port=")).length;
+
+  /** Fire one keepalive tick answered with `make()` and wait until it was consumed. */
   const answerWith = async (make) => {
     next = make;
-    const before = fetches.length;
-    for (let i = 0; fetches.length === before; i += 1) {
-      if (i > 500) throw new Error("the keepalive never ticked");
-      await settle();
-    }
+    const before = pings();
+    t.mock.timers.tick(KEEPALIVE_MS);
+    // The interval callback calls `fetch` synchronously, so the tick is visible at once.
+    if (pings() === before) throw new Error("the keepalive never ticked");
     for (let i = 0; i < 5; i += 1) await settle();
   };
 
-  return { runtime, iframe, errors, answerWith, restore };
+  return { runtime, iframe, errors, answerWith, pings, restore };
 }
 
-test("a keepalive 410 session_slept surfaces the server's sentence and stops pinging", async () => {
-  const h = await pointedRuntime();
+test("a keepalive 410 session_slept surfaces the server's sentence and stops pinging", async (t) => {
+  const h = await pointedRuntime(t);
   try {
     const message = "This demo was paused after a few minutes without activity. Restart the preview to continue.";
     await h.answerWith(() => goneResponse({ error: "session_slept", message }));
@@ -122,13 +127,17 @@ test("a keepalive 410 session_slept surfaces the server's sentence and stops pin
     assert.equal(h.errors[0].message, message);
     assert.equal(h.errors[0].status, 410);
     assert.equal(h.iframe.src, "about:blank", "the dead preview is cleared, as for a budget close");
+
+    const pingsAfter410 = h.pings();
+    t.mock.timers.tick(KEEPALIVE_MS * 3);
+    assert.equal(h.pings(), pingsAfter410, "a slept session is not pinged again");
   } finally {
     h.restore();
   }
 });
 
-test("a plain keepalive 410 (closed elsewhere) stays silent", async () => {
-  const h = await pointedRuntime();
+test("a plain keepalive 410 (closed elsewhere) stays silent", async (t) => {
+  const h = await pointedRuntime(t);
   try {
     await h.answerWith(() => goneResponse({ error: "session closed" }));
     assert.equal(h.errors.length, 0);
