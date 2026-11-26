@@ -129,7 +129,7 @@ Three consequences worth knowing before relying on this:
 
 ## Keep repairs dependency-minimal
 
-The container image bakes **one** node_modules seed per framework (bucket 18;
+The container image bakes **one** node_modules seed per framework (the newest release bucket;
 ADR-0029 / PR #146). Every other bucket's pristine session runs a frozen
 install that reconciles against that seed — today the delta is only the
 Handsontable core/wrapper pins (~2–3 packages, ~1.3 s). Every dependency a
@@ -173,9 +173,20 @@ silently overwritten — it only misleads readers.
 ## When a new major ships
 
 1. npm `dist-tags.latest` bumps → the workflow's bucket list grows by itself;
-   the new major's bucket generates from master (no branch yet).
+   the new major's bucket generates from master (no branch yet). Run
+   `gh workflow run import-starters.yml` instead of waiting for Monday. The
+   generated PR also moves the container seed to the new bucket
+   (`scripts/release-bucket.mjs`, so the image rebakes on merge) and, when the
+   new version is past `HOT_LAST_KNOWN_GOOD` (`packages/runtime/src/dep-shims.ts`),
+   adds its prebuilt shims under `apps/authoring/public/hot-shims/` (`pipeline/hot-shims.mjs`).
+   The authoring app's own `handsontable` pin stays on its major on purpose
+   (`theme-presets-version.test.mjs`); moving it is a separate job.
 2. Modernize master for the new major; the new bucket absorbs it on every
-   re-import while branch-less.
+   re-import while branch-less. Refresh the starter locks
+   (`pnpm update handsontable @handsontable/react-wrapper
+   @handsontable/angular-wrapper @handsontable/vue3 --lockfile-only`, one
+   starter per call) and bump the `server-examples/` frontends' `^<major>`
+   ranges with their `package-lock.json`.
 3. When master starts moving past what the released major should ship (or the
    next major's work begins), cut `prod-examples/<major>` from master —
    snapshot is born current, no initial cherry-pick round.

@@ -56,22 +56,3 @@ test("the script's syntax regex is the shim's", () => {
   const src = /const HOT_BLOCKING_SYNTAX = (\/.+\/);/.exec(read("packages/runtime/src/dep-shims.ts"))?.[1];
   assert.equal(src, String(BLOCKING_SYNTAX));
 });
-
-test("the newest stable bucket version is verified, so a default mount never scans a tarball", () => {
-  const good = /HOT_LAST_KNOWN_GOOD = \[(\d+), (\d+), (\d+)\]/.exec(read("packages/runtime/src/dep-shims.ts"))
-    .slice(1)
-    .map(Number);
-  const { bucketVersions } = JSON.parse(read("catalog.json"));
-  for (const [bucket, v] of Object.entries(bucketVersions)) {
-    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
-    if (!m || Number(m[1]) !== good[0]) continue;
-    const parts = m.slice(1).map(Number);
-    const ahead = parts[1] > good[1] || (parts[1] === good[1] && parts[2] > good[2]);
-    assert.equal(
-      ahead,
-      false,
-      `bucket ${bucket} is ${v}, past HOT_LAST_KNOWN_GOOD ${good.join(".")}: run \`node scripts/sync-authoring-pin.mjs\` `
-        + "(it verifies the tarball) or bump it by hand after checking",
-    );
-  }
-});

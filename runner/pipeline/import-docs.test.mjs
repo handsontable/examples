@@ -161,6 +161,59 @@ test("pins every imported extra dependency to its npm version once", async (t) =
   assert.equal(Object.values(dependencies).includes("latest"), false);
 });
 
+// A string that reads like an import clause is not one: a `from "…"` inside a
+// template literal must not become a dependency the registry is asked about.
+test("ignores `from \"…\"` text that is not an import statement", async (t) => {
+  const { docsDir, outDir, indexPath } = makeFixture(t);
+  const sourcePath = path.join(docsDir, "content", "guides", "example", "javascript", "example1.js");
+  fs.writeFileSync(
+    sourcePath,
+    [
+      "import {",
+      "  Chart,",
+      "} from 'chart.js/auto';",
+      "const output = document.querySelector('#output');",
+      "const report = (axis, visualIndex, oldValue, newValue) => {",
+      '  output.innerText = `Renamed the ${axis} header at index ${visualIndex} from "${oldValue}" to "${newValue}".`;',
+      "};",
+      "const note = 'copied from \"clipboard\"';",
+      "export const label = 'Moved to the next sheet';",
+      'import template from "${templatePath}";',
+      "import Stream from 'JSONStream';",
+      "console.log(Chart, report, note, template, Stream);",
+      "",
+    ].join("\n"),
+  );
+  const requests = [];
+
+  await importDocs({
+    docsDir,
+    docsBranch: "prod-docs/18.0",
+    outDir,
+    indexPath,
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.endsWith("/chart.js")) {
+        return { ok: true, json: async () => ({ "dist-tags": { latest: "4.4.8" } }) };
+      }
+      if (url.endsWith("/JSONStream")) {
+        return { ok: true, json: async () => ({ "dist-tags": { latest: "1.3.5" } }) };
+      }
+      return { ok: false, status: 404 };
+    },
+  });
+
+  const manifest = JSON.parse(fs.readFileSync(path.join(outDir, "18.0", "manifest.json"), "utf8"));
+  const artifact = JSON.parse(
+    fs.readFileSync(path.join(outDir, "18.0", manifest.examples[0].file), "utf8"),
+  );
+  const dependencies = Object.keys(JSON.parse(artifact.files["/package.json"]).dependencies);
+  assert.deepEqual(requests.sort(), ["https://registry.npmjs.org/JSONStream", "https://registry.npmjs.org/chart.js"]);
+  assert.ok(dependencies.includes("chart.js"));
+  assert.ok(dependencies.includes("JSONStream"), "a legacy uppercase name is still a package");
+  assert.equal(dependencies.some((d) => d.includes("$") || d === "clipboard"), false);
+});
+
 // DEV-2130: a react example authored only as `.jsx` used to ship an artifact
 // whose `entry` (/src/main.tsx) pointed at a file the wrapper never emitted —
 // Sandpack "succeeded" without executing anything and the preview stayed blank.
