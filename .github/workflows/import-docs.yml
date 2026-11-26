@@ -185,7 +185,7 @@ jobs:
       - name: Prebuild Handsontable shims
         working-directory: runner
         run: |
-          pnpm install --frozen-lockfile
+          pnpm install --frozen-lockfile --ignore-scripts
           pnpm --filter @handsontable/demo-runtime build
           node pipeline/hot-shims.mjs
 
