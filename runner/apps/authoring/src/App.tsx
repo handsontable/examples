@@ -1362,6 +1362,10 @@ function Authoring({
    *  `sourceLoadedRef` to force a refetch, so this needs its own ref that
    *  never clears. */
   const firstLoadSettledRef = useRef(false);
+  /** npm `latest` when the versions fetch itself replaced `DEFAULT_VERSION` with
+   *  it: the starter reload that follows is not the visitor's version switch. */
+  const autoVersionRef = useRef<string | null>(null);
+  const currentVersionRef = useRef(version);
   const activeDocsBucketRef = useRef<string | null>(activeDocsBucket);
   const activeDocsManifestRef = useRef<DocsManifest | null>(activeDocsManifest);
   const docsRequestSeqRef = useRef(0);
@@ -1376,6 +1380,7 @@ function Authoring({
   docsPathRef.current = docsPath;
   dirtyRef.current = dirty;
   sourceLoadedRef.current = sourceLoaded;
+  currentVersionRef.current = version;
   if (sourceLoaded) firstLoadSettledRef.current = true;
   activeDocsBucketRef.current = activeDocsBucket;
   activeDocsManifestRef.current = activeDocsManifest;
@@ -1472,7 +1477,15 @@ function Authoring({
       // doesn't always pass it). `version`/`bucket`/`docs` come from the
       // CALLER, never component state — this stable `useCallback` could
       // otherwise race e.g. the saved-demo path's `setVersion` just before.
-      exampleOpen?: { reason: ExampleOpenReason; version: string; bucket?: string; docs?: DocsExampleMeta },
+      // `quiet` re-attributes an already-open example to the reloaded files
+      // without a new `example.open`.
+      exampleOpen?: {
+        reason: ExampleOpenReason;
+        version: string;
+        bucket?: string;
+        docs?: DocsExampleMeta;
+        quiet?: boolean;
+      },
     ) => {
       // DEV-2859: the lineage *prefix only* — the segment before the first
       // `:` — never the full string. `import:<url>` and `docs:<bucket>:<path>`
@@ -1521,7 +1534,7 @@ function Authoring({
       // ADR-0042 §2: every real remount invalidates the previous workspace's
       // engagement state, regardless of whether `example.open` dedupes below.
       exampleEngagedRef.current = false;
-      if (!exampleOpen) {
+      if (!exampleOpen || (exampleOpen.quiet && !currentExampleTaxonomyRef.current)) {
         // The starter effect's silent bare-`/` default reaches here with no
         // taxonomy — no `example.open`, nothing to attribute a later edit to.
         currentExampleTaxonomyRef.current = null;
@@ -1539,7 +1552,9 @@ function Authoring({
         // guards an effect that re-fires this call for an unrelated reason.
         // Deliberately AFTER every state setter above.
         const key = exampleOpenKey(lineage, exampleOpen.version);
-        if (lastExampleOpenKeyRef.current !== key) {
+        if (exampleOpen.quiet) {
+          lastExampleOpenKeyRef.current = key;
+        } else if (lastExampleOpenKeyRef.current !== key) {
           lastExampleOpenKeyRef.current = key;
           telemetry.event(
             "example.open",
@@ -1901,6 +1916,9 @@ function Authoring({
         const opts = [...new Set([latest, ...versions, next].filter((v): v is string => !!v))];
         if (opts.length) setVersionOptions(opts);
         if (latest && !hadUrlVersion.current) {
+          if (currentVersionRef.current === DEFAULT_VERSION && latest !== DEFAULT_VERSION) {
+            autoVersionRef.current = latest;
+          }
           setVersion((cur) => (cur === DEFAULT_VERSION ? latest : cur));
         }
         setVersionsResolved(true);
@@ -2131,6 +2149,9 @@ function Authoring({
   // unlike the other two, the version is not what is wrong, so blaming it and
   // withholding the retry button was misleading the visitor about the fix.
   useEffect(() => {
+    // Read before any early return, so a run that loads nothing still spends it.
+    const autoVersionSwap = autoVersionRef.current !== null && autoVersionRef.current === version;
+    if (autoVersionSwap) autoVersionRef.current = null;
     if (route.mode === "share" || savedId || docsPath) return;
     // An ad-hoc workspace — an import or a payload — owns its files the way a
     // saved demo does (`savedId` above) — but only until the user asks for a
@@ -2278,7 +2299,13 @@ function Authoring({
           `catalog:${framework}`,
           starterIsInitialLoad && !hadUrlExample.current
             ? undefined // the silent bare-`/` default — no example.open
-            : { reason: starterOpenReason, version, bucket },
+            : {
+                reason: starterOpenReason,
+                version,
+                bucket,
+                // The app's own move to npm latest, not the visitor's switch.
+                quiet: autoVersionSwap && starterOpenReason === "version-switch",
+              },
         );
         setVersionWarning(null);
         setSourceLoaded(true);
