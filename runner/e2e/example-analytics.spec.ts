@@ -1,7 +1,8 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { flushFaro, signIn, stubShell } from "./helpers.js";
+import { flushFaro, signIn, stubShell, workspaceFiles } from "./helpers.js";
 
 // ADR-0042 example analytics: `example.open` at the App.tsx example-resolve
 // path.
@@ -454,6 +455,67 @@ test("a Save answered without an exampleSaved marker emits no browser example.sa
 // the actually loaded artifact, not just an event existing.
 const REACT_LABEL = /React \(Vite, TS\)/;
 const BLANK_LABEL = "Blank (JavaScript)";
+
+/**
+ * Opens `path` with `/api/versions` held until the default react starter is on
+ * screen, then answers it with npm `latest` from another committed bucket and
+ * waits for the swapped files. The swap therefore always lands after the first
+ * load, never racing it. Returns the `latest` it answered with.
+ */
+async function openThenSwapToLatest(page: Page, path: string): Promise<string> {
+  await stubShell(page);
+  let release!: (latest: string) => void;
+  const answered = new Promise<string>((resolve) => { release = resolve; });
+  await page.route("**/api/versions", async (route) => {
+    const latest = await answered;
+    await route.fulfill({ json: { latest, next: "", versions: [latest] } });
+  });
+  const starterBuckets: string[] = [];
+  page.on("request", (req) => {
+    const m = /\/([^/]+)\/react\.json$/.exec(new URL(req.url()).pathname);
+    if (m) starterBuckets.push(m[1]);
+  });
+
+  await page.goto(`${BASE_URL}${path}`);
+  await expect(page.locator('[data-pane-active="true"] .cm-content')).toContainText("createRoot");
+  expect(starterBuckets).toHaveLength(1);
+  const pins = (JSON.parse(readFileSync(new URL("../catalog.json", import.meta.url), "utf8")) as {
+    bucketVersions: Record<string, string>;
+  }).bucketVersions;
+  const otherBucket = Object.keys(pins).filter((b) => b !== starterBuckets[0]).sort((a, b) => Number(b) - Number(a))[0];
+  const latest = pins[otherBucket];
+
+  release(latest);
+  await expect.poll(async () => {
+    const files = await workspaceFiles(page);
+    return Object.entries(files).find(([p]) => p.endsWith("package.json"))?.[1] ?? "";
+  }).toContain(`"${latest}"`);
+  expect(starterBuckets).toEqual([starterBuckets[0], otherBucket]);
+  return latest;
+}
+
+test("a bare / visit whose npm latest lands in another bucket after the default starter loaded fires no example.open", async ({ page }) => {
+  const events = captureTelemetryEvents(page);
+  await openThenSwapToLatest(page, "/");
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  expect(events.filter((e) => e.name === "example.open")).toHaveLength(0);
+});
+
+test("a ?example= deep link whose npm latest lands in another bucket fires one deep-link open, and a later edit is attributed to latest", async ({ page }) => {
+  const events = captureTelemetryEvents(page);
+  const latest = await openThenSwapToLatest(page, "/?example=react");
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  const opens = events.filter((e) => e.name === "example.open");
+  expect(opens).toHaveLength(1);
+  expect(opens[0].attributes?.["hot.reason"]).toBe("deep-link");
+
+  await page.locator('[data-pane-active="true"] .cm-content').click();
+  await page.keyboard.type("// edit");
+  await flushFaro(page, (ref) => events.some((e) => e.attributes?.["hot.ref"] === ref));
+  const engaged = events.filter((e) => e.name === "example.engaged");
+  expect(engaged).toHaveLength(1);
+  expect(engaged[0].attributes?.["hot.ht_major"]).toBe(latest.split(".")[0]);
+});
 
 test("a bare / visit, then a picker pick of a different starter, fires one example.open with entry=picker whose taxonomy a later example.engaged reuses", async ({ page }) => {
   await stubShell(page);
