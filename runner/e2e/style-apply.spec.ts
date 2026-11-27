@@ -474,6 +474,8 @@ test.describe("AI styling", () => {
     // outside the AI tab, so it is read from another one.
     await expect(drawer.getByLabel("What changed")).toHaveCount(0);
     await drawer.getByRole("tab", { name: "Foundation" }).click();
+    // The actions band the line lives in is on screen, so its absence means something.
+    await expect(drawer.getByRole("button", { name: "Copy for my app" })).toBeVisible();
     await expect(drawer.getByText("Applied to the preview")).toHaveCount(0);
   });
 
@@ -535,8 +537,8 @@ test("a recolour reaches the header the grid is painting right now", async ({ pa
   await drawer.getByRole("tab", { name: "AI" }).click();
   await describeStyle(drawer, "corporate green");
 
-  // The AI tab has no actions band, so its "Applied to the preview" line shows on
-  // the other tabs; here the answer's change tags are the signal.
+  // The AI tab has no actions band, so wait for the answer here and read the
+  // "Applied to the preview" line from another tab.
   await expect(drawer.getByLabel("What changed")).toContainText("brand ramp");
   await drawer.getByRole("tab", { name: "Foundation" }).click();
   await expectThemeModuleWritten(page);
