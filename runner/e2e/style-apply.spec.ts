@@ -470,7 +470,10 @@ test.describe("AI styling", () => {
     await expect(drawer.getByText(/didn’t change the theme/)).toBeVisible();
     // The prompt is kept, because editing it is the next thing that happens.
     await expect(drawer.getByLabel("Describe the style you want")).toHaveValue("write me a poem");
-    // Nothing was applied, so nothing claims to have been.
+    // Nothing was applied, so nothing claims to have been. The status line lives
+    // outside the AI tab, so it is read from another one.
+    await expect(drawer.getByLabel("What changed")).toHaveCount(0);
+    await drawer.getByRole("tab", { name: "Foundation" }).click();
     await expect(drawer.getByText("Applied to the preview")).toHaveCount(0);
   });
 
@@ -532,6 +535,10 @@ test("a recolour reaches the header the grid is painting right now", async ({ pa
   await drawer.getByRole("tab", { name: "AI" }).click();
   await describeStyle(drawer, "corporate green");
 
+  // The AI tab has no actions band, so its "Applied to the preview" line shows on
+  // the other tabs; here the answer's change tags are the signal.
+  await expect(drawer.getByLabel("What changed")).toContainText("brand ramp");
+  await drawer.getByRole("tab", { name: "Foundation" }).click();
   await expectThemeModuleWritten(page);
   await expect(async () => {
     expect(
